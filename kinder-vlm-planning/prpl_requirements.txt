@@ -1,5 +1,3 @@
 # PRPL mono requirements.
-../kinder[all]
 ../kinder-models
 ../kinder-bilevel-planning
-../prpl-llm-utils

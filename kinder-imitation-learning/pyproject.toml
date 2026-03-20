@@ -17,7 +17,8 @@ dependencies = [
     "lerobot@git+https://github.com/yixuanhuang98/lerobot_PRBench",
     "matplotlib",
     "wandb",
-    "tqdm"
+    "tqdm",
+    "kindergarden[all]>=0.0.4",
 ]
 
 [project.optional-dependencies]
