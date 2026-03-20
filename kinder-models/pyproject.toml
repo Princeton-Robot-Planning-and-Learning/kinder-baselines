@@ -13,10 +13,6 @@ dependencies = [
    "numpy",
    "spatialmath-python",
    "opencv-python>=4.9.0",
-   "kindergarden>=0.0.4",
-   "relational_structs>=0.0.1",
-   "bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git#subdirectory=bilevel-planning",
-   "prpl_tidybot@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git#subdirectory=prpl-tidybot",
 ]
 
 [project.optional-dependencies]

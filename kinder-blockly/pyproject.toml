@@ -12,7 +12,6 @@ dependencies = [
    "flask",
    "numpy",
    "pillow",
-   "kindergarden>=0.0.5",
 ]
 
 [project.optional-dependencies]
