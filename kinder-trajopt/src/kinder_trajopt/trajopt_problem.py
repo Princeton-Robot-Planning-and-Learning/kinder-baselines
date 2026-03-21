@@ -15,8 +15,9 @@ from prpl_utils.trajopt.trajopt_problem import (
 class KinderTrajOptProblem(TrajOptProblem):
     """Wraps a KinDER env as a TrajOptProblem.
 
-    Uses `get_transition` for dynamics, reward, and termination. The cost
-    of a trajectory is the negated cumulative reward (lower cost = better).
+    Uses `get_transition` for dynamics, reward, and termination. Caches
+    reward and termination from each `get_next_state` call so that
+    `get_traj_cost` does not need to re-simulate the trajectory.
     """
 
     def __init__(
@@ -28,6 +29,9 @@ class KinderTrajOptProblem(TrajOptProblem):
         self._env = env
         self._initial_state = initial_state
         self._horizon = horizon
+        self._cached_rewards: dict[int, float] = {}
+        self._cached_terminated: dict[int, bool] = {}
+        self._cache_step = 0
 
     @property
     def horizon(self) -> int:
@@ -52,17 +56,23 @@ class KinderTrajOptProblem(TrajOptProblem):
     def get_next_state(
         self, state: TrajOptState, action: TrajOptAction
     ) -> TrajOptState:
-        next_state, _, _ = self._env.unwrapped.get_transition(state, action)
+        next_state, reward, terminated = self._env.unwrapped.get_transition(
+            state, action
+        )
+        step = self._cache_step
+        self._cached_rewards[step] = float(reward)
+        self._cached_terminated[step] = terminated
+        self._cache_step += 1
         return next_state
 
     def get_traj_cost(self, traj: TrajOptTraj) -> float:
         total_reward = 0.0
-        for idx in range(len(traj.actions)):
-            _, reward, terminated = self._env.unwrapped.get_transition(
-                traj.states[idx], traj.actions[idx]
-            )
-            total_reward += float(reward)
-            if terminated:
+        horizon = len(traj.actions)
+        start_step = self._cache_step - horizon
+        for idx in range(horizon):
+            step = start_step + idx
+            total_reward += self._cached_rewards[step]
+            if self._cached_terminated[step]:
                 break
         return -total_reward
 

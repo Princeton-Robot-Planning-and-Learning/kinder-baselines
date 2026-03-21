@@ -17,8 +17,8 @@ make_videos: False
 video_folder: ${hydra:runtime.output_dir}/videos
 
 # Predictive sampling hyperparameters.
-horizon: 50
-num_rollouts: 100
+horizon: 100
+num_rollouts: 50
 noise_scale: 1.0
 num_control_points: 10
 warm_start: true
