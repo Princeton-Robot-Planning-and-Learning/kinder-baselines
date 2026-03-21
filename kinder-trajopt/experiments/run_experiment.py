@@ -53,7 +53,7 @@ def _main(cfg: DictConfig) -> None:
         seed=cfg.seed,
         horizon=cfg.horizon,
         num_rollouts=cfg.num_rollouts,
-        noise_scale=cfg.noise_scale,
+        noise_fraction=cfg.noise_fraction,
         num_control_points=cfg.num_control_points,
         warm_start=cfg.warm_start,
     )

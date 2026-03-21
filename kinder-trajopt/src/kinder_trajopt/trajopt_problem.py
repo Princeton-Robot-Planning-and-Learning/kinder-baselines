@@ -1,5 +1,6 @@
 """TrajOptProblem implementation backed by a KinDER gymnasium env."""
 
+import logging
 from typing import Any
 
 from gymnasium.spaces import Box
@@ -32,6 +33,9 @@ class KinderTrajOptProblem(TrajOptProblem):
         self._cached_rewards: dict[int, float] = {}
         self._cached_terminated: dict[int, bool] = {}
         self._cache_step = 0
+        self._num_rollouts_scored = 0
+        self._num_goals_found = 0
+        self._best_cost_this_step = float("inf")
 
     @property
     def horizon(self) -> int:
@@ -69,12 +73,32 @@ class KinderTrajOptProblem(TrajOptProblem):
         total_reward = 0.0
         horizon = len(traj.actions)
         start_step = self._cache_step - horizon
+        terminated_early = False
         for idx in range(horizon):
             step = start_step + idx
             total_reward += self._cached_rewards[step]
             if self._cached_terminated[step]:
+                terminated_early = True
                 break
-        return -total_reward
+        cost = -total_reward
+        self._num_rollouts_scored += 1
+        if terminated_early:
+            self._num_goals_found += 1
+        if cost < self._best_cost_this_step:
+            self._best_cost_this_step = cost
+        return cost
+
+    def log_and_reset_step_stats(self) -> None:
+        """Log MPC step stats and reset counters."""
+        logging.debug(
+            "MPC step: best_cost=%.1f, goals_found=%d/%d rollouts",
+            self._best_cost_this_step,
+            self._num_goals_found,
+            self._num_rollouts_scored,
+        )
+        self._num_rollouts_scored = 0
+        self._num_goals_found = 0
+        self._best_cost_this_step = float("inf")
 
     def render_state(self, state: TrajOptState) -> Image:
         raise NotImplementedError
