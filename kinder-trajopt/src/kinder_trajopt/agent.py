@@ -62,5 +62,6 @@ class TrajOptAgent(Agent[NDArray[np.float32], NDArray[np.float32]]):
     def _get_action(self) -> NDArray[np.float32]:
         assert self._last_observation is not None
         action = self._mpc.step(self._last_observation)
+        assert self._problem is not None
         self._problem.log_and_reset_step_stats()
         return action
