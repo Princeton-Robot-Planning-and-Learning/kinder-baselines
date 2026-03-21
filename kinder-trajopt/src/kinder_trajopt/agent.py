@@ -35,6 +35,7 @@ class TrajOptAgent(Agent[NDArray[np.float32], NDArray[np.float32]]):
         super().__init__(seed)
         self._env = env
         self._horizon = horizon
+        self._problem: KinderTrajOptProblem | None = None
         action_range = env.action_space.high - env.action_space.low
         noise_scale = action_range * noise_fraction
         config = PredictiveSamplingHyperparameters(

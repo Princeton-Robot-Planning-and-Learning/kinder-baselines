@@ -12,7 +12,7 @@ python experiments/run_experiment.py env=motion2d-p0 seed=0
 Running with custom hyperparameters:
 ```bash
 python experiments/run_experiment.py env=motion2d-p0 seed=0 \
-    num_rollouts=200 horizon=50 noise_scale=0.5
+    num_rollouts=200 horizon=50 noise_fraction=0.5
 ```
 
 Running on multiple environments and multiple seeds (sequential):

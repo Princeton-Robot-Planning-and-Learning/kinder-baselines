@@ -84,8 +84,7 @@ class KinderTrajOptProblem(TrajOptProblem):
         self._num_rollouts_scored += 1
         if terminated_early:
             self._num_goals_found += 1
-        if cost < self._best_cost_this_step:
-            self._best_cost_this_step = cost
+        self._best_cost_this_step = min(self._best_cost_this_step, cost)
         return cost
 
     def log_and_reset_step_stats(self) -> None:
