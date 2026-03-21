@@ -31,5 +31,9 @@ python experiments/run_experiment.py -m seed='range(0,3)' \
 
 ## Installation
 
-1. Recommended: create and source a virtualenv (perhaps with [uv](https://github.com/astral-sh/uv))
-2. Install this repo: `uv pip install -e ".[develop]"`
+We strongly recommend uv. The steps below assume that you have uv installed. If you do not, just remove uv from the commands and the installation should still work.
+
+# Install PRPL dependencies.
+uv pip install -r prpl_requirements.txt
+# Install this package and third-party dependencies.
+uv pip install -e ".[develop]"
