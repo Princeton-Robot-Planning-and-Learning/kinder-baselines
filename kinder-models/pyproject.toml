@@ -12,6 +12,8 @@ dependencies = [
    "matplotlib",
    "numpy",
    "spatialmath-python",
+   "h5py",
+   "flask-socketio",
    "opencv-python>=4.9.0",
    "kindergarden>=0.0.6",
    "relational_structs>=0.0.1",

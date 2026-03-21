@@ -7,7 +7,7 @@ import cv2 as cv
 import h5py  # type: ignore
 import numpy as np
 from episode_storage import EpisodeReader
-from scipy.spatial.transform import Rotation  # type: ignore
+from scipy.spatial.transform import Rotation  # type: ignore[import-untyped]
 
 from kinder_models.policy_constants import POLICY_IMAGE_HEIGHT, POLICY_IMAGE_WIDTH
 

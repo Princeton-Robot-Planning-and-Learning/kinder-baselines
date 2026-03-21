@@ -611,8 +611,8 @@ class QuestController:
         return controller_data
 
     def process_controllers(
-        self, obs: dict
-    ) -> dict | str | None:  # pylint: disable=unused-argument
+        self, obs: dict  # pylint: disable=unused-argument
+    ) -> dict | str | None:
         """Process Quest controller input and generate action."""
         if not self.targets_initialized:
             return None

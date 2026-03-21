@@ -12,6 +12,7 @@ from kinder.envs.dynamic3d.object_types import (
 from relational_structs import Object, ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
 from relational_structs.utils import create_state_from_dict
+from spatialmath import SE2
 
 from kinder_models.dynamic3d.ground.parameterized_skills import (
     PyBulletSim,
