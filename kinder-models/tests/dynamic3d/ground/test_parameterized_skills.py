@@ -4,11 +4,14 @@ import kinder
 import numpy as np
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
-from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
-from prpl_tidybot.interfaces.interface import FakeInterface
-from prpl_tidybot.perceivers.kinder_ground_perceiver import KinDERGroundPerceiver
-from relational_structs import ObjectCentricState
+from kinder.envs.dynamic3d.object_types import (
+    MujocoMovableObjectType,
+    MujocoObjectTypeFeatures,
+    MujocoTidyBotRobotObjectType,
+)
+from relational_structs import Object, ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
+from relational_structs.utils import create_state_from_dict
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.ground.parameterized_skills import (
@@ -25,6 +28,51 @@ def _get_robot_from_state(state: ObjectCentricState):
     robots = state.get_objects(MujocoTidyBotRobotObjectType)
     assert len(robots) == 1, f"Expected 1 robot, got {len(robots)}"
     return list(robots)[0]
+
+
+def _create_robot_state(
+    arm_joints: list[float],
+    gripper: float,
+    base_x: float,
+    base_y: float,
+    base_theta: float,
+) -> ObjectCentricState:
+    """Create an ObjectCentricState with the given robot and placeholder cube."""
+    robot = Object("robot_0", MujocoTidyBotRobotObjectType)
+    cube = Object("cube1", MujocoMovableObjectType)
+    state_dict: dict[Object, dict[str, float]] = {
+        robot: {
+            "pos_base_x": base_x,
+            "pos_base_y": base_y,
+            "pos_base_rot": base_theta,
+            **{f"pos_arm_joint{i+1}": v for i, v in enumerate(arm_joints)},
+            "pos_gripper": gripper,
+            "vel_base_x": 0.0,
+            "vel_base_y": 0.0,
+            "vel_base_rot": 0.0,
+            **{f"vel_arm_joint{i+1}": 0.0 for i in range(7)},
+            "vel_gripper": 0.0,
+        },
+        cube: {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "qw": 1.0,
+            "qx": 0.0,
+            "qy": 0.0,
+            "qz": 0.0,
+            "vx": 0.0,
+            "vy": 0.0,
+            "vz": 0.0,
+            "wx": 0.0,
+            "wy": 0.0,
+            "wz": 0.0,
+            "bb_x": 0.03,
+            "bb_y": 0.03,
+            "bb_z": 0.03,
+        },
+    }
+    return create_state_from_dict(state_dict, MujocoObjectTypeFeatures)
 
 
 def test_get_target_robot_pose_from_parameters():
@@ -350,14 +398,8 @@ def test_pick_place_ground():
     _, _ = env.reset(seed=125)
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
 
-    interface = FakeInterface()
-    interface.arm_interface.arm_state = np.deg2rad(
-        [0, -20, 180, -146, 0, -50, 90]
-    ).tolist()
-    interface.arm_interface.gripper_state = 0.0
-    interface.base_interface.map_base_state = SE2(x=0.8, y=0.0, theta=0.0)
-    perceiver = KinDERGroundPerceiver(interface)
-    temp_state = perceiver.get_state()
+    arm_joints = np.deg2rad([0, -20, 180, -146, 0, -50, 90]).tolist()
+    temp_state = _create_robot_state(arm_joints, 0.0, 0.8, 0.0, 0.0)
     env.unwrapped._object_centric_env.set_state(temp_state)  # type: ignore # pylint: disable=protected-access
     state = (
         env.unwrapped._object_centric_env._get_object_centric_state()  # pylint: disable=protected-access
@@ -558,14 +600,8 @@ def test_pick_place_shelf():
     _, _ = env.reset(seed=125)
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
 
-    interface = FakeInterface()
-    interface.arm_interface.arm_state = np.deg2rad(
-        [0, -20, 180, -146, 0, -50, 90]
-    ).tolist()
-    interface.arm_interface.gripper_state = 0.0
-    interface.base_interface.map_base_state = SE2(x=-0.7, y=0.0, theta=0.0)
-    perceiver = KinDERGroundPerceiver(interface)
-    temp_state = perceiver.get_state()
+    arm_joints = np.deg2rad([0, -20, 180, -146, 0, -50, 90]).tolist()
+    temp_state = _create_robot_state(arm_joints, 0.0, -0.7, 0.0, 0.0)
     env.unwrapped._object_centric_env.set_state(temp_state)  # type: ignore # pylint: disable=protected-access
     state = (
         env.unwrapped._object_centric_env._get_object_centric_state()  # pylint: disable=protected-access
@@ -962,14 +998,8 @@ def test_velocity_tracking_mode():
     _, _ = env.reset(seed=125)
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
 
-    interface = FakeInterface()
-    interface.arm_interface.arm_state = np.deg2rad(
-        [0, -20, 180, -146, 0, -50, 90]
-    ).tolist()
-    interface.arm_interface.gripper_state = 0.0
-    interface.base_interface.map_base_state = SE2(x=0.8, y=0.0, theta=0.0)
-    perceiver = KinDERGroundPerceiver(interface)
-    temp_state = perceiver.get_state()
+    arm_joints = np.deg2rad([0, -20, 180, -146, 0, -50, 90]).tolist()
+    temp_state = _create_robot_state(arm_joints, 0.0, 0.8, 0.0, 0.0)
     env.unwrapped._object_centric_env.set_state(temp_state)  # type: ignore # pylint: disable=protected-access
     state = (
         env.unwrapped._object_centric_env._get_object_centric_state()  # pylint: disable=protected-access
