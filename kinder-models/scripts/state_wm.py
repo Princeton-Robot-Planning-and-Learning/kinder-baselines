@@ -1,8 +1,7 @@
 """MLP delta dynamics model for Motion2D-p0.
 
-Trains f(s_t, a_t) -> delta_robot_state, where:
-    s_{t+1}[:9] = s_t[:9] + delta_robot_state
-    s_{t+1}[9:] = s_t[9:]  (env state is static)
+Trains f(s_t, a_t) -> delta_full_state, where:
+    s_{t+1} = s_t + delta_full_state
 
 Usage:
     python scripts/state_wm.py --mode train
@@ -19,19 +18,18 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
-ROBOT_STATE_DIM = 9
 DEFAULT_HDF5 = "/home/yixuan/prbench_dir/prpl-mono/prbench-models/datasets/motion2d_p0.hdf5"
 
 
 class MLPDynamics(nn.Module):
-    """Predicts delta_robot_state given (full_state, action)."""
+    """Predicts delta_full_state given (full_state, action)."""
 
-    def __init__(self, state_dim: int, action_dim: int, hidden_dim: int = 256):
+    def __init__(self, state_dim: int, action_dim: int, output_dim: int, hidden_dim: int = 256):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(state_dim + action_dim, hidden_dim), nn.SiLU(),
             nn.Linear(hidden_dim, hidden_dim), nn.SiLU(),
-            nn.Linear(hidden_dim, ROBOT_STATE_DIM),
+            nn.Linear(hidden_dim, output_dim),
         )
 
     def forward(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
@@ -51,7 +49,7 @@ class Normalizer:
 
 
 def load_transitions(hdf5_path: str):
-    """Build (s_t, a_t, delta_robot) tuples from all episodes."""
+    """Build (s_t, a_t, delta_full_state) tuples from all episodes."""
     states, actions, deltas = [], [], []
     with h5py.File(hdf5_path, "r") as f:
         keys = sorted(f["data"].keys())
@@ -62,7 +60,7 @@ def load_transitions(hdf5_path: str):
             env   = ep["obs/env_state"][:]            # (T, env_dim)
             acts  = ep["actions"][:]                  # (T, action_dim)
             full  = np.concatenate([robot, env], -1)  # (T, state_dim)
-            delta = robot[1:] - robot[:-1]            # (T-1, 9)
+            delta = full[1:] - full[:-1]              # (T-1, state_dim)
             states.append(full[:-1])
             actions.append(acts[:-1])
             deltas.append(delta)
@@ -95,7 +93,7 @@ def train(
     d = torch.tensor(d_norm.normalize(deltas))
 
     loader = DataLoader(TensorDataset(s, a, d), batch_size=batch_size, shuffle=True)
-    model  = MLPDynamics(states.shape[1], actions.shape[1])
+    model  = MLPDynamics(states.shape[1], actions.shape[1], output_dim=states.shape[1])
     opt    = torch.optim.Adam(model.parameters(), lr=lr)
 
     for epoch in range(epochs):
@@ -116,6 +114,7 @@ def train(
             "model_state": model.state_dict(),
             "state_dim":   states.shape[1],
             "action_dim":  actions.shape[1],
+            "output_dim":  states.shape[1],
             "s_norm": {"mean": s_norm.mean, "std": s_norm.std},
             "a_norm": {"mean": a_norm.mean, "std": a_norm.std},
             "d_norm": {"mean": d_norm.mean, "std": d_norm.std},
@@ -126,9 +125,9 @@ def train(
 
 
 def eval_rollout(hdf5_path: str, checkpoint: str, num_episodes: int = 5):
-    """Multi-step open-loop rollout: compare predicted vs. ground-truth robot state."""
+    """Multi-step open-loop rollout: compare predicted vs. ground-truth full state."""
     ckpt  = torch.load(checkpoint, weights_only=False)
-    model = MLPDynamics(ckpt["state_dim"], ckpt["action_dim"])
+    model = MLPDynamics(ckpt["state_dim"], ckpt["action_dim"], ckpt["output_dim"])
     model.load_state_dict(ckpt["model_state"])
     model.eval()
 
@@ -144,16 +143,16 @@ def eval_rollout(hdf5_path: str, checkpoint: str, num_episodes: int = 5):
             env   = ep["obs/env_state"][:]
             acts  = ep["actions"][:]
 
-            pred_robot = robot[0].copy()
+            pred_state = np.concatenate([robot[0], env[0]])  # full state at t=0
             ep_errors  = []
             for t in range(len(robot) - 1):
-                full = np.concatenate([pred_robot, env[t]])
-                s_in = torch.tensor((full    - s_mean) / s_std, dtype=torch.float32)
-                a_in = torch.tensor((acts[t] - a_mean) / a_std, dtype=torch.float32)
+                s_in = torch.tensor((pred_state - s_mean) / s_std, dtype=torch.float32)
+                a_in = torch.tensor((acts[t]    - a_mean) / a_std, dtype=torch.float32)
                 with torch.no_grad():
                     d_pred = model(s_in.unsqueeze(0), a_in.unsqueeze(0)).squeeze(0).numpy()
-                pred_robot = pred_robot + d_pred * d_std + d_mean
-                ep_errors.append(np.linalg.norm(pred_robot - robot[t + 1]))
+                pred_state = pred_state + d_pred * d_std + d_mean
+                gt_state   = np.concatenate([robot[t + 1], env[t + 1]])
+                ep_errors.append(np.linalg.norm(pred_state - gt_state))
 
             print(
                 f"  {key}: mean_err={np.mean(ep_errors):.4f}  "

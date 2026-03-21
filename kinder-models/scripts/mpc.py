@@ -8,8 +8,6 @@ from PIL import Image as PILImage
 
 from state_wm import MLPDynamics
 
-ROBOT_STATE_DIM = 9
-
 
 def cost(state: np.ndarray) -> float:
     """Euclidean distance from robot to target region center."""
@@ -21,7 +19,7 @@ def cost(state: np.ndarray) -> float:
 def load_world_model(checkpoint: str):
     """Load trained MLPDynamics and its normalizers from a checkpoint."""
     ckpt  = torch.load(checkpoint, weights_only=False)
-    model = MLPDynamics(ckpt["state_dim"], ckpt["action_dim"])
+    model = MLPDynamics(ckpt["state_dim"], ckpt["action_dim"], ckpt["output_dim"])
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     norms = {
@@ -52,7 +50,7 @@ def wm_get_next_state(
         d_pred = model(s_in.unsqueeze(0), a_in.unsqueeze(0)).squeeze(0).numpy()
     delta = d_pred * norms["d_std"] + norms["d_mean"]
     next_state = state.copy()
-    next_state[:ROBOT_STATE_DIM] += delta
+    next_state += delta
     return next_state
 
 
