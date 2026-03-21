@@ -67,7 +67,7 @@ def test_trajopt_agent_motion2d(num_passages: int) -> None:
         seed=123,
         horizon=20,
         num_rollouts=50,
-        noise_scale=0.5,
+        noise_fraction=0.5,
         num_control_points=5,
     )
     obs, info = env.reset(seed=123)
