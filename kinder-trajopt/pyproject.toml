@@ -3,21 +3,21 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "kinder_models"
+name = "kinder_trajopt"
 version = "0.1.0"
-description = "Models for KinDER baselines."
+description = "Trajectory optimization baselines for KinDER."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
    "matplotlib",
    "numpy",
-   "spatialmath-python",
-   "h5py",
-   "flask-socketio",
-   "opencv-python>=4.9.0",
+   "pandas",
+   "pandas-stubs",
+   "hydra-core",
+   "hydra-joblib-launcher",
+   "omegaconf",
    "kindergarden>=0.0.8",
-   "relational_structs>=0.0.1",
-   "bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git#subdirectory=bilevel-planning",
+   "prpl_utils>=0.0.3",
 ]
 
 [project.optional-dependencies]
@@ -29,14 +29,13 @@ develop = [
     "pylint>=2.14.5",
     "pytest-pylint>=0.18.0",
     "pytest>=7.2.2",
-    "ruckig>=0.12.2",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-kinder_models = ["py.typed"]
+kinder_trajopt = ["py.typed"]
 
 [tool.black]
 line-length = 88
@@ -46,7 +45,7 @@ target-version = ["py310"]
 py_version = 310
 profile = "black"
 multi_line_output = 2
-skip_glob = ["venv/*", ".venv/*", "third-party/*"]
+skip_glob = ["venv/*", ".venv/*"]
 split_on_trailing_comma = true
 
 [tool.docformatter]
@@ -58,27 +57,13 @@ wrap-descriptions = 88
 strict_equality = true
 disallow_untyped_calls = true
 warn_unreachable = true
-exclude = ["venv/*", ".venv/*", "third-party/*"]
+exclude = ["venv/*", ".venv/*"]
 
 [[tool.mypy.overrides]]
 module = [
     "matplotlib.*",
-    "pygame.*",
-    "dill.*",
-    "mujoco.*",
-    "pin.*",
-    "ruckig.*",
-    "flask.*",
-    "flask_socketio.*",
-    "zmq.*",
-    "redis.*",
-    "phoenix6.*",
-    "cv2.*",
-    "pybullet.*",
-    "spatialmath.*",
 ]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["--ignore=third-party"]
