@@ -1,4 +1,4 @@
-# LLm/VLM Planning Baselines for KinDER
+# LLM/VLM Planning Baselines for KinDER
 
 ![workflow](https://github.com/yichao-liang/kinder-vlm-planning/actions/workflows/ci.yml/badge.svg)
 
