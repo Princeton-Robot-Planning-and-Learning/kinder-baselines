@@ -35,9 +35,11 @@ def _main(cfg: DictConfig) -> None:
 
     logging.info(f"Running seed={cfg.seed}, env={cfg.env.env_id}")
 
-    # Create the environment.
+    # Create the environments: one for evaluation, one for the agent's
+    # internal simulation (so planning never mutates the real env).
     kinder.register_all_environments()
-    env = kinder.make(cfg.env.env_id, allow_state_access=True, render_mode="rgb_array")
+    env = kinder.make(cfg.env.env_id, render_mode="rgb_array")
+    sim_env = kinder.make(cfg.env.env_id, allow_state_access=True)
 
     # Record videos.
     if cfg.make_videos:
@@ -47,7 +49,7 @@ def _main(cfg: DictConfig) -> None:
 
     # Create the agent.
     agent = TrajOptAgent(
-        env,
+        sim_env,
         seed=cfg.seed,
         horizon=cfg.horizon,
         num_rollouts=cfg.num_rollouts,
