@@ -70,8 +70,9 @@ def create_bilevel_planning_models(
     # Predicates.
     HandEmpty = Predicate("HandEmpty", [KinRobotType])
     HoldingHook = Predicate("HoldingHook", [KinRobotType, HookType])
+    HookAboveTarget = Predicate("HookAboveTarget", [KinRobotType, HookType, TargetBlockType])
     TargetAtGoal = Predicate("TargetAtGoal", [TargetBlockType])
-    predicates = {HandEmpty, HoldingHook, TargetAtGoal}
+    predicates = {HandEmpty, HoldingHook, HookAboveTarget, TargetAtGoal}
 
     # State abstractor.
     def state_abstractor(x: ObjectCentricState) -> RelationalAbstractState:
@@ -89,6 +90,17 @@ def create_bilevel_planning_models(
                 holding_hook = True
         if not holding_hook:
             atoms.add(GroundAtom(HandEmpty, [robot]))
+
+        # HookAboveTarget: the held hook is in the upper half of the world
+        # (above the middle wall).  Initially the hook is below; PreHook
+        # positions it above the target for the pull-down.
+        middle_wall_y = env_config.middle_wall_pose[1]
+        if holding_hook:
+            for hook in hooks:
+                if x.get(hook, "held"):
+                    if x.get(hook, "y") > middle_wall_y:
+                        for tgt in target_blocks:
+                            atoms.add(GroundAtom(HookAboveTarget, [robot, hook, tgt]))
 
         # TargetAtGoal: target block intersects the middle wall.
         middle_wall = [
@@ -133,16 +145,19 @@ def create_bilevel_planning_models(
         "PreHook",
         [robot, hook, target_block],
         preconditions={LiftedAtom(HoldingHook, [robot, hook])},
-        add_effects=set(),
+        add_effects={LiftedAtom(HookAboveTarget, [robot, hook, target_block])},
         delete_effects=set(),
     )
 
     HookDownOperator = LiftedOperator(
         "HookDown",
         [robot, hook, target_block],
-        preconditions={LiftedAtom(HoldingHook, [robot, hook])},
+        preconditions={
+            LiftedAtom(HoldingHook, [robot, hook]),
+            LiftedAtom(HookAboveTarget, [robot, hook, target_block]),
+        },
         add_effects={LiftedAtom(TargetAtGoal, [target_block])},
-        delete_effects=set(),
+        delete_effects={LiftedAtom(HookAboveTarget, [robot, hook, target_block])},
     )
 
     MoveOperator = LiftedOperator(

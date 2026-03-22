@@ -296,3 +296,4 @@ def test_move_controller_affects_hook():
     assert hook_displacement > 0.01, "Hook should have been displaced by the robot's movements"
     env.close()
 
+
