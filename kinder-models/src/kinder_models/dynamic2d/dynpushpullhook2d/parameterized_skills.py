@@ -318,6 +318,15 @@ class GroundPreHookController(Dynamic2dRobotController):
                 # Direct interpolation (fallback or skip_collision_check).
                 se2_path = self._interpolate_se2(start_pose, end_pose)
 
+            # Ensure the SE2 path has enough steps for the arm change.
+            total_darm = abs(end_arm - start_arm)
+            if total_darm > 1e-8:
+                arm_steps_needed = int(
+                    np.ceil(total_darm / abs(self._max_delta_arm))
+                )
+                while len(se2_path) - 1 < arm_steps_needed:
+                    se2_path.append(se2_path[-1])
+
             # Convert SE2 path to actions, linearly interpolating arm_joint.
             n = len(se2_path)
             for i in range(n - 1):
@@ -331,6 +340,7 @@ class GroundPreHookController(Dynamic2dRobotController):
                 darm = (start_arm + alpha_next * (end_arm - start_arm)) - (
                     start_arm + alpha_prev * (end_arm - start_arm)
                 )
+                darm = float(np.clip(darm, -abs(self._max_delta_arm), abs(self._max_delta_arm)))
 
                 action = np.array(
                     [dx, dy, dtheta, darm, gripper_during_plan],
