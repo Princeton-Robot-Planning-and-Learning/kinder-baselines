@@ -237,3 +237,62 @@ def test_hookdown_controller():
     assert not hookdown_ctrl.terminated(), "HookDown controller should not terminate when episode terminates"
     env.close()
 
+
+def test_move_controller_affects_hook():
+    """Test that randomly calling the move controller 10 times from the init
+    state displaces the hook (via physics contact)."""
+
+    num_obstructions = 0
+    env = kinder.make(
+        f"kinder/DynPushPullHook2D-o{num_obstructions}-v0", render_mode="rgb_array"
+    )
+    if MAKE_VIDEOS:
+        env = RecordVideo(
+            env,
+            "unit_test_videos",
+            name_prefix=f"DynPushPullHook2D-o{num_obstructions}-move",
+        )
+
+    obs, _ = env.reset(seed=0)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+
+    controllers = create_lifted_controllers(
+        env.action_space,
+        env.unwrapped._object_centric_env.initial_constant_state,
+    )
+    robot = state.get_object_from_name("robot")
+    hook = state.get_object_from_name("hook")
+
+    # Record the hook's initial position.
+    init_hook_x = state.get(hook, "x")
+    init_hook_y = state.get(hook, "y")
+
+    rng = np.random.default_rng(42)
+
+    # Execute 10 random move controllers in sequence.
+    for _ in range(10):
+        move_ctrl = controllers["move"].ground((robot,))
+        params = move_ctrl.sample_parameters(state, rng)
+        move_ctrl.reset(state, params)
+        for _ in range(500):
+            action = move_ctrl.step()
+            obs, _, terminated, _, _ = env.step(action)
+            next_state = env.observation_space.devectorize(obs)
+            move_ctrl.observe(next_state)
+            state = next_state
+            if move_ctrl.terminated() or terminated:
+                break
+
+        # The hook should have been displaced by the robot's movements.
+        final_hook_x = state.get(hook, "x")
+        final_hook_y = state.get(hook, "y")
+        hook_displacement = np.sqrt(
+            (final_hook_x - init_hook_x) ** 2 + (final_hook_y - init_hook_y) ** 2
+        )
+        if hook_displacement > 0.01:
+            break  # Test passed, hook was displaced
+
+    assert hook_displacement > 0.01, "Hook should have been displaced by the robot's movements"
+    env.close()
+

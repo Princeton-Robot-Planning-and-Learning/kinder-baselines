@@ -387,6 +387,78 @@ class GroundHookDownController(Dynamic2dRobotController):
         ]
 
 
+class GroundMoveController(Dynamic2dRobotController):
+    """Controller that moves the robot to an arbitrary configuration.
+
+    Parameters are five normalized values in [0, 1] mapped to:
+    (x, y, theta, arm_joint, finger_gap).
+
+    Collision checking is skipped so the robot can push through objects.
+    """
+
+    def __init__(
+        self,
+        objects: Sequence[Object],
+        action_space: KinRobotActionSpace,
+        init_constant_state: Optional[ObjectCentricState] = None,
+    ) -> None:
+        super().__init__(
+            objects, action_space, init_constant_state, skip_collision_check=True
+        )
+        env_config = DynPushPullHook2DEnvConfig()
+        self._wx_min = env_config.world_min_x + env_config.robot_base_radius
+        self._wx_max = env_config.world_max_x - env_config.robot_base_radius
+        self._wy_min = env_config.world_min_y + env_config.robot_base_radius
+        self._wy_max = env_config.world_max_y - env_config.robot_base_radius
+
+    def sample_parameters(
+        self, x: ObjectCentricState, rng: np.random.Generator
+    ) -> tuple[float, float, float, float, float]:
+        """Sample (x, y, theta, arm_joint, finger_gap) all normalized [0, 1]."""
+        return tuple(rng.uniform(0.0, 1.0, size=5))  # type: ignore[return-value]
+
+    def _requires_multi_phase_gripper(self) -> bool:
+        """Move first, then adjust gripper."""
+        return True
+
+    def _get_gripper_actions(self, state: ObjectCentricState) -> tuple[float, float]:
+        """Keep gripper unchanged during movement, adjust to target after."""
+        params = cast(tuple[float, ...], self._current_params)
+        desired_finger_gap = params[4] * self.finger_gap_max
+        curr_finger_gap = state.get(self._robot, "finger_gap")
+        delta = desired_finger_gap - curr_finger_gap
+        return 0.0, delta
+
+    def _generate_waypoints(
+        self, state: ObjectCentricState
+    ) -> list[tuple[SE2Pose, float]]:
+        """Single waypoint: the desired configuration."""
+        params = cast(tuple[float, ...], self._current_params)
+
+        # Denormalize.
+        target_x = self._wx_min + (self._wx_max - self._wx_min) * params[0]
+        target_y = self._wy_min + (self._wy_max - self._wy_min) * params[1]
+        target_theta = wrap_angle(-np.pi + 2 * np.pi * params[2])
+
+        min_arm = (
+            state.get(self._robot, "base_radius")
+            + state.get(self._robot, "gripper_base_width")
+            + 1e-4
+        )
+        max_arm = state.get(self._robot, "arm_length")
+        target_arm = min_arm + (max_arm - min_arm) * params[3]
+
+        robot_x = state.get(self._robot, "x")
+        robot_y = state.get(self._robot, "y")
+        robot_theta = wrap_angle(state.get(self._robot, "theta"))
+        robot_arm = state.get(self._robot, "arm_joint")
+
+        return [
+            (SE2Pose(robot_x, robot_y, robot_theta), robot_arm),
+            (SE2Pose(target_x, target_y, target_theta), target_arm),
+        ]
+
+
 def create_lifted_controllers(
     action_space: KinRobotActionSpace,
     init_constant_state: Optional[ObjectCentricState] = None,
@@ -415,6 +487,11 @@ def create_lifted_controllers(
         high=np.array([1.0]),
         dtype=np.float32,
     )
+    move_params_space = Box(
+        low=np.array([0.0, 0.0, 0.0, 0.0, 0.0]),
+        high=np.array([1.0, 1.0, 1.0, 1.0, 1.0]),
+        dtype=np.float32,
+    )
 
     class GraspHookController(GroundGraspHookController):
         """Lifted wrapper that binds action_space and init_constant_state."""
@@ -429,6 +506,12 @@ def create_lifted_controllers(
             super().__init__(objects, action_space, init_constant_state)
 
     class HookDownController(GroundHookDownController):
+        """Lifted wrapper that binds action_space and init_constant_state."""
+
+        def __init__(self, objects: Sequence[Object]) -> None:
+            super().__init__(objects, action_space, init_constant_state)
+
+    class MoveController(GroundMoveController):
         """Lifted wrapper that binds action_space and init_constant_state."""
 
         def __init__(self, objects: Sequence[Object]) -> None:
@@ -460,8 +543,15 @@ def create_lifted_controllers(
         )
     )
 
+    move_controller: LiftedParameterizedController = LiftedParameterizedController(
+        [robot],
+        MoveController,
+        move_params_space,
+    )
+
     return {
         "grasp_hook": grasp_hook_controller,
         "prehook": prehook_controller,
         "hookdown": hookdown_controller,
+        "move": move_controller,
     }
