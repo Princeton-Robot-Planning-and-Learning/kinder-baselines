@@ -332,3 +332,69 @@ def test_dynpushpullhook2d_auto_plan_and_execute():
         "Auto-planned pipeline should achieve TargetAtGoal"
 
     env.close()
+
+
+def test_dynpushpullhook2d_bilevel_planning_agent():
+    """Run the full BilevelPlanningAgent (abstract planning + trajectory
+    sampling via transition_fn + execution in real env) on a known-good
+    initial state."""
+    from kinder_bilevel_planning.agent import AgentFailure, BilevelPlanningAgent
+
+    env = kinder.make("kinder/DynPushPullHook2D-o0-v0")
+    env_models = create_bilevel_planning_models(
+        "dynpushpullhook2d",
+        env.observation_space,
+        env.action_space,
+        num_obstructions=0,
+    )
+
+    # Set up the known-good initial state.
+    init_obs, _ = env.reset(seed=0)
+    state = env_models.observation_to_state(init_obs)
+    abstract = env_models.state_abstractor(state)
+    obj = {o.name: o for o in abstract.objects}
+    robot = obj["robot"]
+    hook = obj["hook"]
+    target_block = obj["target_block"]
+
+    new_state = state.copy()
+    new_state.set(target_block, "x", state.get(target_block, "x") + 2.3)
+    new_state.set(target_block, "y", state.get(target_block, "y") - 0.5)
+    new_state.set(hook, "x", state.get(hook, "x") - 0.2)
+    obs, info = env.reset(options={"init_state": new_state})
+
+    # Create the agent with generous sampling budget.
+    agent = BilevelPlanningAgent(
+        env_models,
+        seed=123,
+        max_abstract_plans=10,
+        samples_per_step=20,
+        max_skill_horizon=500,
+        heuristic_name="hff",
+        planning_timeout=120,
+    )
+
+    # Planning phase.
+    try:
+        agent.reset(obs, info)
+    except AgentFailure:
+        assert False, "Agent failed to find a plan"
+
+    plan = agent._current_plan
+    assert plan is not None and len(plan) > 0, "Agent should have a non-empty plan"
+
+    # Execution phase.
+    success = False
+    for step in range(3000):
+        try:
+            action = agent.step()
+        except AgentFailure:
+            break
+        obs, rew, terminated, _, info = env.step(action)
+        agent.update(obs, float(rew), terminated, info)
+        if terminated:
+            success = True
+            break
+
+    assert success, "Bilevel planning agent should solve the task"
+    env.close()
