@@ -3,6 +3,7 @@
 from typing import Optional, Sequence, cast
 
 import numpy as np
+from numpy.typing import NDArray
 from bilevel_planning.structs import LiftedParameterizedController
 from bilevel_planning.trajectory_samplers.trajectory_sampler import (
     TrajectorySamplingFailure,
@@ -14,10 +15,10 @@ from kinder.envs.dynamic2d.dyn_pushpullhook2d import (
     TargetBlockType,
 )
 from kinder.envs.dynamic2d.object_types import KinRobotType
-from kinder.envs.dynamic2d.utils import KinRobotActionSpace
+from kinder.envs.dynamic2d.utils import KinRobotActionSpace, run_motion_planning_for_kin_robot
 from kinder.envs.kinematic2d.structs import SE2Pose
 from kinder.envs.utils import state_2d_has_collision
-from prpl_utils.utils import wrap_angle
+from prpl_utils.utils import get_signed_angle_distance, wrap_angle
 from relational_structs.object_centric_state import ObjectCentricState
 from relational_structs.objects import Object, Variable
 
@@ -179,7 +180,9 @@ class GroundHookController(Dynamic2dRobotController):
         self._hook = objects[1]
         self._target_block = objects[2]
         env_config = DynPushPullHook2DEnvConfig()
-        self._world_y_min = env_config.world_min_y + env_config.robot_base_radius
+        # need to consider mid wall height for y-limits since the controller moves straight down
+        self.world_y_max = env_config.world_max_y / 2 - env_config.robot_base_radius - env_config.gripper_base_width
+        self.world_y_min = env_config.world_min_y + env_config.robot_base_radius
 
     def sample_parameters(
         self, x: ObjectCentricState, rng: np.random.Generator
@@ -249,7 +252,90 @@ class GroundHookController(Dynamic2dRobotController):
         ]
         return final_waypoints
 
+    def _waypoints_to_plan(
+        self,
+        state: ObjectCentricState,
+        waypoints: list[tuple[SE2Pose, float]],
+        gripper_during_plan: float,
+    ) -> list[NDArray[np.float32]]:
+        """Convert waypoints to an action plan.
 
+        Uses ``run_motion_planning_for_kin_robot`` (BiRRT on SE2) for
+        collision-free path segments and linearly interpolates arm_joint
+        along the resulting path.  Falls back to direct interpolation
+        when the planner fails or collision checking is disabled.
+        """
+        curr_x = state.get(self._robot, "x")
+        curr_y = state.get(self._robot, "y")
+        curr_theta = state.get(self._robot, "theta")
+        curr_arm = state.get(self._robot, "arm_joint")
+        current_pos: tuple[SE2Pose, float] = (
+            SE2Pose(curr_x, curr_y, curr_theta),
+            curr_arm,
+        )
+        waypoints = [current_pos] + waypoints
+
+        # Build full state (with constant objects) for the motion planner.
+        full_state = state.copy()
+        if self._init_constant_state is not None:
+            full_state.data.update(self._init_constant_state.data)
+
+        
+
+        plan: list[NDArray[np.float32]] = []
+        for (start_pose, start_arm), (end_pose, end_arm) in zip(
+            waypoints[:-1], waypoints[1:]
+        ):
+            if np.allclose(
+                [start_pose.x, start_pose.y, start_pose.theta, start_arm],
+                [end_pose.x, end_pose.y, end_pose.theta, end_arm],
+            ):
+                continue
+
+            # Update full_state to the segment's starting configuration so
+            # that the motion planner sees the correct robot position.
+            full_state.set(self._robot, "x", start_pose.x)
+            full_state.set(self._robot, "y", start_pose.y)
+            full_state.set(self._robot, "theta", start_pose.theta)
+            full_state.set(self._robot, "arm_joint", start_arm)
+
+            # Plan a collision-free SE2 path (arm is interpolated separately).
+            se2_path: list[SE2Pose] | None = None
+            if not self._skip_collision_check:
+                se2_path = run_motion_planning_for_kin_robot(
+                    full_state,
+                    self._robot,
+                    end_pose,
+                    self._action_space,
+                    motion_border=[self.world_x_min, self.world_x_max, self.world_y_min, self.world_y_max],
+                )
+
+            if se2_path is None:
+                # Direct interpolation (fallback or skip_collision_check).
+                se2_path = self._interpolate_se2(start_pose, end_pose)
+
+            # Convert SE2 path to actions, linearly interpolating arm_joint.
+            n = len(se2_path)
+            for i in range(n - 1):
+                p1, p2 = se2_path[i], se2_path[i + 1]
+                dx = p2.x - p1.x
+                dy = p2.y - p1.y
+                dtheta = get_signed_angle_distance(p2.theta, p1.theta)
+
+                alpha_prev = i / max(1, n - 1)
+                alpha_next = (i + 1) / max(1, n - 1)
+                darm = (start_arm + alpha_next * (end_arm - start_arm)) - (
+                    start_arm + alpha_prev * (end_arm - start_arm)
+                )
+
+                action = np.array(
+                    [dx, dy, dtheta, darm, gripper_during_plan],
+                    dtype=np.float32,
+                )
+                plan.append(action)
+
+        return plan
+    
 def create_lifted_controllers(
     action_space: KinRobotActionSpace,
     init_constant_state: Optional[ObjectCentricState] = None,

@@ -95,19 +95,22 @@ def test_hook_controller():
     robot = state.get_object_from_name("robot")
     hook = state.get_object_from_name("hook")
     target_block = state.get_object_from_name("target_block")
-    new_block_x = state.get(target_block, "x") + 2.0
+    new_block_x = state.get(target_block, "x") + 2.3
     new_block_y = state.get(target_block, "y") - 0.3
+
+    new_hook_x = state.get(hook, "x") - 0.2
     new_state = state.copy()
     new_state.set(target_block, "x", new_block_x)
     new_state.set(target_block, "y", new_block_y)
+    new_state.set(hook, "x", new_hook_x)
 
     obs, _ = env.reset(options={"init_state": new_state})
     rng = np.random.default_rng(123)
 
     # Phase 1: Grasp the hook.
     grasp_ctrl = controllers["grasp_hook"].ground((robot, hook))
-    params = grasp_ctrl.sample_parameters(state, rng)
-    grasp_ctrl.reset(state, params)
+    params = grasp_ctrl.sample_parameters(new_state, rng)
+    grasp_ctrl.reset(new_state, params)
     for _ in range(500):
         try:
             action = grasp_ctrl.step()
