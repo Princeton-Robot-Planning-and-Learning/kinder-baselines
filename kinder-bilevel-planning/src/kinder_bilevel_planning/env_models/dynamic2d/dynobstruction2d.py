@@ -53,8 +53,7 @@ def create_bilevel_planning_models(
     ) -> ObjectCentricState:
         """Simulate the action."""
         state = x.copy()
-        sim.reset(seed=123)
-        sim._add_state_to_space(state)  # pylint: disable=protected-access
+        sim.reset(options={"init_state": state})
         obs, _, _, _, _ = sim.step(u)
         return obs.copy()
 

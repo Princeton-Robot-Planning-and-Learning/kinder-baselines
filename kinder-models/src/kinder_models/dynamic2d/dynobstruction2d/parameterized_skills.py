@@ -49,7 +49,7 @@ class GroundPickController(Dynamic2dRobotController):
         max_arm_length = x.get(self._robot, "arm_length")
         min_arm_length = (
             x.get(self._robot, "base_radius")
-            + x.get(self._robot, "gripper_base_height") / 2
+            + x.get(self._robot, "gripper_base_width")
             + 1e-4
         )
         arm_length = rng.uniform(min_arm_length, max_arm_length)
@@ -84,7 +84,7 @@ class GroundPickController(Dynamic2dRobotController):
         # After reaching: close gripper to desired gap
         return 0.0, delta_needed
 
-    def _calculate_grasp_robot_pose(
+    def _calculate_pre_grasp_robot_pose(
         self,
         state: ObjectCentricState,
         ratio: float,
@@ -100,23 +100,12 @@ class GroundPickController(Dynamic2dRobotController):
         block_height = state.get(self._block, "height")
 
         # Calculate reference point and approach direction based on side
-        gripper_height = state.get(self._robot, "gripper_base_height")
-        if side < 0.25:  # left side
-            custom_dx = -(arm_length + gripper_height)
-            custom_dy = ratio * block_height
-            custom_dtheta = 0.0
-        elif 0.25 <= side < 0.5:  # right side
-            custom_dx = arm_length + gripper_height + block_width
-            custom_dy = ratio * block_height
-            custom_dtheta = np.pi
-        elif 0.5 <= side < 0.75:  # top side
-            custom_dx = ratio * block_width
-            custom_dy = arm_length + gripper_height - 0.05
-            custom_dtheta = -np.pi / 2
-        else:  # bottom side
-            custom_dx = ratio * block_width
-            custom_dy = -(arm_length + gripper_height)
-            custom_dtheta = np.pi / 2
+        finger_width = state.get(self._robot, "finger_width")
+        gripper_base_width = state.get(self._robot, "gripper_base_width")
+        assert 0.5 <= side < 0.75, "Currently only supports picking from the top side"
+        custom_dx = ratio * block_width
+        custom_dy = arm_length + block_height / 2 + finger_width + gripper_base_width
+        custom_dtheta = -np.pi / 2
 
         target_se2_pose = SE2Pose(block_x, block_y, block_theta) * SE2Pose(
             custom_dx, custom_dy, custom_dtheta
@@ -135,8 +124,9 @@ class GroundPickController(Dynamic2dRobotController):
         robot_y = state.get(self._robot, "y")
         robot_theta = wrap_angle(state.get(self._robot, "theta"))
         robot_radius = state.get(self._robot, "base_radius")
+        finger_width = state.get(self._robot, "finger_width")
         # Calculate grasp point and robot target position
-        target_se2_pose = self._calculate_grasp_robot_pose(
+        target_se2_pre_pose = self._calculate_pre_grasp_robot_pose(
             state, grasp_ratio, side, desired_arm_length
         )
 
@@ -146,9 +136,9 @@ class GroundPickController(Dynamic2dRobotController):
             full_state.data.update(init_constant_state.data)
 
         # Check if the target pose is collision-free
-        full_state.set(self._robot, "x", target_se2_pose.x)
-        full_state.set(self._robot, "y", target_se2_pose.y)
-        full_state.set(self._robot, "theta", target_se2_pose.theta)
+        full_state.set(self._robot, "x", target_se2_pre_pose.x)
+        full_state.set(self._robot, "y", target_se2_pre_pose.y)
+        full_state.set(self._robot, "theta", target_se2_pre_pose.theta)
         full_state.set(self._robot, "arm_joint", desired_arm_length)
 
         # Check target state collision
@@ -165,7 +155,14 @@ class GroundPickController(Dynamic2dRobotController):
         final_waypoints: list[tuple[SE2Pose, float]] = [
             (SE2Pose(robot_x, robot_y, robot_theta), robot_radius)
         ]
-        final_waypoints.append((target_se2_pose, desired_arm_length))
+        final_waypoints.append((target_se2_pre_pose, desired_arm_length))
+
+
+        relative_movedown = SE2Pose(finger_width * 0.9, 0, 0)
+        final_waypoints.append(
+            (target_se2_pre_pose * relative_movedown, desired_arm_length)
+        )
+
         return final_waypoints
 
 
