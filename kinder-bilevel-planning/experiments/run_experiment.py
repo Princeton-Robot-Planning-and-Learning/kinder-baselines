@@ -65,7 +65,7 @@ def _main(cfg: DictConfig) -> None:
         samples_per_step=cfg.samples_per_step,
         max_skill_horizon=cfg.max_skill_horizon,
         heuristic_name=cfg.heuristic_name,
-        planning_timeout=cfg.planning_timeout,
+        planning_timeout=300,
     )
 
     # Evaluate.
