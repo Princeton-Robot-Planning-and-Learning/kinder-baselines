@@ -96,7 +96,7 @@ def test_hook_controller():
     hook = state.get_object_from_name("hook")
     target_block = state.get_object_from_name("target_block")
     new_block_x = state.get(target_block, "x") + 2.3
-    new_block_y = state.get(target_block, "y") - 0.3
+    new_block_y = state.get(target_block, "y") - 0.5
 
     new_hook_x = state.get(hook, "x") - 0.2
     new_state = state.copy()

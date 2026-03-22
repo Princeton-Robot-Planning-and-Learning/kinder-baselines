@@ -192,9 +192,9 @@ class GroundHookController(Dynamic2dRobotController):
         Returns:
             (hook_theta, rel_dx, rel_dy) where each is in [0, 1].
         """
-        hook_theta = rng.uniform(np.pi / 4, 3 * np.pi / 4)  # hook facing mostly downwards
-        rel_dx = rng.uniform(-0.1, 0.0) # relative x offset "gap" from hook to target block
-        rel_dy = rng.uniform(-0.1, 0.0) # relative y offset "gap" from hook to target block
+        hook_theta = rng.uniform(np.pi / 3, 2 * np.pi / 3)  # hook facing mostly downwards
+        rel_dx = rng.uniform(-0.05, 0.0) # relative x offset "gap" from hook to target block
+        rel_dy = rng.uniform(-0.05, 0.0) # relative y offset "gap" from hook to target block
         return (hook_theta, rel_dx, rel_dy)
 
     def _get_gripper_actions(self, state: ObjectCentricState) -> tuple[float, float]:
@@ -245,6 +245,10 @@ class GroundHookController(Dynamic2dRobotController):
         # Pre-hook pose: position the robot+hook near target.
         pre_hook_pose_hook = SE2Pose(target_x, target_y, target_theta) * SE2Pose(rel_dx, rel_dy, rel_hook_theta).inverse
         pre_hook_pose_robot = pre_hook_pose_hook * hook2robot
+        if pre_hook_pose_robot.y > self.world_y_max or pre_hook_pose_robot.y < self.world_y_min:
+            raise TrajectorySamplingFailure(
+                "Sampled pre-hook pose is out of y-bounds for straight down pull."
+            )
 
         final_waypoints: list[tuple[SE2Pose, float]] = [
             (SE2Pose(robot_x, robot_y, robot_theta), robot_arm_joint),
