@@ -71,8 +71,8 @@ def test_grasp_hook_controller():
     env.close()
 
 
-def test_hook_controller():
-    """Test hook controller: grasp hook then pull target block down."""
+def test_prehook_controller():
+    """Test prehook controller: grasp hook then position near target."""
 
     # Create the environment (no obstructions for clean test).
     num_obstructions = 0
@@ -83,7 +83,7 @@ def test_hook_controller():
         env = RecordVideo(
             env,
             "unit_test_videos",
-            name_prefix=f"DynPushPullHook2D-o{num_obstructions}-hook",
+            name_prefix=f"DynPushPullHook2D-o{num_obstructions}-prehook",
         )
 
     # Reset the environment and get the initial state.
@@ -124,25 +124,116 @@ def test_hook_controller():
             break
     else:
         assert False, "Grasp controller did not terminate"
-    assert state.get(hook, "held"), "Hook should be held before hooking"
+    assert state.get(hook, "held"), "Hook should be held before prehook"
 
-    # Phase 2: Use the hook to pull the target block.
-    hook_ctrl = controllers["hook"].ground((robot, hook, target_block))
-    params = hook_ctrl.sample_parameters(state, rng)
-    hook_ctrl.reset(state, params)
+    # Phase 2: Position hook near the target block.
+    prehook_ctrl = controllers["prehook"].ground((robot, hook, target_block))
+    params = prehook_ctrl.sample_parameters(state, rng)
+    prehook_ctrl.reset(state, params)
     for _ in range(2000):
         try:
-            action = hook_ctrl.step()
-            obs, _, terminated, _, _ = env.step(action)
+            action = prehook_ctrl.step()
+            obs, _, _, _, _ = env.step(action)
             next_state = env.observation_space.devectorize(obs)
-            hook_ctrl.observe(next_state)
+            prehook_ctrl.observe(next_state)
             state = next_state
-            if hook_ctrl.terminated():
+            if prehook_ctrl.terminated():
                 break
         except TrajectorySamplingFailure:
             break
     else:
-        assert False, "Hook controller did not terminate"
+        assert False, "PreHook controller did not terminate"
 
+    env.close()
+
+
+def test_hookdown_controller():
+    """Test hookdown controller: grasp hook, prehook, then pull down."""
+
+    # Create the environment (no obstructions for clean test).
+    num_obstructions = 0
+    env = kinder.make(
+        f"kinder/DynPushPullHook2D-o{num_obstructions}-v0", render_mode="rgb_array"
+    )
+    if MAKE_VIDEOS:
+        env = RecordVideo(
+            env,
+            "unit_test_videos",
+            name_prefix=f"DynPushPullHook2D-o{num_obstructions}-hookdown",
+        )
+
+    # Reset the environment and get the initial state.
+    init_obs, _ = env.reset(seed=0)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(init_obs)
+
+    controllers = create_lifted_controllers(env.action_space, env.unwrapped._object_centric_env.initial_constant_state)
+    robot = state.get_object_from_name("robot")
+    hook = state.get_object_from_name("hook")
+    target_block = state.get_object_from_name("target_block")
+    new_block_x = state.get(target_block, "x") + 2.3
+    new_block_y = state.get(target_block, "y") - 0.5
+
+    new_hook_x = state.get(hook, "x") - 0.2
+    new_state = state.copy()
+    new_state.set(target_block, "x", new_block_x)
+    new_state.set(target_block, "y", new_block_y)
+    new_state.set(hook, "x", new_hook_x)
+
+    obs, _ = env.reset(options={"init_state": new_state})
+    rng = np.random.default_rng(123)
+
+    # Phase 1: Grasp the hook.
+    grasp_ctrl = controllers["grasp_hook"].ground((robot, hook))
+    params = grasp_ctrl.sample_parameters(new_state, rng)
+    grasp_ctrl.reset(new_state, params)
+    for _ in range(500):
+        try:
+            action = grasp_ctrl.step()
+            obs, _, _, _, _ = env.step(action)
+            next_state = env.observation_space.devectorize(obs)
+            grasp_ctrl.observe(next_state)
+            state = next_state
+            if grasp_ctrl.terminated():
+                break
+        except TrajectorySamplingFailure:
+            break
+    else:
+        assert False, "Grasp controller did not terminate"
+    assert state.get(hook, "held"), "Hook should be held before prehook"
+
+    # Phase 2: Position hook near the target block.
+    prehook_ctrl = controllers["prehook"].ground((robot, hook, target_block))
+    params = prehook_ctrl.sample_parameters(state, rng)
+    prehook_ctrl.reset(state, params)
+    for _ in range(2000):
+        try:
+            action = prehook_ctrl.step()
+            obs, _, _, _, _ = env.step(action)
+            next_state = env.observation_space.devectorize(obs)
+            prehook_ctrl.observe(next_state)
+            state = next_state
+            if prehook_ctrl.terminated():
+                break
+        except TrajectorySamplingFailure:
+            break
+    else:
+        assert False, "PreHook controller did not terminate"
+
+    # Phase 3: Pull straight down.
+    hookdown_ctrl = controllers["hookdown"].ground((robot,))
+    hookdown_ctrl.reset(state, 0.0)
+    for _ in range(2000):
+        action = hookdown_ctrl.step()
+        obs, _, terminated, _, _ = env.step(action)
+        next_state = env.observation_space.devectorize(obs)
+        hookdown_ctrl.observe(next_state)
+        state = next_state
+        if terminated:
+            break
+    else:
+        assert False, "HookDown controller did not terminate"
+
+    assert not hookdown_ctrl.terminated(), "HookDown controller should not terminate when episode terminates"
     env.close()
 

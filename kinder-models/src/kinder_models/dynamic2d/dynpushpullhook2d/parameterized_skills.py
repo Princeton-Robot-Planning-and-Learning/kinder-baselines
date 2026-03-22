@@ -156,7 +156,7 @@ class GroundGraspHookController(Dynamic2dRobotController):
         return final_waypoints
 
 
-class GroundHookController(Dynamic2dRobotController):
+class GroundPreHookController(Dynamic2dRobotController):
     """Controller for using the held hook to pull the target block downward.
 
     Assumes the robot is already holding the hook. The controller:
@@ -340,6 +340,53 @@ class GroundHookController(Dynamic2dRobotController):
 
         return plan
     
+class GroundHookDownController(Dynamic2dRobotController):
+    """Controller that moves the robot straight down to the bottom of the world.
+
+    Assumes the robot is already holding the hook in a pre-hook pose.
+    Collision checking is skipped — the hook is expected to make contact
+    with the target block and drag it downward.
+    """
+
+    def __init__(
+        self,
+        objects: Sequence[Object],
+        action_space: KinRobotActionSpace,
+        init_constant_state: Optional[ObjectCentricState] = None,
+    ) -> None:
+        super().__init__(
+            objects, action_space, init_constant_state, skip_collision_check=True
+        )
+        env_config = DynPushPullHook2DEnvConfig()
+        self._world_y_min = env_config.world_min_y + env_config.robot_base_radius
+
+    def sample_parameters(
+        self, x: ObjectCentricState, rng: np.random.Generator
+    ) -> float:
+        """No meaningful parameters — returns a dummy value."""
+        return 0.0
+
+    def _get_gripper_actions(self, state: ObjectCentricState) -> tuple[float, float]:
+        """Keep gripper closed throughout."""
+        return 0.0, 0.0
+
+    def _generate_waypoints(
+        self, state: ObjectCentricState
+    ) -> list[tuple[SE2Pose, float]]:
+        """Single waypoint: same x/theta, y moved to world bottom."""
+        robot_x = state.get(self._robot, "x")
+        robot_y = state.get(self._robot, "y")
+        robot_theta = wrap_angle(state.get(self._robot, "theta"))
+        robot_arm_joint = state.get(self._robot, "arm_joint")
+
+        down_pose = SE2Pose(robot_x, self._world_y_min, robot_theta)
+
+        return [
+            (SE2Pose(robot_x, robot_y, robot_theta), robot_arm_joint),
+            (down_pose, robot_arm_joint),
+        ]
+
+
 def create_lifted_controllers(
     action_space: KinRobotActionSpace,
     init_constant_state: Optional[ObjectCentricState] = None,
@@ -358,9 +405,14 @@ def create_lifted_controllers(
         high=np.array([1.0]),
         dtype=np.float32,
     )
-    hook_params_space = Box(
+    prehook_params_space = Box(
         low=np.array([0.0, 0.0, 0.0]),
         high=np.array([1.0, 1.0, 1.0]),
+        dtype=np.float32,
+    )
+    hookdown_params_space = Box(
+        low=np.array([0.0]),
+        high=np.array([1.0]),
         dtype=np.float32,
     )
 
@@ -370,7 +422,13 @@ def create_lifted_controllers(
         def __init__(self, objects: Sequence[Object]) -> None:
             super().__init__(objects, action_space, init_constant_state)
 
-    class HookController(GroundHookController):
+    class PreHookController(GroundPreHookController):
+        """Lifted wrapper that binds action_space and init_constant_state."""
+
+        def __init__(self, objects: Sequence[Object]) -> None:
+            super().__init__(objects, action_space, init_constant_state)
+
+    class HookDownController(GroundHookDownController):
         """Lifted wrapper that binds action_space and init_constant_state."""
 
         def __init__(self, objects: Sequence[Object]) -> None:
@@ -388,13 +446,22 @@ def create_lifted_controllers(
         )
     )
 
-    hook_controller: LiftedParameterizedController = LiftedParameterizedController(
+    prehook_controller: LiftedParameterizedController = LiftedParameterizedController(
         [robot, hook, target_block],
-        HookController,
-        hook_params_space,
+        PreHookController,
+        prehook_params_space,
+    )
+
+    hookdown_controller: LiftedParameterizedController = (
+        LiftedParameterizedController(
+            [robot],
+            HookDownController,
+            hookdown_params_space,
+        )
     )
 
     return {
         "grasp_hook": grasp_hook_controller,
-        "hook": hook_controller,
+        "prehook": prehook_controller,
+        "hookdown": hookdown_controller,
     }
