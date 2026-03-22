@@ -65,10 +65,12 @@ def create_bilevel_planning_models(
 
     # Predicates.
     Holding = Predicate("Holding", [KinRobotType, DynRectangleType])
+    IsTargetBlock = Predicate("IsTargetBlock", [DynRectangleType])
+    IsObstruction = Predicate("IsObstruction", [DynRectangleType])
     HandEmpty = Predicate("HandEmpty", [KinRobotType])
     OnTable = Predicate("OnTable", [DynRectangleType])
     OnTarget = Predicate("OnTarget", [DynRectangleType])
-    predicates = {Holding, HandEmpty, OnTable, OnTarget}
+    predicates = {Holding, HandEmpty, OnTable, OnTarget, IsTargetBlock, IsObstruction}
 
     # State abstractor.
     def state_abstractor(x: ObjectCentricState) -> RelationalAbstractState:
@@ -85,6 +87,10 @@ def create_bilevel_planning_models(
             if x.get(block, "held"):
                 atoms.add(GroundAtom(Holding, [robot, block]))
                 held_blocks.add(block)
+            if block.name == "target_block":
+                atoms.add(GroundAtom(IsTargetBlock, [block]))
+            else:
+                atoms.add(GroundAtom(IsObstruction, [block]))
         if not held_blocks:
             atoms.add(GroundAtom(HandEmpty, [robot]))
 
@@ -116,21 +122,23 @@ def create_bilevel_planning_models(
 
     PickFromTableOperator = LiftedOperator(
         "PickFromTable",
-        [robot, obstruction],
+        [robot, target_block],
         preconditions={
+            LiftedAtom(IsTargetBlock, [target_block]),
             LiftedAtom(HandEmpty, [robot]),
-            LiftedAtom(OnTable, [obstruction]),
+            LiftedAtom(OnTable, [target_block]),
         },
-        add_effects={LiftedAtom(Holding, [robot, obstruction])},
+        add_effects={LiftedAtom(Holding, [robot, target_block])},
         delete_effects={
             LiftedAtom(HandEmpty, [robot]),
-            LiftedAtom(OnTable, [obstruction]),
+            LiftedAtom(OnTable, [target_block]),
         },
     )
     PickFromTargetOperator = LiftedOperator(
         "PickFromTarget",
         [robot, obstruction],
         preconditions={
+            LiftedAtom(IsObstruction, [obstruction]),
             LiftedAtom(HandEmpty, [robot]),
             LiftedAtom(OnTarget, [obstruction]),
         },
@@ -143,7 +151,10 @@ def create_bilevel_planning_models(
     PlaceOnTableOperator = LiftedOperator(
         "PlaceOnTable",
         [robot, obstruction],
-        preconditions={LiftedAtom(Holding, [robot, obstruction])},
+        preconditions={
+            LiftedAtom(Holding, [robot, obstruction]),
+            LiftedAtom(IsObstruction, [obstruction]),
+        },
         add_effects={
             LiftedAtom(HandEmpty, [robot]),
             LiftedAtom(OnTable, [obstruction]),
@@ -153,7 +164,10 @@ def create_bilevel_planning_models(
     PlaceOnTargetOperator = LiftedOperator(
         "PlaceOnTarget",
         [robot, target_block, target_surface],
-        preconditions={LiftedAtom(Holding, [robot, target_block])},
+        preconditions={
+            LiftedAtom(Holding, [robot, target_block]),
+            LiftedAtom(IsTargetBlock, [target_block]),
+        },
         add_effects={
             LiftedAtom(HandEmpty, [robot]),
             LiftedAtom(OnTarget, [target_block]),
@@ -165,14 +179,15 @@ def create_bilevel_planning_models(
     lifted_controllers = create_lifted_controllers(
         action_space, sim.initial_constant_state
     )
-    PickController = lifted_controllers["pick_obstruction"]
+    PickTargetController = lifted_controllers["pick_tgt"]
+    PickObstructionController = lifted_controllers["pick_obstruction"]
     PlaceOnTableController = lifted_controllers["place_obstruction"]
     PlaceOnTargetController = lifted_controllers["place_tgt_surface"]
 
     # Finalize the skills.
     skills = {
-        LiftedSkill(PickFromTableOperator, PickController),
-        LiftedSkill(PickFromTargetOperator, PickController),
+        LiftedSkill(PickFromTableOperator, PickTargetController),
+        LiftedSkill(PickFromTargetOperator, PickObstructionController),
         LiftedSkill(PlaceOnTableOperator, PlaceOnTableController),
         LiftedSkill(PlaceOnTargetOperator, PlaceOnTargetController),
     }

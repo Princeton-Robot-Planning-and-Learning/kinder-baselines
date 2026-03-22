@@ -5,7 +5,7 @@
 cd "$(dirname "$0")/.." || exit 1
 
 # Define the seeds to run
-SEEDS=(0 1 2 3 4)
+SEEDS=(301 302 303 304 305)
 
 echo "Starting bilevel planning DynObstruction2D experiments..."
 echo "=============================================="
