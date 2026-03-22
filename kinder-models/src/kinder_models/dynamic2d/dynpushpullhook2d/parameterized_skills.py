@@ -96,20 +96,11 @@ class GroundGraspHookController(Dynamic2dRobotController):
         finger_width = state.get(self._robot, "finger_width")
         gripper_base_width = state.get(self._robot, "gripper_base_width")
 
-        # Grasp at midpoint of the long side (side1)
-        local_x = -hook_l1 / 2
-
-        # Position robot below the bar bottom (y = -w in hook local frame).
-        # Distance from bar bottom to robot center:
-        #   arm_length + gripper_base_width + finger_width
-        offset = arm_length + gripper_base_width + finger_width
-        local_y = -hook_w - offset
-
-        # Robot points upward in hook's local frame
-        local_dtheta = np.pi / 2
+        custom_dx = - arm_length - gripper_base_width - finger_width - hook_l1
+        custom_dy = - hook_w / 2
 
         target_se2_pose = SE2Pose(hook_x, hook_y, hook_theta) * SE2Pose(
-            local_x, local_y, local_dtheta
+            custom_dx, custom_dy, 0.0
         )
         return target_se2_pose
 

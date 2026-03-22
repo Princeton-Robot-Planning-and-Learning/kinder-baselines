@@ -14,6 +14,9 @@ from kinder_models.dynamic2d.dynpushpullhook2d.parameterized_skills import (
 )
 
 kinder.register_all_environments()
+# from imageio.v2 import imwrite
+
+# imwrite("test.png", env.render())
 
 
 def test_grasp_hook_controller():
@@ -32,7 +35,7 @@ def test_grasp_hook_controller():
         )
 
     # Reset the environment and get the initial state.
-    obs, _ = env.reset(seed=123)
+    obs, _ = env.reset(seed=0)
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
 
@@ -64,6 +67,7 @@ def test_grasp_hook_controller():
     else:
         assert False, "Controller did not terminate"
 
+    assert state.get(hook, "held"), "Hook should be held at the end of the controller execution."
     env.close()
 
 
