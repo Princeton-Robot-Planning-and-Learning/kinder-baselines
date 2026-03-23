@@ -157,7 +157,6 @@ class GroundPickController(Dynamic2dRobotController):
         ]
         final_waypoints.append((target_se2_pre_pose, desired_arm_length))
 
-
         relative_movedown = SE2Pose(finger_width * 0.9, 0, 0)
         final_waypoints.append(
             (target_se2_pre_pose * relative_movedown, desired_arm_length)

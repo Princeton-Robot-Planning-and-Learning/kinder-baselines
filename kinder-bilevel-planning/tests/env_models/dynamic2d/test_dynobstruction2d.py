@@ -98,11 +98,17 @@ def test_dynobstruction2d_state_abstractor():
     obstruction = obj_name_to_obj["obstruction0"]
 
     target_surface = obj_name_to_obj["target_surface"]
-    # HandEmpty + OnTable/OnTarget for each block (target_block + obstruction)
-    assert len(abstract_state.atoms) == 3
+    # HandEmpty + OnTable/OnTarget for each block + IsTargetBlock + IsObstruction
+    assert len(abstract_state.atoms) == 5
     assert HandEmpty([robot]) in abstract_state.atoms
-    assert OnTable([target_block]) in abstract_state.atoms or OnTarget([target_block]) in abstract_state.atoms
-    assert OnTable([obstruction]) in abstract_state.atoms or OnTarget([obstruction]) in abstract_state.atoms
+    assert (
+        OnTable([target_block]) in abstract_state.atoms
+        or OnTarget([target_block]) in abstract_state.atoms
+    )
+    assert (
+        OnTable([obstruction]) in abstract_state.atoms
+        or OnTarget([obstruction]) in abstract_state.atoms
+    )
 
     # Create state where the target block is inside the target region
     state2 = state.copy()
@@ -206,7 +212,4 @@ def test_dynobstruction2d_skills():
     obs2 = _skill_test_helper(place_target, env_models, env, obs1, params=0.25)
     state2 = env_models.observation_to_state(obs2)
     abstract_state2 = env_models.state_abstractor(state2)
-    assert (
-        predicate_name_to_pred["OnTarget"]([target_block])
-        in abstract_state2.atoms
-    )
+    assert predicate_name_to_pred["OnTarget"]([target_block]) in abstract_state2.atoms

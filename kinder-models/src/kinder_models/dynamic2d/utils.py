@@ -1,7 +1,7 @@
 """Utilities for 2D dynamic robot manipulation tasks."""
 
 import abc
-from typing import Iterable, Optional, Sequence, Union
+from typing import Optional, Sequence, Union
 
 import numpy as np
 from bilevel_planning.structs import GroundParameterizedController
@@ -9,11 +9,12 @@ from kinder.envs.dynamic2d.dyn_obstruction2d import (
     DynObstruction2DEnvConfig,
 )
 from kinder.envs.dynamic2d.object_types import KinRobotType
-from kinder.envs.dynamic2d.utils import KinRobotActionSpace
+from kinder.envs.dynamic2d.utils import (
+    KinRobotActionSpace,
+    run_motion_planning_for_kin_robot,
+)
 from kinder.envs.kinematic2d.structs import SE2Pose
-from kinder.envs.utils import state_2d_has_collision
 from numpy.typing import NDArray
-from prpl_utils.motion_planning import BiRRT
 from prpl_utils.utils import get_signed_angle_distance, wrap_angle
 from relational_structs.object_centric_state import ObjectCentricState
 from relational_structs.objects import Object
@@ -36,6 +37,7 @@ class Dynamic2dRobotController(GroundParameterizedController, abc.ABC):
         self._current_params: Union[tuple[float, ...], float] = 0.0
         self._current_plan: Union[list[NDArray[np.float32]], None] = None
         self._current_state: Union[ObjectCentricState, None] = None
+        self._action_space = action_space
         self._init_constant_state = init_constant_state
         self._skip_collision_check = skip_collision_check
         # Extract max deltas from action space bounds
@@ -87,13 +89,52 @@ class Dynamic2dRobotController(GroundParameterizedController, abc.ABC):
         """
         return False
 
+    def _interpolate_se2(
+        self,
+        start: SE2Pose,
+        end: SE2Pose,
+    ) -> list[SE2Pose]:
+        """Linearly interpolate between two SE2 poses respecting action-space bounds."""
+        dx = end.x - start.x
+        dy = end.y - start.y
+        dtheta = get_signed_angle_distance(end.theta, start.theta)
+
+        abs_x = self._max_delta_x if dx > 0 else abs(self._max_delta_x)
+        abs_y = self._max_delta_y if dy > 0 else abs(self._max_delta_y)
+        abs_theta = self._max_delta_theta if dtheta > 0 else abs(self._max_delta_theta)
+
+        x_steps = max(1, int(np.ceil(abs(dx) / abs_x)) if abs_x > 0 else 1)
+        y_steps = max(1, int(np.ceil(abs(dy) / abs_y)) if abs_y > 0 else 1)
+        theta_steps = max(
+            1, int(np.ceil(abs(dtheta) / abs_theta)) if abs_theta > 0 else 1
+        )
+        num_steps = max(x_steps, y_steps, theta_steps)
+
+        path: list[SE2Pose] = []
+        for i in range(num_steps + 1):
+            alpha = i / num_steps if num_steps > 0 else 1.0
+            path.append(
+                SE2Pose(
+                    start.x + alpha * dx,
+                    start.y + alpha * dy,
+                    wrap_angle(start.theta + alpha * dtheta),
+                )
+            )
+        return path
+
     def _waypoints_to_plan(
         self,
         state: ObjectCentricState,
         waypoints: list[tuple[SE2Pose, float]],
         gripper_during_plan: float,
-    ) -> list[NDArray[np.float32]]:
-        """Convert waypoints to action plan using BiRRT motion planning."""
+    ) -> list[NDArray[np.float64]]:
+        """Convert waypoints to an action plan.
+
+        Uses ``run_motion_planning_for_kin_robot`` (BiRRT on SE2) for
+        collision-free path segments and linearly interpolates arm_joint
+        along the resulting path.  Falls back to direct interpolation
+        when the planner fails or collision checking is disabled.
+        """
         curr_x = state.get(self._robot, "x")
         curr_y = state.get(self._robot, "y")
         curr_theta = state.get(self._robot, "theta")
@@ -104,157 +145,69 @@ class Dynamic2dRobotController(GroundParameterizedController, abc.ABC):
         )
         waypoints = [current_pos] + waypoints
 
-        # Create a static state copy for collision checking
+        # Build full state (with constant objects) for the motion planner.
         full_state = state.copy()
         if self._init_constant_state is not None:
             full_state.data.update(self._init_constant_state.data)
 
-        # Get robot arm length bounds
-        max_arm_length = state.get(self._robot, "arm_length")
-        min_arm_length = (
-            state.get(self._robot, "base_radius")
-            + state.get(self._robot, "gripper_base_height") / 2
-            + 1e-4
-        )
-
-        rng = np.random.default_rng(0)
-
-        # Define motion planning functions
-        def sample_fn(_: tuple[SE2Pose, float]) -> tuple[SE2Pose, float]:
-            """Sample a robot configuration (pose + arm length)."""
-            x = rng.uniform(self.world_x_min, self.world_x_max)
-            y = rng.uniform(self.world_y_min, self.world_y_max)
-            theta = rng.uniform(-np.pi, np.pi)
-            arm = rng.uniform(min_arm_length, max_arm_length)
-            return (SE2Pose(x, y, theta), arm)
-
-        def extend_fn(
-            pt1: tuple[SE2Pose, float], pt2: tuple[SE2Pose, float]
-        ) -> Iterable[tuple[SE2Pose, float]]:
-            """Interpolate between two configurations respecting action space bounds."""
-            pose1, arm1 = pt1
-            pose2, arm2 = pt2
-
-            dx = pose2.x - pose1.x
-            dy = pose2.y - pose1.y
-            dtheta = get_signed_angle_distance(pose2.theta, pose1.theta)
-            darm = arm2 - arm1
-
-            # Calculate number of steps needed for each dimension
-            abs_x = self._max_delta_x if dx > 0 else abs(self._max_delta_x)
-            abs_y = self._max_delta_y if dy > 0 else abs(self._max_delta_y)
-            abs_theta = (
-                self._max_delta_theta if dtheta > 0 else abs(self._max_delta_theta)
-            )
-            abs_arm = self._max_delta_arm if darm > 0 else abs(self._max_delta_arm)
-
-            x_num_steps = max(1, int(np.ceil(abs(dx) / abs_x)) if abs_x > 0 else 1)
-            y_num_steps = max(1, int(np.ceil(abs(dy) / abs_y)) if abs_y > 0 else 1)
-            theta_num_steps = max(
-                1, int(np.ceil(abs(dtheta) / abs_theta)) if abs_theta > 0 else 1
-            )
-            arm_num_steps = max(
-                1, int(np.ceil(abs(darm) / abs_arm)) if abs_arm > 0 else 1
-            )
-
-            num_steps = max(x_num_steps, y_num_steps, theta_num_steps, arm_num_steps)
-
-            path: list[tuple[SE2Pose, float]] = []
-            for i in range(num_steps + 1):
-                alpha = i / num_steps if num_steps > 0 else 1.0
-                x = pose1.x + alpha * dx
-                y = pose1.y + alpha * dy
-                theta = wrap_angle(pose1.theta + alpha * dtheta)
-                arm = arm1 + alpha * darm
-                path.append((SE2Pose(x, y, theta), arm))
-
-            return path
-
-        def collision_fn(pt: tuple[SE2Pose, float]) -> bool:
-            """Check if a configuration is collision-free."""
-            if self._skip_collision_check:
-                return False
-
-            pose, arm = pt
-
-            # Update state with robot configuration
-            test_state = full_state.copy()
-            test_state.set(self._robot, "x", pose.x)
-            test_state.set(self._robot, "y", pose.y)
-            test_state.set(self._robot, "theta", pose.theta)
-            test_state.set(self._robot, "arm_joint", arm)
-
-            # Check collisions
-            moving_objects = {self._robot}
-            static_objects = set(test_state) - moving_objects
-
-            return state_2d_has_collision(
-                test_state, moving_objects, static_objects, {}
-            )
-
-        def distance_fn(
-            pt1: tuple[SE2Pose, float], pt2: tuple[SE2Pose, float]
-        ) -> float:
-            """Calculate distance between two configurations."""
-            pose1, arm1 = pt1
-            pose2, arm2 = pt2
-
-            dx = pose2.x - pose1.x
-            dy = pose2.y - pose1.y
-            dtheta = get_signed_angle_distance(pose2.theta, pose1.theta)
-            darm = arm2 - arm1
-
-            # Weighted distance: position + orientation + arm
-            return np.sqrt(dx**2 + dy**2) + abs(dtheta) + abs(darm)
-
-        # Create BiRRT planner
-        birrt = BiRRT(
-            sample_fn=sample_fn,
-            extend_fn=extend_fn,
-            collision_fn=collision_fn,
-            distance_fn=distance_fn,
-            rng=rng,
-            num_attempts=10,
-            num_iters=100,
-            smooth_amt=50,
-        )
-
-        # Plan path between waypoints
-        plan: list[NDArray[np.float32]] = []
-        for start, end in zip(waypoints[:-1], waypoints[1:]):
-            # Check if start and end are the same
+        plan: list[NDArray[np.float64]] = []
+        for (start_pose, start_arm), (end_pose, end_arm) in zip(
+            waypoints[:-1], waypoints[1:]
+        ):
             if np.allclose(
-                [start[0].x, start[0].y, start[0].theta, start[1]],
-                [end[0].x, end[0].y, end[0].theta, end[1]],
+                [start_pose.x, start_pose.y, start_pose.theta, start_arm],
+                [end_pose.x, end_pose.y, end_pose.theta, end_arm],
             ):
                 continue
 
-            # Try direct path first
-            direct_path = birrt.try_direct_path(start, end)
-            if direct_path is not None:
-                path = direct_path
-            else:
-                # Use BiRRT to plan
-                birrt_path = birrt.query(start, end)
+            # Update full_state to the segment's starting configuration so
+            # that the motion planner sees the correct robot position.
+            full_state.set(self._robot, "x", start_pose.x)
+            full_state.set(self._robot, "y", start_pose.y)
+            full_state.set(self._robot, "theta", start_pose.theta)
+            full_state.set(self._robot, "arm_joint", start_arm)
 
-                if birrt_path is None:
-                    # If planning fails, fall back to direct interpolation
-                    path = list(extend_fn(start, end))
-                else:
-                    path = birrt_path
+            # Plan a collision-free SE2 path (arm is interpolated separately).
+            se2_path: list[SE2Pose] | None = None
+            if not self._skip_collision_check:
+                se2_path = run_motion_planning_for_kin_robot(
+                    full_state,
+                    self._robot,
+                    end_pose,
+                    self._action_space,
+                )
 
-            # Convert path to actions
-            for pt1, pt2 in zip(path[:-1], path[1:]):
-                pose1, arm1 = pt1
-                pose2, arm2 = pt2
+            if se2_path is None:
+                # Direct interpolation (fallback or skip_collision_check).
+                se2_path = self._interpolate_se2(start_pose, end_pose)
 
-                dx = pose2.x - pose1.x
-                dy = pose2.y - pose1.y
-                dtheta = get_signed_angle_distance(pose2.theta, pose1.theta)
-                darm = arm2 - arm1
+            # Ensure the SE2 path has enough steps for the arm change.
+            total_darm = abs(end_arm - start_arm)
+            if total_darm > 1e-8:
+                arm_steps_needed = int(np.ceil(total_darm / abs(self._max_delta_arm)))
+                while len(se2_path) - 1 < arm_steps_needed:
+                    se2_path.append(se2_path[-1])
+
+            # Convert SE2 path to actions, linearly interpolating arm_joint.
+            n = len(se2_path)
+            for i in range(n - 1):
+                p1, p2 = se2_path[i], se2_path[i + 1]
+                dx = p2.x - p1.x
+                dy = p2.y - p1.y
+                dtheta = get_signed_angle_distance(p2.theta, p1.theta)
+
+                alpha_prev = i / max(1, n - 1)
+                alpha_next = (i + 1) / max(1, n - 1)
+                darm = (start_arm + alpha_next * (end_arm - start_arm)) - (
+                    start_arm + alpha_prev * (end_arm - start_arm)
+                )
+                darm = float(
+                    np.clip(darm, -abs(self._max_delta_arm), abs(self._max_delta_arm))
+                )
 
                 action = np.array(
-                    [dx, dy, dtheta, darm, gripper_during_plan], dtype=np.float32
+                    [dx, dy, dtheta, darm, gripper_during_plan],
+                    dtype=np.float64,
                 )
                 plan.append(action)
 

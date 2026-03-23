@@ -7,7 +7,7 @@ This script:
 2. Measures inference time by loading checkpoints and running 100 steps
 
 Usage:
-    python kinder-rl/experiments/gen_results.py --outputs_dir kinder-rl/outputs 
+    python kinder-rl/experiments/gen_results.py --outputs_dir kinder-rl/outputs
     --runs_dir kinder-rl/runs
 """
 
