@@ -56,7 +56,7 @@ def _main(cfg: DictConfig) -> None:
         noise_fraction=cfg.noise_fraction,
         num_control_points=cfg.num_control_points,
         warm_start=cfg.warm_start,
-        replan_interval=cfg.replan_interval,
+        replan_interval=cfg.env.replan_interval,
     )
 
     # Evaluate.
