@@ -9,7 +9,10 @@ from kinder.envs.dynamic2d.dyn_obstruction2d import (
     DynObstruction2DEnvConfig,
 )
 from kinder.envs.dynamic2d.object_types import KinRobotType
-from kinder.envs.dynamic2d.utils import KinRobotActionSpace, run_motion_planning_for_kin_robot
+from kinder.envs.dynamic2d.utils import (
+    KinRobotActionSpace,
+    run_motion_planning_for_kin_robot,
+)
 from kinder.envs.kinematic2d.structs import SE2Pose
 from numpy.typing import NDArray
 from prpl_utils.utils import get_signed_angle_distance, wrap_angle
@@ -91,17 +94,14 @@ class Dynamic2dRobotController(GroundParameterizedController, abc.ABC):
         start: SE2Pose,
         end: SE2Pose,
     ) -> list[SE2Pose]:
-        """Linearly interpolate between two SE2 poses respecting action-space
-        bounds."""
+        """Linearly interpolate between two SE2 poses respecting action-space bounds."""
         dx = end.x - start.x
         dy = end.y - start.y
         dtheta = get_signed_angle_distance(end.theta, start.theta)
 
         abs_x = self._max_delta_x if dx > 0 else abs(self._max_delta_x)
         abs_y = self._max_delta_y if dy > 0 else abs(self._max_delta_y)
-        abs_theta = (
-            self._max_delta_theta if dtheta > 0 else abs(self._max_delta_theta)
-        )
+        abs_theta = self._max_delta_theta if dtheta > 0 else abs(self._max_delta_theta)
 
         x_steps = max(1, int(np.ceil(abs(dx) / abs_x)) if abs_x > 0 else 1)
         y_steps = max(1, int(np.ceil(abs(dy) / abs_y)) if abs_y > 0 else 1)
@@ -184,9 +184,7 @@ class Dynamic2dRobotController(GroundParameterizedController, abc.ABC):
             # Ensure the SE2 path has enough steps for the arm change.
             total_darm = abs(end_arm - start_arm)
             if total_darm > 1e-8:
-                arm_steps_needed = int(
-                    np.ceil(total_darm / abs(self._max_delta_arm))
-                )
+                arm_steps_needed = int(np.ceil(total_darm / abs(self._max_delta_arm)))
                 while len(se2_path) - 1 < arm_steps_needed:
                     se2_path.append(se2_path[-1])
 
@@ -203,7 +201,9 @@ class Dynamic2dRobotController(GroundParameterizedController, abc.ABC):
                 darm = (start_arm + alpha_next * (end_arm - start_arm)) - (
                     start_arm + alpha_prev * (end_arm - start_arm)
                 )
-                darm = float(np.clip(darm, -abs(self._max_delta_arm), abs(self._max_delta_arm)))
+                darm = float(
+                    np.clip(darm, -abs(self._max_delta_arm), abs(self._max_delta_arm))
+                )
 
                 action = np.array(
                     [dx, dy, dtheta, darm, gripper_during_plan],

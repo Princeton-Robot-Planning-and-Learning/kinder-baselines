@@ -6,15 +6,12 @@ from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator i
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
 from bilevel_planning.bilevel_planning_graph import BilevelPlanningGraph
-from bilevel_planning.structs import PlanningProblem
 from bilevel_planning.trajectory_samplers.trajectory_sampler import (
     TrajectorySamplingFailure,
 )
-from bilevel_planning.utils import (
-    RelationalAbstractSuccessorGenerator,
-    RelationalControllerGenerator,
-)
+from bilevel_planning.utils import RelationalControllerGenerator
 
+from kinder_bilevel_planning.agent import AgentFailure, BilevelPlanningAgent
 from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
 kinder.register_all_environments()
@@ -87,7 +84,6 @@ def test_dynpushpullhook2d_state_abstractor():
     )
     pred_name_to_pred = {p.name: p for p in env_models.predicates}
     HandEmpty = pred_name_to_pred["HandEmpty"]
-    HoldingHook = pred_name_to_pred["HoldingHook"]
     TargetAtGoal = pred_name_to_pred["TargetAtGoal"]
 
     obs, _ = env.reset(seed=0)
@@ -239,15 +235,17 @@ def test_dynpushpullhook2d_full_pipeline():
 
     # Phase 3: HookDown.
     hookdown = skill_name_to_skill["HookDown"].ground((robot, hook, target_block))
-    obs, terminated = _skill_test_helper(hookdown, env_models, env, obs, params=0.0, max_steps=2000)
+    obs, terminated = _skill_test_helper(
+        hookdown, env_models, env, obs, params=0.0, max_steps=2000
+    )
 
     assert terminated, "HookDown should terminate when target is at goal"
     env.close()
 
 
 def test_dynpushpullhook2d_auto_plan_and_execute():
-    """Use the abstract planner to automatically discover the skill sequence,
-    then execute each skill in the real env.
+    """Use the abstract planner to automatically discover the skill sequence, then
+    execute each skill in the real env.
 
     This verifies end-to-end correctness: the STRIPS model produces a valid
     abstract plan (GraspHook → PreHook → HookDown), and executing the
@@ -266,11 +264,11 @@ def test_dynpushpullhook2d_auto_plan_and_execute():
     state = env_models.observation_to_state(init_obs)
     abstract = env_models.state_abstractor(state)
     obj = {o.name: o for o in abstract.objects}
-    robot, hook, target_block = obj["robot"], obj["hook"], obj["target_block"]
+    hook, target_block = obj["hook"], obj["target_block"]
 
     new_state = state.copy()
     new_state.set(target_block, "x", state.get(target_block, "x") + 2.3)
-    new_state.set(target_block, "y", state.get(target_block, "y") - 0.5)
+    new_state.set(target_block, "y", state.get(target_block, "y") - 0.4)
     new_state.set(hook, "x", state.get(hook, "x") - 0.2)
     obs, _ = env.reset(options={"init_state": new_state})
     state = env_models.observation_to_state(obs)
@@ -286,8 +284,6 @@ def test_dynpushpullhook2d_auto_plan_and_execute():
         heuristic_name="hff",
         seed=123,
     )
-    successor_fn = RelationalAbstractSuccessorGenerator(env_models.operators)
-
     # Dummy BPG needed by the plan generator interface.
     bpg: BilevelPlanningGraph = BilevelPlanningGraph()
     bpg.add_state_node(state)
@@ -295,13 +291,15 @@ def test_dynpushpullhook2d_auto_plan_and_execute():
     bpg.add_state_abstractor_edge(state, abstract_state)
 
     plan_iter = plan_gen(state, abstract_state, goal, timeout=30.0, bpg=bpg)
-    abstract_states, abstract_actions = next(plan_iter)
+    _, abstract_actions = next(plan_iter)
 
     # Verify the abstract plan is GraspHook → PreHook → HookDown.
     action_names = [a.name for a in abstract_actions]
-    assert action_names == ["GraspHook", "PreHook", "HookDown"], (
-        f"Expected [GraspHook, PreHook, HookDown], got {action_names}"
-    )
+    assert action_names == [
+        "GraspHook",
+        "PreHook",
+        "HookDown",
+    ], f"Expected [GraspHook, PreHook, HookDown], got {action_names}"
 
     # Build a controller generator to ground each abstract action.
     ctrl_gen = RelationalControllerGenerator(env_models.skills)
@@ -328,18 +326,16 @@ def test_dynpushpullhook2d_auto_plan_and_execute():
 
     # Verify predicate transitions.
     abstract = env_models.state_abstractor(state)
-    assert pred_name["TargetAtGoal"]([target_block]) in abstract.atoms, \
-        "Auto-planned pipeline should achieve TargetAtGoal"
+    assert (
+        pred_name["TargetAtGoal"]([target_block]) in abstract.atoms
+    ), "Auto-planned pipeline should achieve TargetAtGoal"
 
     env.close()
 
 
 def test_dynpushpullhook2d_bilevel_planning_agent():
-    """Run the full BilevelPlanningAgent (abstract planning + trajectory
-    sampling via transition_fn + execution in real env) on a known-good
-    initial state."""
-    from kinder_bilevel_planning.agent import AgentFailure, BilevelPlanningAgent
-
+    """Run the full BilevelPlanningAgent (abstract planning + trajectory sampling via
+    transition_fn + execution in real env) on a known-good initial state."""
     env = kinder.make("kinder/DynPushPullHook2D-o0-v0")
     env_models = create_bilevel_planning_models(
         "dynpushpullhook2d",
@@ -379,12 +375,12 @@ def test_dynpushpullhook2d_bilevel_planning_agent():
     except AgentFailure:
         assert False, "Agent failed to find a plan"
 
-    plan = agent._current_plan
+    plan = agent._current_plan  # pylint: disable=protected-access
     assert plan is not None and len(plan) > 0, "Agent should have a non-empty plan"
 
     # Execution phase.
     success = False
-    for step in range(3000):
+    for _ in range(3000):
         try:
             action = agent.step()
         except AgentFailure:

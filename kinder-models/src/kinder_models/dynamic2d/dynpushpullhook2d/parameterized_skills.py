@@ -3,7 +3,6 @@
 from typing import Optional, Sequence, cast
 
 import numpy as np
-from numpy.typing import NDArray
 from bilevel_planning.structs import LiftedParameterizedController
 from bilevel_planning.trajectory_samplers.trajectory_sampler import (
     TrajectorySamplingFailure,
@@ -15,9 +14,13 @@ from kinder.envs.dynamic2d.dyn_pushpullhook2d import (
     TargetBlockType,
 )
 from kinder.envs.dynamic2d.object_types import KinRobotType
-from kinder.envs.dynamic2d.utils import KinRobotActionSpace, run_motion_planning_for_kin_robot
+from kinder.envs.dynamic2d.utils import (
+    KinRobotActionSpace,
+    run_motion_planning_for_kin_robot,
+)
 from kinder.envs.kinematic2d.structs import SE2Pose
 from kinder.envs.utils import state_2d_has_collision
+from numpy.typing import NDArray
 from prpl_utils.utils import get_signed_angle_distance, wrap_angle
 from relational_structs.object_centric_state import ObjectCentricState
 from relational_structs.objects import Object, Variable
@@ -98,8 +101,8 @@ class GroundGraspHookController(Dynamic2dRobotController):
         finger_width = state.get(self._robot, "finger_width")
         gripper_base_width = state.get(self._robot, "gripper_base_width")
 
-        custom_dx = - arm_length - gripper_base_width - finger_width - hook_l1
-        custom_dy = - hook_w / 2
+        custom_dx = -arm_length - gripper_base_width - finger_width - hook_l1
+        custom_dy = -hook_w / 2
 
         target_se2_pose = SE2Pose(hook_x, hook_y, hook_theta) * SE2Pose(
             custom_dx, custom_dy, 0.0
@@ -180,8 +183,13 @@ class GroundPreHookController(Dynamic2dRobotController):
         self._hook = objects[1]
         self._target_block = objects[2]
         env_config = DynPushPullHook2DEnvConfig()
-        # need to consider mid wall height for y-limits since the controller moves straight down
-        self.world_y_max = env_config.world_max_y / 2 - env_config.robot_base_radius - env_config.gripper_base_width
+        # need to consider mid wall height for y-limits since the
+        # controller moves straight down
+        self.world_y_max = (
+            env_config.world_max_y / 2
+            - env_config.robot_base_radius
+            - env_config.gripper_base_width
+        )
         self.world_y_min = env_config.world_min_y + env_config.robot_base_radius
 
     def sample_parameters(
@@ -192,9 +200,15 @@ class GroundPreHookController(Dynamic2dRobotController):
         Returns:
             (hook_theta, rel_dx, rel_dy) where each is in [0, 1].
         """
-        hook_theta = rng.uniform(np.pi / 3, 2 * np.pi / 3)  # hook facing mostly downwards
-        rel_dx = rng.uniform(-0.05, 0.0) # relative x offset "gap" from hook to target block
-        rel_dy = rng.uniform(-0.05, 0.0) # relative y offset "gap" from hook to target block
+        hook_theta = rng.uniform(
+            np.pi / 3, 2 * np.pi / 3
+        )  # hook facing mostly downwards
+        rel_dx = rng.uniform(
+            -0.05, 0.0
+        )  # relative x offset "gap" from hook to target block
+        rel_dy = rng.uniform(
+            -0.05, 0.0
+        )  # relative y offset "gap" from hook to target block
         return (hook_theta, rel_dx, rel_dy)
 
     def _get_gripper_actions(self, state: ObjectCentricState) -> tuple[float, float]:
@@ -218,7 +232,7 @@ class GroundPreHookController(Dynamic2dRobotController):
         target_theta = state.get(self._target_block, "theta")
         target_w = state.get(self._target_block, "width")
         target_h = state.get(self._target_block, "height")
-        target_shape = np.sqrt(target_w ** 2 + target_h ** 2) / 2
+        target_shape = np.sqrt(target_w**2 + target_h**2) / 2
 
         # Get hook dimensions for offset ranges.
         hook_x = state.get(self._hook, "x")
@@ -233,9 +247,9 @@ class GroundPreHookController(Dynamic2dRobotController):
         robot_theta = wrap_angle(state.get(self._robot, "theta"))
         robot_max_arm = state.get(self._robot, "arm_length")
         robot_arm_joint = state.get(self._robot, "arm_joint")
-        robot_base_radius = state.get(self._robot, "base_radius")
-        hook2robot = SE2Pose(hook_x, hook_y, hook_theta_curr).inverse * SE2Pose(robot_x, robot_y, robot_theta)
-
+        hook2robot = SE2Pose(hook_x, hook_y, hook_theta_curr).inverse * SE2Pose(
+            robot_x, robot_y, robot_theta
+        )
 
         # Denormalize relative offsets.
         # rel_dx: [-l1, l1] centered on target.
@@ -243,9 +257,15 @@ class GroundPreHookController(Dynamic2dRobotController):
         rel_dy = rel_dy - hook_w - target_shape
 
         # Pre-hook pose: position the robot+hook near target.
-        pre_hook_pose_hook = SE2Pose(target_x, target_y, target_theta) * SE2Pose(rel_dx, rel_dy, rel_hook_theta).inverse
+        pre_hook_pose_hook = (
+            SE2Pose(target_x, target_y, target_theta)
+            * SE2Pose(rel_dx, rel_dy, rel_hook_theta).inverse
+        )
         pre_hook_pose_robot = pre_hook_pose_hook * hook2robot
-        if pre_hook_pose_robot.y > self.world_y_max or pre_hook_pose_robot.y < self.world_y_min:
+        if (
+            pre_hook_pose_robot.y > self.world_y_max
+            or pre_hook_pose_robot.y < self.world_y_min
+        ):
             raise TrajectorySamplingFailure(
                 "Sampled pre-hook pose is out of y-bounds for straight down pull."
             )
@@ -284,8 +304,6 @@ class GroundPreHookController(Dynamic2dRobotController):
         if self._init_constant_state is not None:
             full_state.data.update(self._init_constant_state.data)
 
-        
-
         plan: list[NDArray[np.float32]] = []
         for (start_pose, start_arm), (end_pose, end_arm) in zip(
             waypoints[:-1], waypoints[1:]
@@ -311,7 +329,12 @@ class GroundPreHookController(Dynamic2dRobotController):
                     self._robot,
                     end_pose,
                     self._action_space,
-                    motion_border=[self.world_x_min, self.world_x_max, self.world_y_min, self.world_y_max],
+                    motion_border=[
+                        self.world_x_min,
+                        self.world_x_max,
+                        self.world_y_min,
+                        self.world_y_max,
+                    ],
                 )
 
             if se2_path is None:
@@ -321,9 +344,7 @@ class GroundPreHookController(Dynamic2dRobotController):
             # Ensure the SE2 path has enough steps for the arm change.
             total_darm = abs(end_arm - start_arm)
             if total_darm > 1e-8:
-                arm_steps_needed = int(
-                    np.ceil(total_darm / abs(self._max_delta_arm))
-                )
+                arm_steps_needed = int(np.ceil(total_darm / abs(self._max_delta_arm)))
                 while len(se2_path) - 1 < arm_steps_needed:
                     se2_path.append(se2_path[-1])
 
@@ -340,7 +361,9 @@ class GroundPreHookController(Dynamic2dRobotController):
                 darm = (start_arm + alpha_next * (end_arm - start_arm)) - (
                     start_arm + alpha_prev * (end_arm - start_arm)
                 )
-                darm = float(np.clip(darm, -abs(self._max_delta_arm), abs(self._max_delta_arm)))
+                darm = float(
+                    np.clip(darm, -abs(self._max_delta_arm), abs(self._max_delta_arm))
+                )
 
                 action = np.array(
                     [dx, dy, dtheta, darm, gripper_during_plan],
@@ -349,13 +372,14 @@ class GroundPreHookController(Dynamic2dRobotController):
                 plan.append(action)
 
         return plan
-    
+
+
 class GroundHookDownController(Dynamic2dRobotController):
     """Controller that moves the robot straight down to the bottom of the world.
 
-    Assumes the robot is already holding the hook in a pre-hook pose.
-    Collision checking is skipped — the hook is expected to make contact
-    with the target block and drag it downward.
+    Assumes the robot is already holding the hook in a pre-hook pose. Collision checking
+    is skipped — the hook is expected to make contact with the target block and drag it
+    downward.
     """
 
     def __init__(
@@ -400,8 +424,8 @@ class GroundHookDownController(Dynamic2dRobotController):
 class GroundMoveController(Dynamic2dRobotController):
     """Controller that moves the robot to an arbitrary configuration.
 
-    Parameters are five normalized values in [0, 1] mapped to:
-    (x, y, theta, arm_joint, finger_gap).
+    Parameters are five normalized values in [0, 1] mapped to: (x, y, theta, arm_joint,
+    finger_gap).
 
     Collision checking is skipped so the robot can push through objects.
     """
@@ -545,12 +569,10 @@ def create_lifted_controllers(
         prehook_params_space,
     )
 
-    hookdown_controller: LiftedParameterizedController = (
-        LiftedParameterizedController(
-            [robot],
-            HookDownController,
-            hookdown_params_space,
-        )
+    hookdown_controller: LiftedParameterizedController = LiftedParameterizedController(
+        [robot],
+        HookDownController,
+        hookdown_params_space,
     )
 
     move_controller: LiftedParameterizedController = LiftedParameterizedController(

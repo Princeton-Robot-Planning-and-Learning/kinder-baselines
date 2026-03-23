@@ -40,7 +40,9 @@ def test_grasp_hook_controller():
     state = env.observation_space.devectorize(obs)
 
     # Create the controller.
-    controllers = create_lifted_controllers(env.action_space, env.unwrapped._object_centric_env.initial_constant_state)
+    # pylint: disable-next=protected-access
+    init_const = env.unwrapped._object_centric_env.initial_constant_state
+    controllers = create_lifted_controllers(env.action_space, init_const)
     lifted_controller = controllers["grasp_hook"]
     robot = state.get_object_from_name("robot")
     hook = state.get_object_from_name("hook")
@@ -67,7 +69,9 @@ def test_grasp_hook_controller():
     else:
         assert False, "Controller did not terminate"
 
-    assert state.get(hook, "held"), "Hook should be held at the end of the controller execution."
+    assert state.get(
+        hook, "held"
+    ), "Hook should be held at the end of the controller execution."
     env.close()
 
 
@@ -91,7 +95,9 @@ def test_prehook_controller():
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(init_obs)
 
-    controllers = create_lifted_controllers(env.action_space, env.unwrapped._object_centric_env.initial_constant_state)
+    # pylint: disable-next=protected-access
+    init_const = env.unwrapped._object_centric_env.initial_constant_state
+    controllers = create_lifted_controllers(env.action_space, init_const)
     robot = state.get_object_from_name("robot")
     hook = state.get_object_from_name("hook")
     target_block = state.get_object_from_name("target_block")
@@ -167,7 +173,9 @@ def test_hookdown_controller():
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(init_obs)
 
-    controllers = create_lifted_controllers(env.action_space, env.unwrapped._object_centric_env.initial_constant_state)
+    # pylint: disable-next=protected-access
+    init_const = env.unwrapped._object_centric_env.initial_constant_state
+    controllers = create_lifted_controllers(env.action_space, init_const)
     robot = state.get_object_from_name("robot")
     hook = state.get_object_from_name("hook")
     target_block = state.get_object_from_name("target_block")
@@ -234,13 +242,15 @@ def test_hookdown_controller():
     else:
         assert False, "HookDown controller did not terminate"
 
-    assert not hookdown_ctrl.terminated(), "HookDown controller should not terminate when episode terminates"
+    assert (
+        not hookdown_ctrl.terminated()
+    ), "HookDown controller should not terminate when episode terminates"
     env.close()
 
 
 def test_move_controller_affects_hook():
-    """Test that randomly calling the move controller 10 times from the init
-    state displaces the hook (via physics contact)."""
+    """Test that randomly calling the move controller 10 times from the init state
+    displaces the hook (via physics contact)."""
 
     num_obstructions = 0
     env = kinder.make(
@@ -257,10 +267,9 @@ def test_move_controller_affects_hook():
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
 
-    controllers = create_lifted_controllers(
-        env.action_space,
-        env.unwrapped._object_centric_env.initial_constant_state,
-    )
+    # pylint: disable-next=protected-access
+    init_const = env.unwrapped._object_centric_env.initial_constant_state
+    controllers = create_lifted_controllers(env.action_space, init_const)
     robot = state.get_object_from_name("robot")
     hook = state.get_object_from_name("hook")
 
@@ -293,7 +302,7 @@ def test_move_controller_affects_hook():
         if hook_displacement > 0.01:
             break  # Test passed, hook was displaced
 
-    assert hook_displacement > 0.01, "Hook should have been displaced by the robot's movements"
+    assert (
+        hook_displacement > 0.01
+    ), "Hook should have been displaced by the robot's movements"
     env.close()
-
-

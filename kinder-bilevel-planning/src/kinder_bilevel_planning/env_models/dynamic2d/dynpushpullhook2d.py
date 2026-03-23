@@ -1,5 +1,8 @@
 """Bilevel planning models for the dynamic push-pull-hook 2D environment."""
 
+from typing import Sequence
+
+import numpy as np
 from bilevel_planning.structs import (
     LiftedParameterizedController,
     LiftedSkill,
@@ -7,18 +10,19 @@ from bilevel_planning.structs import (
     RelationalAbstractState,
     SesameModels,
 )
-from gymnasium.spaces import Box
-from gymnasium.spaces import Space
-import numpy as np
+from gymnasium.spaces import Box, Space
 from kinder.envs.dynamic2d.dyn_pushpullhook2d import (
     DynPushPullHook2DEnvConfig,
     HookType,
     ObjectCentricDynPushPullHook2DEnv,
     TargetBlockType,
 )
-from kinder.envs.dynamic2d.object_types import DynRectangleType, KinRobotType, LObjectType
+from kinder.envs.dynamic2d.object_types import (
+    DynRectangleType,
+    KinRobotType,
+    LObjectType,
+)
 from kinder.envs.dynamic2d.utils import KinRobotActionSpace
-from kinder.envs.utils import object_to_multibody2d
 from kinder_models.dynamic2d.dynpushpullhook2d.parameterized_skills import (
     GroundHookDownController,
     create_lifted_controllers,
@@ -34,7 +38,6 @@ from relational_structs import (
     Variable,
 )
 from relational_structs.spaces import ObjectCentricBoxSpace, ObjectCentricStateSpace
-from typing import Sequence
 
 
 def create_bilevel_planning_models(
@@ -70,7 +73,9 @@ def create_bilevel_planning_models(
     # Predicates.
     HandEmpty = Predicate("HandEmpty", [KinRobotType])
     HoldingHook = Predicate("HoldingHook", [KinRobotType, HookType])
-    HookAboveTarget = Predicate("HookAboveTarget", [KinRobotType, HookType, TargetBlockType])
+    HookAboveTarget = Predicate(
+        "HookAboveTarget", [KinRobotType, HookType, TargetBlockType]
+    )
     TargetAtGoal = Predicate("TargetAtGoal", [TargetBlockType])
     predicates = {HandEmpty, HoldingHook, HookAboveTarget, TargetAtGoal}
     tgt_block_init_y_min = env_config.target_block_init_pose_bounds[0].y
@@ -109,7 +114,7 @@ def create_bilevel_planning_models(
             if tgt_y < tgt_block_init_y_min:
                 # Below initial position, consider it at goal
                 # NOTE: This is not correct in general, but the sim transition
-                # dynamics is not deterministic, so this is just to not filter out 
+                # dynamics is not deterministic, so this is just to not filter out
                 # valid plans due to sim nondeterminism.
                 atoms.add(GroundAtom(TargetAtGoal, [tgt]))
 
