@@ -67,7 +67,9 @@ WORLD_X_BOUNDS = (-2.5, 2.5)  # we should move these later
 WORLD_Y_BOUNDS = (-2.5, 2.5)  # we should move these later
 ROBOT_ARM_POSE_TO_BASE = Pose((0.12, 0.0, 0.4))
 GRASP_TRANSFORM_TO_OBJECT = Pose((-0.005, 0, 0.01), (0.707, 0.707, 0, 0))
-WIPER_TRANSFORM_TO_OBJECT = Pose((0.035, 0, 0.04), (-0.707, 0.707, 0, 0))
+WIPER_TRANSFORM_TO_OBJECT = Pose.from_rpy((0.06, 0, 0.04), (-np.pi-np.pi/8, 0, -np.pi/2)) # Pose((0.035, 0, 0.04), (-0.707, 0.707, 0, 0))
+WIPER_SWEEP_TRANSFORM = Pose.from_rpy((-0.05, 0, 0.06), (-np.pi, 0, -np.pi/2)) # Pose((-0.05, 0, 0.04), (-0.707, 0.707, 0, 0))
+WIPER_SWEEP_TRANSFORM_END = Pose.from_rpy((0.15, 0, 0.06), (-np.pi, 0, -np.pi/2)) # Pose((0.15, 0, 0.04), (-0.707, 0.707, 0, 0))
 BASE_DISTANCE_TO_CUPBOARD = 0.95
 ARM_MOVEMENT_CUPBOARD = Pose((0.8, 0.0, 0.25), (0.5, 0.5, 0.5, 0.5))
 PLACE_SAMPLER_COLLISION_THRESHOLD = 0.05
@@ -2439,13 +2441,13 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         assert isinstance(params, np.ndarray)
         self._current_params = params.copy()
         # Derive the target pose for the robot.
-        target_distance, target_offset, target_rot = self._current_params
+        target_distance, target_rot = self._current_params
         target_object = self.objects[2]
-        target_object_pose_temp = get_overhead_object_se2_pose(x, target_object)
+        target_object_pose_ori = get_overhead_object_se2_pose(x, target_object)
         target_object_pose = SE2(
-            target_object_pose_temp.x,
-            target_object_pose_temp.y + target_offset,
-            target_object_pose_temp.theta(),
+            target_object_pose_ori.x,
+            target_object_pose_ori.y,
+            0.0,
         )
         target_base_pose = get_target_robot_pose_from_parameters(
             target_object_pose, target_distance, target_rot
@@ -2459,7 +2461,6 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             seed=0,  # use a constant seed to effectively make this "deterministic"
             extend_xy_magnitude=extend_xy_magnitude,
             extend_rot_magnitude=extend_rot_magnitude,
-            disable_collision_objects=[self.objects[1].name],
         )
         assert base_motion_plan is not None
         self._current_base_motion_plan = base_motion_plan
@@ -2467,22 +2468,37 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         plan_x = x.copy()
         robot = self.objects[0]  # Robot is first parameter
         target_base_pose = self._current_base_motion_plan[-1]
-        plan_x.set(robot, "pos_base_x", target_base_pose.x)
-        plan_x.set(robot, "pos_base_y", target_base_pose.y)
-        plan_x.set(robot, "pos_base_rot", target_base_pose.theta())
+        if not self._navigated:
+            plan_x.set(robot, "pos_base_x", target_base_pose.x)
+            plan_x.set(robot, "pos_base_y", target_base_pose.y)
+            plan_x.set(robot, "pos_base_rot", target_base_pose.theta())
 
-        target_object_place = self.objects[1]
-
-        assert target_object_place is not None
         # Reset PyBullet given the current state.
-        self._pybullet_sim.set_state(plan_x, target_object_place)
+        self._pybullet_sim.set_state(plan_x)
 
-        current_arm_base_pose = self._pybullet_sim.robot.get_base_pose()
+        target_object = self.objects[2]
 
-        target_end_effector_pose = ARM_MOVEMENT_CUPBOARD
+        target_place_pose_world = Pose(
+            (
+                plan_x.get(target_object, "x"),
+                plan_x.get(target_object, "y"),
+                plan_x.get(target_object, "z"),
+            ),
+        )
 
         target_end_effector_pose = multiply_poses(
-            current_arm_base_pose, target_end_effector_pose
+            target_place_pose_world,
+            WIPER_SWEEP_TRANSFORM,
+        )
+
+        target_end_effector_pose_end = multiply_poses(
+            target_place_pose_world,
+            WIPER_SWEEP_TRANSFORM_END,
+        )
+
+        self._pybullet_sim.base_link_to_held_obj = multiply_poses(
+            target_end_effector_pose.invert(),
+            target_place_pose_world,
         )
 
         target_joints = inverse_kinematics(
@@ -2491,28 +2507,26 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             set_joints=False,
         )
 
+        target_joints_end = inverse_kinematics(
+            self._pybullet_sim.robot,
+            target_end_effector_pose_end,
+            set_joints=False,
+        )
+
         # Run motion planning.
         plan = run_motion_planning(
             self._pybullet_sim.robot,
             self._pybullet_sim.get_robot_joints(),
             target_joints,
-            collision_bodies=self._pybullet_sim.get_collision_bodies(
-                held_object=self._pybullet_sim._cubes[  # pylint: disable=protected-access
-                    target_object_place.name
-                ]
-            ),
+            collision_bodies=self._pybullet_sim.get_collision_bodies(),
             seed=0,  # use a constant seed to make this effectively deterministic
-            held_object=self._pybullet_sim._cubes[  # pylint: disable=protected-access
-                target_object_place.name
-            ],
-            base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
 
         retract_plan = run_motion_planning(
             self._pybullet_sim.robot,
-            target_joints,
-            self.home_joints.tolist(),
+            self._pybullet_sim.get_robot_joints(),
+            target_joints_end,
             collision_bodies=self._pybullet_sim.get_collision_bodies(),
             seed=0,  # use a constant seed to make this effectively deterministic
             physics_client_id=self._pybullet_sim.physics_client_id,
@@ -2570,7 +2584,7 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             action[2] = drot
             action[-1] = self._get_current_robot_gripper_pose()
             return action
-        if self._navigated and not self._pre_place and not self._open_gripper:
+        if self._navigated and not self._pre_place:
             while len(self._current_arm_joint_plan) > 1:
                 peek_conf = self._current_arm_joint_plan[0]
                 # Close enough, pop and continue.
@@ -2593,14 +2607,7 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             )
             action[-1] = gripper_pose
             return action
-        if self._pre_place and not self._open_gripper:
-            if self._get_current_robot_gripper_pose() < GRIPPER_OPEN_THRESHOLD:
-                self._open_gripper = True
-            action = np.zeros(11, dtype=np.float32)
-            action[-1] = 0
-            self._last_gripper_state = self._get_current_robot_gripper_pose()
-            return action
-        if self._pre_place and self._open_gripper:
+        if self._pre_place:
             while len(self._current_retract_plan) > 1:  # type: ignore
                 peek_conf = self._current_retract_plan[0]  # type: ignore
                 # Close enough, pop and continue.
@@ -2792,6 +2799,12 @@ def create_lifted_controllers(
 
         def __init__(self, objects):
             super().__init__(pybullet_sim=pybullet_sim, objects=objects)
+    
+    class SweepController(SweepOriController):
+        """Sweep controller."""
+
+        def __init__(self, objects):
+            super().__init__(pybullet_sim=pybullet_sim, objects=objects)
 
     # Pick ground controller.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
@@ -2816,7 +2829,7 @@ def create_lifted_controllers(
         )
     )
 
-    # Place controller.
+    # Open drawer controller.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     drawer = Variable("?drawer", MujocoDrawerObjectType)
 
@@ -2827,7 +2840,7 @@ def create_lifted_controllers(
         )
     )
 
-    # Place controller.
+    # Pick wiper controller.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     target = Variable("?target", MujocoMovableObjectType)
 
@@ -2835,6 +2848,18 @@ def create_lifted_controllers(
         LiftedParameterizedController(
             [robot, target],
             PickWiperController,
+        )
+    )
+
+    # Sweep controller.
+    robot = Variable("?robot", MujocoTidyBotRobotObjectType)
+    wiper = Variable("?wiper", MujocoMovableObjectType)
+    target = Variable("?target", MujocoMovableObjectType)
+
+    LiftedSweepController: LiftedParameterizedController = (
+        LiftedParameterizedController(
+            [robot, wiper, target],
+            SweepController,
         )
     )
 
@@ -2850,4 +2875,5 @@ def create_lifted_controllers(
         "place_ground": LiftedPlaceGroundController,
         "open_drawer": LiftedOpenDrawerController,
         "pick_wiper": LiftedPickWiperController,
+        "sweep": LiftedSweepController,
     }
