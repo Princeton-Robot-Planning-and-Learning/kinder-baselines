@@ -1,0 +1,4 @@
+# @package _global_
+# Configuration for DynObstruction2D-o1-v0
+env: "DynObstruction2D-o1-v0"
+max_eval_steps: 200

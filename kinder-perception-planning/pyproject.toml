@@ -3,9 +3,9 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "kinder_bilevel_planning"
+name = "kinder_perception_planning"
 version = "0.1.0"
-description = " Bilevel planning baselines for KinDER."
+description = "Perception-based bilevel planning baselines for KinDER (VLM predicate grounding)."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -22,6 +22,7 @@ dependencies = [
    "tomsgeoms2d>=0.0.1",
    "pybullet_helpers>=0.0.1",
    "bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git#subdirectory=bilevel-planning",
+   "prpl_llm_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git#subdirectory=prpl-llm-utils",
 ]
 
 [project.optional-dependencies]
@@ -41,7 +42,7 @@ develop = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-kinder_bilevel_planning = ["py.typed"]
+kinder_perception_planning = ["py.typed"]
 
 [tool.black]
 line-length = 88

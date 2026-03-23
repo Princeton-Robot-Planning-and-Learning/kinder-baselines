@@ -1,0 +1,4 @@
+# @package _global_
+# Configuration for DynPushPullHook2D-o0-v0
+env: "DynPushPullHook2D-o5-v0"
+max_eval_steps: 500

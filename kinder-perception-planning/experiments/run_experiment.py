@@ -1,19 +1,16 @@
-"""Main entry point for running experiments.
+"""Main entry point for running perception-based bilevel planning experiments.
 
 Examples:
-    python experiments/run_experiment.py env=obstruction2d-o0 seed=0
+    python experiments/run_experiment.py env=motion2d-p2 seed=0
 
-    python experiments/run_experiment.py -m env=obstruction2d-o0 seed='range(0,10)'
+    python experiments/run_experiment.py -m env=motion2d-p2 seed='range(0,10)'
 
-    python experiments/run_experiment.py -m env=obstruction2d-o0 seed=0 \
-        samples_per_step=1,5,10
-
-    python experiments/run_experiment.py -m env=stickbutton2d-b3 seed=0 \
-        max_abstract_plans=1,5,10,20
+    python experiments/run_experiment.py -m env=stickbutton2d-b2 seed=0 \
+        vlm_model_name=gpt-4o
 
 - Running on multiple environments and seeds (parallelized):
     python experiments/run_experiment.py -m seed='range(0,3)' \
-        env=clutteredstorage2d-b1,transport3d-o2 hydra/launcher=joblib
+        env=motion2d-p2,stickbutton2d-b2 hydra/launcher=joblib
 """
 
 import logging
@@ -30,12 +27,9 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from prpl_utils.utils import sample_seed_from_rng, timer
 
-from kinder_bilevel_planning.agent import AgentFailure, BilevelPlanningAgent
-from kinder_bilevel_planning.env_models import create_bilevel_planning_models
-
-# from imageio.v2 import imwrite  # type: ignore
-
-# imwrite("test.png", env.render())  # type: ignore
+from kinder_perception_planning.agent import AgentFailure, BilevelPlanningAgent
+from kinder_perception_planning.env_models import create_perception_planning_models
+from kinder_perception_planning.vlm_utils import create_vlm
 
 
 @hydra.main(version_base=None, config_name="config", config_path="conf/")
@@ -53,11 +47,15 @@ def _main(cfg: DictConfig) -> None:
         video_path.mkdir(parents=True, exist_ok=True)
         env = RecordVideo(env, str(video_path), episode_trigger=lambda _: True)
 
-    # Create the env models.
-    env_models = create_bilevel_planning_models(
+    # Create the VLM.
+    vlm = create_vlm(cfg.vlm_model_name)
+
+    # Create the env models with VLM-based state abstraction.
+    env_models = create_perception_planning_models(
         cfg.env.env_name,
         env.observation_space,
         env.action_space,
+        vlm=vlm,
         **cfg.env.env_model_kwargs,
     )
 
@@ -123,8 +121,8 @@ def _run_single_episode_evaluation(
     total_reward = 0.0
     seed = sample_seed_from_rng(rng)
     obs, info = env.reset(seed=seed)
-    planning_time = 0.0  # time spent generating plans (abstract + skill planning)
-    execution_time = 0.0  # time spent executing the policy (getting actions)
+    planning_time = 0.0
+    execution_time = 0.0
     planning_failed = False
     with timer() as result:
         try:

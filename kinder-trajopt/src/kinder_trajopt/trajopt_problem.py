@@ -87,10 +87,16 @@ class KinderTrajOptProblem(TrajOptProblem):
         self._best_cost_this_step = min(self._best_cost_this_step, cost)
         return cost
 
-    def log_and_reset_step_stats(self) -> None:
+    @property
+    def num_rollouts_scored(self) -> int:
+        """Number of rollouts scored since the last reset."""
+        return self._num_rollouts_scored
+
+    def log_and_reset_step_stats(self, timestep: int) -> None:
         """Log MPC step stats and reset counters."""
         logging.debug(
-            "MPC step: best_cost=%.1f, goals_found=%d/%d rollouts",
+            "MPC step %d: best_cost=%.1f, goals_found=%d/%d rollouts",
+            timestep,
             self._best_cost_this_step,
             self._num_goals_found,
             self._num_rollouts_scored,
