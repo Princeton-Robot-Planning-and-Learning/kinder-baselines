@@ -189,9 +189,10 @@ def create_bilevel_planning_models(
         def __init__(self, objects: Sequence[Object]) -> None:
             # Pass all objects so self.objects matches the operator parameters.
             # Only objects[0] (the robot) is used by the controller.
+            assert isinstance(action_space, KinRobotActionSpace)
             super().__init__(objects, action_space, sim.initial_constant_state)
 
-    HookDownController = LiftedParameterizedController(
+    HookDownController: LiftedParameterizedController = LiftedParameterizedController(
         [robot, hook, target_block],
         _HookDownControllerWrapper,
         Box(low=np.array([0.0]), high=np.array([1.0]), dtype=np.float32),
