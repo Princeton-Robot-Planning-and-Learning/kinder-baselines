@@ -66,13 +66,13 @@ WORLD_Y_BOUNDS = (-2.5, 2.5)  # we should move these later
 ROBOT_ARM_POSE_TO_BASE = Pose((0.12, 0.0, 0.4))
 GRASP_TRANSFORM_TO_OBJECT = Pose((-0.005, 0, 0.01), (0.707, 0.707, 0, 0))
 WIPER_TRANSFORM_TO_OBJECT = Pose.from_rpy(
-    (0.06, 0, 0.04), (-np.pi - np.pi / 8, 0, -np.pi / 2)
+    (0.06, 0, 0.03), (-np.pi - np.pi / 16, 0, -np.pi / 2)
 )  # Pose((0.035, 0, 0.04), (-0.707, 0.707, 0, 0))
 WIPER_SWEEP_TRANSFORM = Pose.from_rpy(
-    (-0.05, 0, 0.06), (-np.pi, 0, -np.pi / 2)
+    (-0.04, 0, 0.045), (-np.pi, 0, -np.pi / 2)
 )  # Pose((-0.05, 0, 0.04), (-0.707, 0.707, 0, 0))
 WIPER_SWEEP_TRANSFORM_END = Pose.from_rpy(
-    (0.15, 0, 0.06), (-np.pi, 0, -np.pi / 2)
+    (0.25, 0, 0.095), (-np.pi + np.pi / 4, 0, -np.pi / 2)
 )  # Pose((0.15, 0, 0.04), (-0.707, 0.707, 0, 0))
 DRAWER_TRANSFORM_TO_OBJECT = Pose.from_rpy(
     (0.07, 0.3, -0.12), (-np.pi - np.pi / 16, 0, -np.pi / 2)
