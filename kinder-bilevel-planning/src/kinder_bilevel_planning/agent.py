@@ -1,6 +1,7 @@
 """A general interface for an agent that runs bilevel planning."""
 
-from typing import Any, Hashable, TypeVar
+from collections.abc import Hashable
+from typing import Any, TypeVar
 
 from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
     AbstractPlanGenerator,

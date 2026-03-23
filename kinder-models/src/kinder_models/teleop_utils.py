@@ -766,8 +766,8 @@ class QuestController:
         pos_diff += ref_z_rot.apply(
             self.arm_ref_pos  # type: ignore[arg-type]
         ) - z_rot.apply(
-            self.arm_ref_pos
-        )  # type: ignore[arg-type]
+            self.arm_ref_pos  # type: ignore[arg-type]
+        )
         # Type ignore: arm_ref_base_pose, base_pose set earlier
         base_delta = (
             self.arm_ref_base_pose[:2]  # type: ignore[index]

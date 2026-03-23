@@ -33,6 +33,10 @@ from prpl_utils.utils import sample_seed_from_rng, timer
 from kinder_bilevel_planning.agent import AgentFailure, BilevelPlanningAgent
 from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
+# from imageio.v2 import imwrite  # type: ignore
+
+# imwrite("test.png", env.render())  # type: ignore
+
 
 @hydra.main(version_base=None, config_name="config", config_path="conf/")
 def _main(cfg: DictConfig) -> None:
@@ -57,15 +61,20 @@ def _main(cfg: DictConfig) -> None:
         **cfg.env.env_model_kwargs,
     )
 
-    # Create the agent.
+    # Create the agent.  Per-env overrides (cfg.env.*) take priority over
+    # the top-level defaults (cfg.*) so that env configs can customise the
+    # approach parameters.
+    def _resolve(key: str):
+        return cfg.env.get(key, cfg[key])
+
     agent: BilevelPlanningAgent = BilevelPlanningAgent(
         env_models,
         cfg.seed,
-        max_abstract_plans=cfg.max_abstract_plans,
-        samples_per_step=cfg.samples_per_step,
-        max_skill_horizon=cfg.max_skill_horizon,
-        heuristic_name=cfg.heuristic_name,
-        planning_timeout=cfg.planning_timeout,
+        max_abstract_plans=_resolve("max_abstract_plans"),
+        samples_per_step=_resolve("samples_per_step"),
+        max_skill_horizon=_resolve("max_skill_horizon"),
+        heuristic_name=_resolve("heuristic_name"),
+        planning_timeout=_resolve("planning_timeout"),
     )
 
     # Evaluate.

@@ -1,13 +1,13 @@
 """Utilities."""
 
 import logging
+from collections.abc import Hashable
 from pathlib import Path
 from pprint import pformat
 from typing import (
     Any,
     Callable,
     Collection,
-    Hashable,
     Optional,
     Sequence,
     TypeVar,

@@ -69,7 +69,7 @@ def test_dynobstruction2d_goal_deriver():
     goal = goal_deriver(state)
     assert len(goal.atoms) == 1
     goal_atom = next(iter(goal.atoms))
-    assert str(goal_atom) == "(OnTgt target_block target_surface)"
+    assert str(goal_atom) == "(OnTarget target_block)"
 
 
 def test_dynobstruction2d_state_abstractor():
@@ -85,8 +85,8 @@ def test_dynobstruction2d_state_abstractor():
     state_abstractor = env_models.state_abstractor
     pred_name_to_pred = {p.name: p for p in env_models.predicates}
     HandEmpty = pred_name_to_pred["HandEmpty"]
-    OnTgtSurface = pred_name_to_pred["OnTgt"]
-    AboveTgtSurface = pred_name_to_pred["AboveTgt"]
+    OnTable = pred_name_to_pred["OnTable"]
+    OnTarget = pred_name_to_pred["OnTarget"]
     env.reset(seed=123)
     obs, _, _, _, _ = env.step((0, 0, 0, 0.1, 0.0))  # extend the arm
 
@@ -98,8 +98,17 @@ def test_dynobstruction2d_state_abstractor():
     obstruction = obj_name_to_obj["obstruction0"]
 
     target_surface = obj_name_to_obj["target_surface"]
-    assert len(abstract_state.atoms) == 1
+    # HandEmpty + OnTable/OnTarget for each block + IsTargetBlock + IsObstruction
+    assert len(abstract_state.atoms) == 5
     assert HandEmpty([robot]) in abstract_state.atoms
+    assert (
+        OnTable([target_block]) in abstract_state.atoms
+        or OnTarget([target_block]) in abstract_state.atoms
+    )
+    assert (
+        OnTable([obstruction]) in abstract_state.atoms
+        or OnTarget([obstruction]) in abstract_state.atoms
+    )
 
     # Create state where the target block is inside the target region
     state2 = state.copy()
@@ -136,8 +145,7 @@ def test_dynobstruction2d_state_abstractor():
     state2.set(target_block, "theta", target_center_pose.theta)
     abstract_state2 = state_abstractor(state2)
 
-    assert OnTgtSurface([target_block, target_surface]) in abstract_state2.atoms
-    assert AboveTgtSurface([robot]) in abstract_state2.atoms
+    assert OnTarget([target_block]) in abstract_state2.atoms
 
 
 def _skill_test_helper(ground_skill, env_models, env, obs, params=None, debug=False):
@@ -177,8 +185,8 @@ def test_dynobstruction2d_skills():
     )
     predicate_name_to_pred = {p.name: p for p in env_models.predicates}
     skill_name_to_skill = {s.operator.name: s for s in env_models.skills}
-    PickTgt = skill_name_to_skill["PickTgt"]
-    PlaceTgtSurface = skill_name_to_skill["PlaceTgtSurface"]
+    PickFromTable = skill_name_to_skill["PickFromTable"]
+    PlaceOnTarget = skill_name_to_skill["PlaceOnTarget"]
     obs0, _ = env.reset(seed=123)
 
     state0 = env_models.observation_to_state(obs0)
@@ -187,7 +195,7 @@ def test_dynobstruction2d_skills():
     robot = obj_name_to_obj["robot"]
     target_block = obj_name_to_obj["target_block"]
     target_surface = obj_name_to_obj["target_surface"]
-    pick_target_block = PickTgt.ground((robot, target_block))
+    pick_target_block = PickFromTable.ground((robot, target_block))
     # Test picking the target block from the top side.
     obs1 = _skill_test_helper(
         pick_target_block, env_models, env, obs0, params=(0, 0.6, 0.3)
@@ -195,17 +203,13 @@ def test_dynobstruction2d_skills():
     state1 = env_models.observation_to_state(obs1)
     abstract_state1 = env_models.state_abstractor(state1)
     assert (
-        predicate_name_to_pred["HoldingTgt"]([robot, target_block])
+        predicate_name_to_pred["Holding"]([robot, target_block])
         in abstract_state1.atoms
     )
 
-    # Test moving with the target block to be above target surface.
-    # obs0, _ = env.reset(seed=123)
-    place_target = PlaceTgtSurface.ground((robot, target_block, target_surface))
+    # Test placing the target block on the target surface.
+    place_target = PlaceOnTarget.ground((robot, target_block, target_surface))
     obs2 = _skill_test_helper(place_target, env_models, env, obs1, params=0.25)
     state2 = env_models.observation_to_state(obs2)
     abstract_state2 = env_models.state_abstractor(state2)
-    assert (
-        predicate_name_to_pred["OnTgt"]([target_block, target_surface])
-        in abstract_state2.atoms
-    )
+    assert predicate_name_to_pred["OnTarget"]([target_block]) in abstract_state2.atoms
