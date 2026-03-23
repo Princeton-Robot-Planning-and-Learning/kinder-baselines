@@ -2,12 +2,16 @@
 
 from unittest.mock import Mock, patch
 
+import kinder
 import pytest
+from bilevel_planning.structs import LiftedParameterizedController
 
 from kinder_vlm_planning.env_controllers import (
     _import_lifted_controllers,
     get_controllers_for_environment,
 )
+
+kinder.register_all_environments()
 
 
 def test_get_controllers_for_environment_success():
@@ -142,3 +146,38 @@ def test_import_lifted_controllers_with_action_space():
         )
 
         assert controllers == mock_controllers
+
+
+def test_get_controllers_dynobstruction2d():
+    """Test loading controllers for DynObstruction2D (integration)."""
+    env = kinder.make("kinder/DynObstruction2D-o1-v0")
+    controllers = get_controllers_for_environment(
+        "dynamic2d", "dynobstruction2d", action_space=env.action_space
+    )
+    assert controllers is not None
+    expected = {
+        "pick_tgt",
+        "place_tgt",
+        "pick_obstruction",
+        "place_obstruction",
+        "place_tgt_surface",
+        "move",
+    }
+    assert set(controllers.keys()) == expected
+    for ctrl in controllers.values():
+        assert isinstance(ctrl, LiftedParameterizedController)
+    env.close()
+
+
+def test_get_controllers_dynpushpullhook2d():
+    """Test loading controllers for DynPushPullHook2D (integration)."""
+    env = kinder.make("kinder/DynPushPullHook2D-o0-v0")
+    controllers = get_controllers_for_environment(
+        "dynamic2d", "dynpushpullhook2d", action_space=env.action_space
+    )
+    assert controllers is not None
+    expected = {"grasp_hook", "prehook", "hookdown", "move"}
+    assert set(controllers.keys()) == expected
+    for ctrl in controllers.values():
+        assert isinstance(ctrl, LiftedParameterizedController)
+    env.close()
