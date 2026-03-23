@@ -70,6 +70,8 @@ GRASP_TRANSFORM_TO_OBJECT = Pose((-0.005, 0, 0.01), (0.707, 0.707, 0, 0))
 WIPER_TRANSFORM_TO_OBJECT = Pose.from_rpy((0.06, 0, 0.04), (-np.pi-np.pi/8, 0, -np.pi/2)) # Pose((0.035, 0, 0.04), (-0.707, 0.707, 0, 0))
 WIPER_SWEEP_TRANSFORM = Pose.from_rpy((-0.05, 0, 0.06), (-np.pi, 0, -np.pi/2)) # Pose((-0.05, 0, 0.04), (-0.707, 0.707, 0, 0))
 WIPER_SWEEP_TRANSFORM_END = Pose.from_rpy((0.15, 0, 0.06), (-np.pi, 0, -np.pi/2)) # Pose((0.15, 0, 0.04), (-0.707, 0.707, 0, 0))
+DRAWER_TRANSFORM_TO_OBJECT = Pose.from_rpy((0.07, 0.3, -0.12), (-np.pi-np.pi/16, 0, -np.pi/2))
+DRAWER_TRANSFORM_TO_OBJECT_END = Pose.from_rpy((0.18, 0.3, -0.12), (-np.pi-np.pi/16, 0, -np.pi/2))
 BASE_DISTANCE_TO_CUPBOARD = 0.95
 ARM_MOVEMENT_CUPBOARD = Pose((0.8, 0.0, 0.25), (0.5, 0.5, 0.5, 0.5))
 PLACE_SAMPLER_COLLISION_THRESHOLD = 0.05
@@ -1707,11 +1709,11 @@ class PlaceGroundController(GroundParameterizedController[ObjectCentricState, Ar
 
 
 class OpenDrawerSweepController(GroundParameterizedController[ObjectCentricState, Array]):
-    """Controller for motion planning to open a drawer.
+    """Controller for motion planning to pick up a wiper.
 
     The object parameters are:
         robot: The robot itself.
-        drawer: The drawer to open.
+        object: The target drawer.
     """
 
     def __init__(
@@ -1722,21 +1724,52 @@ class OpenDrawerSweepController(GroundParameterizedController[ObjectCentricState
         self._current_params: np.ndarray | None = None
         self._current_arm_joint_plan: list[JointPositions] | None = None
         self._current_retract_plan: list[JointPositions] | None = None
+        self._current_open_plan: list[JointPositions] | None = None
         self._current_base_motion_plan: list[SE2] | None = None
         self._pybullet_sim: PyBulletSim | None = pybullet_sim
         self._navigated: bool = False
         self._pre_grasp: bool = False
         self._closed_gripper: bool = False
+        self._open_gripper: bool = False
         self._lifted: bool = False
+        self._returned: bool = False
         self._last_gripper_state: float = 0.0
         self.home_joints = np.deg2rad(
             [0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0]
         )  # retract configuration
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
-        distance = rng.uniform(*MOVE_TO_TARGET_DISTANCE_BOUNDS)  # type: ignore
-        rot = rng.uniform(*MOVE_TO_TARGET_ROT_BOUNDS)
-        return np.array([distance, rot])
+        target_object = self.objects[1]
+        target_object_pose = get_overhead_object_se2_pose(x, target_object)
+
+        for _ in range(MAX_SAMPLER_ATTEMPTS):
+            distance = rng.uniform(*MOVE_TO_TARGET_DISTANCE_BOUNDS)  # type: ignore
+            rot = rng.uniform(*MOVE_TO_TARGET_ROT_BOUNDS)
+            target_base_pose = get_target_robot_pose_from_parameters(
+                target_object_pose, distance, rot
+            )
+            collision = False
+            for other_object in x.get_objects(MujocoMovableObjectType):
+                if (
+                    "cube" in other_object.name
+                    and other_object.name != target_object.name
+                ):
+                    other_object_pose = get_overhead_object_se2_pose(x, other_object)
+                    collision_distance = float(
+                        np.linalg.norm(
+                            [
+                                target_base_pose.x - other_object_pose.x,
+                                target_base_pose.y - other_object_pose.y,
+                            ]
+                        )
+                    )
+                    if collision_distance < 0.6:
+                        collision = True
+                        break
+            if not collision:
+                return np.array([distance, rot])
+
+        raise ValueError("No valid parameters found")
 
     def reset(
         self,
@@ -1756,7 +1789,12 @@ class OpenDrawerSweepController(GroundParameterizedController[ObjectCentricState
         # Derive the target pose for the robot.
         target_distance, target_rot = self._current_params
         target_object = self.objects[1]
-        target_object_pose = get_overhead_object_se2_pose(x, target_object)
+        target_object_pose_ori = get_overhead_object_se2_pose(x, target_object)
+        target_object_pose = SE2(
+            target_object_pose_ori.x,
+            target_object_pose_ori.y + 0.3,
+            target_object_pose_ori.theta(),
+        )
         target_base_pose = get_target_robot_pose_from_parameters(
             target_object_pose, target_distance, target_rot
         )
@@ -1802,7 +1840,12 @@ class OpenDrawerSweepController(GroundParameterizedController[ObjectCentricState
 
         target_end_effector_pose = multiply_poses(
             target_grap_pose_world,
-            GRASP_TRANSFORM_TO_OBJECT,
+            DRAWER_TRANSFORM_TO_OBJECT,
+        )
+
+        target_end_effector_pose_end = multiply_poses(
+            target_grap_pose_world,
+            DRAWER_TRANSFORM_TO_OBJECT_END,
         )
 
         self._pybullet_sim.base_link_to_held_obj = multiply_poses(
@@ -1816,6 +1859,12 @@ class OpenDrawerSweepController(GroundParameterizedController[ObjectCentricState
             set_joints=False,
         )
 
+        target_joints_end = inverse_kinematics(
+            self._pybullet_sim.robot,
+            target_end_effector_pose_end,
+            set_joints=False,
+        )
+
         # Run motion planning.
         plan = run_motion_planning(
             self._pybullet_sim.robot,
@@ -1826,29 +1875,38 @@ class OpenDrawerSweepController(GroundParameterizedController[ObjectCentricState
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
 
+        open_plan = run_motion_planning(
+            self._pybullet_sim.robot,
+            self._pybullet_sim.get_robot_joints(),
+            target_joints_end,
+            collision_bodies=self._pybullet_sim.get_collision_bodies(),
+            seed=0,  # use a constant seed to make this effectively deterministic
+            physics_client_id=self._pybullet_sim.physics_client_id,
+        )
+
         retract_plan = run_motion_planning(
             self._pybullet_sim.robot,
-            target_joints,
+            target_joints_end,
             self.home_joints.tolist(),
-            collision_bodies=self._pybullet_sim.get_collision_bodies(  # pylint: disable=protected-access
-                held_object=self._pybullet_sim._cubes[  # pylint: disable=protected-access
-                    target_object.name
-                ]
-            ),
-            held_object=self._pybullet_sim._cubes[  # pylint: disable=protected-access
-                target_object.name
-            ],
-            base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,  # pylint: disable=protected-access
+            collision_bodies=self._pybullet_sim.get_collision_bodies(),
             seed=0,  # use a constant seed to make this effectively deterministic
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
 
         assert plan is not None, "Motion planning failed"
+        assert open_plan is not None, "Motion planning failed"
         assert retract_plan is not None, "Motion planning failed"
-
+        
         # Remap the plan to ensure we stay within action limits.
         plan = remap_joint_position_plan_to_constant_distance(
             plan,
+            self._pybullet_sim.robot,
+            max_distance=0.4,
+        )
+
+        # Remap the plan to ensure we stay within action limits.
+        open_plan = remap_joint_position_plan_to_constant_distance(
+            open_plan,
             self._pybullet_sim.robot,
             max_distance=0.4,
         )
@@ -1861,14 +1919,16 @@ class OpenDrawerSweepController(GroundParameterizedController[ObjectCentricState
         )
 
         self._current_arm_joint_plan = plan
+        self._current_open_plan = open_plan
         self._current_retract_plan = retract_plan
 
     def terminated(self) -> bool:
         assert (
             self._current_arm_joint_plan is not None
+            and self._current_open_plan is not None
             and self._current_retract_plan is not None
         )
-        return self._lifted
+        return self._returned
 
     def step(self) -> Array:
         assert self._current_arm_joint_plan is not None
@@ -1933,7 +1993,37 @@ class OpenDrawerSweepController(GroundParameterizedController[ObjectCentricState
             action[-1] = 1
             self._last_gripper_state = self._get_current_robot_gripper_pose()
             return action
-        if self._pre_grasp and self._closed_gripper:
+        if self._pre_grasp and self._closed_gripper and not self._lifted:
+            while len(self._current_open_plan) > 1:  # type: ignore
+                peek_conf = self._current_open_plan[0]  # type: ignore
+                # Close enough, pop and continue.
+                if self._robot_is_close_to_conf(peek_conf, atol=0.08):
+                    self._current_open_plan.pop(0)  # type: ignore
+                # Not close enough, stop popping.
+                break
+            if self._robot_is_close_to_conf(self._current_open_plan[-1]):  # type: ignore # pylint: disable=line-too-long
+                self._lifted = True
+            robot_conf = self._get_current_robot_arm_conf()
+            gripper_pose = self._get_current_robot_gripper_pose()
+            next_conf = self._current_open_plan[0]  # type: ignore
+            action = np.zeros(11, dtype=np.float32)
+            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
+            free_joints_infos = [
+                joint_info for joint_info in joint_infos if joint_info.qIndex > -1
+            ]
+            action[3:10] = get_jointwise_difference(
+                free_joints_infos[:7], next_conf[:7], robot_conf[:7]
+            )
+            action[-1] = gripper_pose
+            return action
+        if self._lifted and not self._open_gripper:
+            if self._get_current_robot_gripper_pose() < GRIPPER_OPEN_THRESHOLD:
+                self._open_gripper = True
+            action = np.zeros(11, dtype=np.float32)
+            action[-1] = 0
+            self._last_gripper_state = self._get_current_robot_gripper_pose()
+            return action
+        if self._open_gripper:
             while len(self._current_retract_plan) > 1:  # type: ignore
                 peek_conf = self._current_retract_plan[0]  # type: ignore
                 # Close enough, pop and continue.
@@ -1942,7 +2032,7 @@ class OpenDrawerSweepController(GroundParameterizedController[ObjectCentricState
                 # Not close enough, stop popping.
                 break
             if self._robot_is_close_to_conf(self._current_retract_plan[-1]):  # type: ignore # pylint: disable=line-too-long
-                self._lifted = True
+                self._returned = True
             robot_conf = self._get_current_robot_arm_conf()
             gripper_pose = self._get_current_robot_gripper_pose()
             next_conf = self._current_retract_plan[0]  # type: ignore
@@ -2831,11 +2921,11 @@ def create_lifted_controllers(
 
     # Open drawer controller.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
-    drawer = Variable("?drawer", MujocoDrawerObjectType)
+    target = Variable("?target", MujocoMovableObjectType)
 
     LiftedOpenDrawerController: LiftedParameterizedController = (
         LiftedParameterizedController(
-            [robot, drawer],
+            [robot, target],
             OpenDrawerController,
         )
     )

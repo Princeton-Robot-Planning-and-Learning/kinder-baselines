@@ -1301,15 +1301,15 @@ def test_open_drawer():
     # create the pick ground controller.
     lifted_controller = controllers["open_drawer"]
     robot = _get_robot_from_state(state)
-    drawer = state.get_object_from_name("kitchen_island_drawer_s0c2")
+    drawer = state.get_object_from_name("wiper_0")
     object_parameters = (robot, drawer)
     controller = lifted_controller.ground(object_parameters)
     # params = controller.sample_parameters(state, np.random.default_rng(123))
-    params = np.array([0.6, 0.0])
+    params = np.array([0.7, -np.pi])
 
     # Reset and execute the controller until it terminates.
     controller.reset(state, params)
-    for _ in range(400):
+    for _ in range(300):
         action = controller.step()
         obs, _, _, _, _ = env.step(action)
         next_state = env.observation_space.devectorize(obs)
@@ -1366,13 +1366,13 @@ def test_pick_wiper():
         state = next_state
         if controller.terminated():
             break
-    # else:
-    #     assert False, "Controller did not terminate"
+    else:
+        assert False, "Controller did not terminate"
 
     env.close()
 
-def test_pick_sweep_wiper():
-    """Test pick and sweep wiper."""
+def test_open_drawer_pick_sweep_wiper():
+    """Test open drawer, pick and sweep wiper."""
 
     # Create the environment.
     num_cubes = 5
@@ -1396,6 +1396,28 @@ def test_pick_sweep_wiper():
 
     controllers = create_lifted_controllers(env.action_space, pybullet_sim=pybullet_sim)
 
+    # create the pick ground controller.
+    lifted_controller = controllers["open_drawer"]
+    robot = _get_robot_from_state(state)
+    drawer = state.get_object_from_name("wiper_0")
+    object_parameters = (robot, drawer)
+    controller = lifted_controller.ground(object_parameters)
+    # params = controller.sample_parameters(state, np.random.default_rng(123))
+    params = np.array([0.7, -np.pi])
+
+    # Reset and execute the controller until it terminates.
+    controller.reset(state, params)
+    for _ in range(300):
+        action = controller.step()
+        obs, _, _, _, _ = env.step(action)
+        next_state = env.observation_space.devectorize(obs)
+        controller.observe(next_state)
+        state = next_state
+        if controller.terminated():
+            break
+    else:
+        assert False, "Controller did not terminate"
+    
     # create the pick ground controller.
     lifted_controller = controllers["pick_wiper"]
     robot = _get_robot_from_state(state)
@@ -1438,7 +1460,7 @@ def test_pick_sweep_wiper():
         state = next_state
         if controller.terminated():
             break
-    # else:
-    #     assert False, "Controller did not terminate"
+    else:
+        assert False, "Controller did not terminate"
 
     env.close()
