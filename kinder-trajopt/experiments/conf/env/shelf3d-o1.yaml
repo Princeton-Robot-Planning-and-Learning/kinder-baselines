@@ -1,2 +1,3 @@
 env_id: "kinder/Shelf3D-o1-v0"
 max_eval_steps: 500
+replan_interval: 50

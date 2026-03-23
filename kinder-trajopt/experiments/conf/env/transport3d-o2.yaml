@@ -1,2 +1,3 @@
 env_id: "kinder/Transport3D-o2-v0"
-max_eval_steps: 800
+max_eval_steps: 1200
+replan_interval: 100
