@@ -68,7 +68,7 @@ def _main(cfg: DictConfig) -> None:
             agent,
             env,
             rng,
-            max_eval_steps=cfg.max_eval_steps,
+            max_eval_steps=cfg.env.max_eval_steps,
         )
         episode_metrics["eval_episode"] = eval_episode
         metrics.append(episode_metrics)
