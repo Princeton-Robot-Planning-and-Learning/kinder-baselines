@@ -9,9 +9,11 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import PIL.Image
 from numpy.typing import NDArray
 from prpl_llm_utils.cache import FilePretrainedLargeModelCache
-from prpl_llm_utils.models import OpenAIModel
+from prpl_llm_utils.models import PretrainedLargeModel
+from prpl_llm_utils.models import OpenAIModel  # noqa: F401
 from relational_structs import GroundAtom
 
 
@@ -28,7 +30,7 @@ def create_vlm(
 
 
 def query_vlm_for_atom_vals(
-    vlm: OpenAIModel,
+    vlm: PretrainedLargeModel,
     rendered_image: NDArray[np.uint8],
     candidate_atoms: list[GroundAtom],
     predicate_descriptions: dict[str, str],
@@ -51,15 +53,16 @@ def query_vlm_for_atom_vals(
     prompt = _build_atom_labelling_prompt(candidate_atoms, predicate_descriptions)
     logging.debug("VLM prompt:\n%s", prompt)
 
-    response = vlm.sample_completions(
+    # Convert numpy image to PIL for prpl_llm_utils API.
+    pil_image = PIL.Image.fromarray(rendered_image)
+
+    response = vlm.query(
         prompt,
-        images=[rendered_image],
-        temperature=0.0,
+        imgs=[pil_image],
+        hyperparameters={"temperature": 0.0},
         seed=0,
-        num_completions=1,
     )
-    assert len(response) == 1
-    vlm_output = response[0]
+    vlm_output = response.text
     logging.debug("VLM response:\n%s", vlm_output)
 
     true_atoms = _parse_vlm_response(vlm_output, candidate_atoms)

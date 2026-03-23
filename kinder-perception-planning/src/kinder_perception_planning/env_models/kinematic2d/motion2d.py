@@ -23,7 +23,7 @@ from kinder_models.kinematic2d.envs.motion2d.parameterized_skills import (
     create_lifted_controllers,
 )
 from numpy.typing import NDArray
-from prpl_llm_utils.models import OpenAIModel
+from prpl_llm_utils.models import PretrainedLargeModel
 from relational_structs import (
     GroundAtom,
     LiftedAtom,
@@ -66,7 +66,7 @@ def create_perception_planning_models(
     observation_space: Space,
     action_space: Space,
     num_passages: int = 2,
-    vlm: OpenAIModel | None = None,
+    vlm: PretrainedLargeModel | None = None,
 ) -> SesameModels:
     """Create the env models for motion 2D with VLM-based state
     abstraction."""

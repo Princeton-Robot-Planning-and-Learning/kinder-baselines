@@ -24,7 +24,7 @@ from kinder_models.kinematic2d.envs.stickbutton2d.parameterized_skills import (
     create_lifted_controllers,
 )
 from numpy.typing import NDArray
-from prpl_llm_utils.models import OpenAIModel
+from prpl_llm_utils.models import PretrainedLargeModel
 from relational_structs import (
     GroundAtom,
     LiftedAtom,
@@ -70,7 +70,7 @@ def create_perception_planning_models(
     observation_space: Space,
     action_space: Space,
     num_buttons: int,
-    vlm: OpenAIModel | None = None,
+    vlm: PretrainedLargeModel | None = None,
 ) -> SesameModels:
     """Create the env models for stick button 2D with VLM-based state
     abstraction."""

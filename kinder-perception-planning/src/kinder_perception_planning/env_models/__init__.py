@@ -6,7 +6,7 @@ from pathlib import Path
 
 from bilevel_planning.structs import SesameModels
 from gymnasium.spaces import Space
-from prpl_llm_utils.models import OpenAIModel
+from prpl_llm_utils.models import PretrainedLargeModel
 
 __all__ = ["create_perception_planning_models"]
 
@@ -15,7 +15,7 @@ def create_perception_planning_models(
     env_name: str,
     observation_space: Space,
     executable_space: Space,
-    vlm: OpenAIModel,
+    vlm: PretrainedLargeModel,
     **kwargs,
 ) -> SesameModels:
     """Load perception-based planning models for the given environment."""
