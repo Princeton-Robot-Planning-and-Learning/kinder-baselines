@@ -14,8 +14,6 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoMovableObjectType,
     MujocoObjectType,
     MujocoTidyBotRobotObjectType,
-    MujocoDrawerObjectType,
-
 )
 from kinder.envs.dynamic3d.robots.tidybot_robot_env import (
     TidyBot3DRobotActionSpace,
@@ -67,11 +65,21 @@ WORLD_X_BOUNDS = (-2.5, 2.5)  # we should move these later
 WORLD_Y_BOUNDS = (-2.5, 2.5)  # we should move these later
 ROBOT_ARM_POSE_TO_BASE = Pose((0.12, 0.0, 0.4))
 GRASP_TRANSFORM_TO_OBJECT = Pose((-0.005, 0, 0.01), (0.707, 0.707, 0, 0))
-WIPER_TRANSFORM_TO_OBJECT = Pose.from_rpy((0.06, 0, 0.04), (-np.pi-np.pi/8, 0, -np.pi/2)) # Pose((0.035, 0, 0.04), (-0.707, 0.707, 0, 0))
-WIPER_SWEEP_TRANSFORM = Pose.from_rpy((-0.05, 0, 0.06), (-np.pi, 0, -np.pi/2)) # Pose((-0.05, 0, 0.04), (-0.707, 0.707, 0, 0))
-WIPER_SWEEP_TRANSFORM_END = Pose.from_rpy((0.15, 0, 0.06), (-np.pi, 0, -np.pi/2)) # Pose((0.15, 0, 0.04), (-0.707, 0.707, 0, 0))
-DRAWER_TRANSFORM_TO_OBJECT = Pose.from_rpy((0.07, 0.3, -0.12), (-np.pi-np.pi/16, 0, -np.pi/2))
-DRAWER_TRANSFORM_TO_OBJECT_END = Pose.from_rpy((0.18, 0.3, -0.12), (-np.pi-np.pi/16, 0, -np.pi/2))
+WIPER_TRANSFORM_TO_OBJECT = Pose.from_rpy(
+    (0.06, 0, 0.04), (-np.pi - np.pi / 8, 0, -np.pi / 2)
+)  # Pose((0.035, 0, 0.04), (-0.707, 0.707, 0, 0))
+WIPER_SWEEP_TRANSFORM = Pose.from_rpy(
+    (-0.05, 0, 0.06), (-np.pi, 0, -np.pi / 2)
+)  # Pose((-0.05, 0, 0.04), (-0.707, 0.707, 0, 0))
+WIPER_SWEEP_TRANSFORM_END = Pose.from_rpy(
+    (0.15, 0, 0.06), (-np.pi, 0, -np.pi / 2)
+)  # Pose((0.15, 0, 0.04), (-0.707, 0.707, 0, 0))
+DRAWER_TRANSFORM_TO_OBJECT = Pose.from_rpy(
+    (0.07, 0.3, -0.12), (-np.pi - np.pi / 16, 0, -np.pi / 2)
+)
+DRAWER_TRANSFORM_TO_OBJECT_END = Pose.from_rpy(
+    (0.18, 0.3, -0.12), (-np.pi - np.pi / 16, 0, -np.pi / 2)
+)
 BASE_DISTANCE_TO_CUPBOARD = 0.95
 ARM_MOVEMENT_CUPBOARD = Pose((0.8, 0.0, 0.25), (0.5, 0.5, 0.5, 0.5))
 PLACE_SAMPLER_COLLISION_THRESHOLD = 0.05
@@ -1708,7 +1716,9 @@ class PlaceGroundController(GroundParameterizedController[ObjectCentricState, Ar
         )
 
 
-class OpenDrawerSweepController(GroundParameterizedController[ObjectCentricState, Array]):
+class OpenDrawerSweepController(
+    GroundParameterizedController[ObjectCentricState, Array]
+):
     """Controller for motion planning to pick up a wiper.
 
     The object parameters are:
@@ -1896,7 +1906,7 @@ class OpenDrawerSweepController(GroundParameterizedController[ObjectCentricState
         assert plan is not None, "Motion planning failed"
         assert open_plan is not None, "Motion planning failed"
         assert retract_plan is not None, "Motion planning failed"
-        
+
         # Remap the plan to ensure we stay within action limits.
         plan = remap_joint_position_plan_to_constant_distance(
             plan,
@@ -2263,8 +2273,7 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
             self._pybullet_sim.robot,
             target_joints,
             self.home_joints.tolist(),
-            collision_bodies=self._pybullet_sim.get_collision_bodies(  # pylint: disable=protected-access
-            ),
+            collision_bodies=self._pybullet_sim.get_collision_bodies(),  # pylint: disable=protected-access
             base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,  # pylint: disable=protected-access
             seed=0,  # use a constant seed to make this effectively deterministic
             physics_client_id=self._pybullet_sim.physics_client_id,
@@ -2883,13 +2892,13 @@ def create_lifted_controllers(
 
         def __init__(self, objects):
             super().__init__(pybullet_sim=pybullet_sim, objects=objects)
-    
+
     class PickWiperController(PickWiperOriController):
         """Pick wiper controller."""
 
         def __init__(self, objects):
             super().__init__(pybullet_sim=pybullet_sim, objects=objects)
-    
+
     class SweepController(SweepOriController):
         """Sweep controller."""
 

@@ -1273,6 +1273,7 @@ def test_pick_toss():
 
     env.close()
 
+
 def test_open_drawer():
     """Test open drawer."""
 
@@ -1321,6 +1322,7 @@ def test_open_drawer():
         assert False, "Controller did not terminate"
 
     env.close()
+
 
 def test_pick_wiper():
     """Test pick wiper."""
@@ -1371,6 +1373,7 @@ def test_pick_wiper():
 
     env.close()
 
+
 def test_open_drawer_pick_sweep_wiper():
     """Test open drawer, pick and sweep wiper."""
 
@@ -1417,7 +1420,7 @@ def test_open_drawer_pick_sweep_wiper():
             break
     else:
         assert False, "Controller did not terminate"
-    
+
     # create the pick ground controller.
     lifted_controller = controllers["pick_wiper"]
     robot = _get_robot_from_state(state)
