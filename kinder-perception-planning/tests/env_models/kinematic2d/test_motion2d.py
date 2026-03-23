@@ -15,28 +15,32 @@ from pathlib import Path
 
 import kinder
 import pytest
+from kinder.envs.kinematic2d.motion2d import (
+    ObjectCentricMotion2DEnv,
+    RectangleType,
+    TargetRegionType,
+)
+from kinder.envs.kinematic2d.object_types import CRVRobotType
+from kinder_bilevel_planning.env_models.kinematic2d.motion2d import (
+    create_bilevel_planning_models as create_gt_models,)
 from prpl_llm_utils.cache import FilePretrainedLargeModelCache
 from prpl_llm_utils.models import OrderedResponseModel
 from prpl_llm_utils.structs import Response
-from relational_structs import GroundAtom, ObjectCentricState
+from relational_structs import GroundAtom, Object, ObjectCentricState, Predicate
 
-from kinder_bilevel_planning.env_models.kinematic2d.motion2d import (
-    create_bilevel_planning_models as create_gt_models,
-)
 from kinder_perception_planning.env_models.kinematic2d.motion2d import (
     _PREDICATE_DESCRIPTIONS,
     create_perception_planning_models,
 )
 from kinder_perception_planning.vlm_utils import (
     _build_atom_labelling_prompt,
+    _parse_vlm_response,
     create_vlm,
     query_vlm_for_atom_vals,
 )
 
 _HAS_OPENAI_KEY = bool(os.environ.get("OPENAI_API_KEY", ""))
-real_vlm = pytest.mark.skipif(
-    not _HAS_OPENAI_KEY, reason="OPENAI_API_KEY not set"
-)
+real_vlm = pytest.mark.skipif(not _HAS_OPENAI_KEY, reason="OPENAI_API_KEY not set")
 
 kinder.register_all_environments()
 
@@ -54,11 +58,8 @@ def _make_vlm_response_for_atoms(
 
 
 def _build_candidate_atoms_for_state(state: ObjectCentricState, env_models):
-    """Reconstruct the same candidate atom list that the perception
-    state_abstractor would build."""
-    from kinder.envs.kinematic2d.motion2d import RectangleType, TargetRegionType
-    from kinder.envs.kinematic2d.object_types import CRVRobotType
-
+    """Reconstruct the same candidate atom list that the perception state_abstractor
+    would build."""
     pred_name_to_pred = {p.name: p for p in env_models.predicates}
     AtTgt = pred_name_to_pred["AtTgt"]
     NotAtTgt = pred_name_to_pred["NotAtTgt"]
@@ -87,15 +88,13 @@ def _create_oracle_vlm(
     perception_models,
     states: list[ObjectCentricState],
 ) -> OrderedResponseModel:
-    """Create an OrderedResponseModel that returns ground-truth
-    responses for each state."""
+    """Create an OrderedResponseModel that returns ground-truth responses for each
+    state."""
     responses = []
     for state in states:
         gt_abstract = gt_models.state_abstractor(state)
         candidate_atoms = _build_candidate_atoms_for_state(state, perception_models)
-        response_text = _make_vlm_response_for_atoms(
-            candidate_atoms, gt_abstract.atoms
-        )
+        response_text = _make_vlm_response_for_atoms(candidate_atoms, gt_abstract.atoms)
         responses.append(Response(response_text, metadata={}))
     cache_dir = Path(tempfile.mkdtemp())
     cache = FilePretrainedLargeModelCache(cache_dir)
@@ -103,8 +102,7 @@ def _create_oracle_vlm(
 
 
 def test_motion2d_vlm_state_abstractor_initial():
-    """Test that VLM state abstractor matches ground truth on the initial
-    state."""
+    """Test that VLM state abstractor matches ground truth on the initial state."""
     env = kinder.make("kinder/Motion2D-p2-v0", render_mode="rgb_array")
     obs, _ = env.reset(seed=123)
 
@@ -155,9 +153,6 @@ def test_motion2d_vlm_state_abstractor_at_target():
     state = gt_models.observation_to_state(obs)
 
     # Move robot to center of target region.
-    from kinder.envs.kinematic2d.motion2d import TargetRegionType
-    from kinder.envs.kinematic2d.object_types import CRVRobotType
-
     robot = state.get_objects(CRVRobotType)[0]
     target_region = state.get_objects(TargetRegionType)[0]
     target_x = state.get(target_region, "x")
@@ -180,9 +175,7 @@ def test_motion2d_vlm_state_abstractor_at_target():
         env.observation_space, env.action_space, num_passages=2, vlm=mock_vlm
     )
 
-    oracle_vlm = _create_oracle_vlm(
-        gt_models, perception_models, [state_at_target]
-    )
+    oracle_vlm = _create_oracle_vlm(gt_models, perception_models, [state_at_target])
     mock_vlm._responses = oracle_vlm._responses  # pylint: disable=protected-access
     mock_vlm._next_response_idx = 0  # pylint: disable=protected-access
 
@@ -211,9 +204,6 @@ def test_motion2d_vlm_state_abstractor_at_passage():
     state = gt_models.observation_to_state(obs)
 
     # Move robot into a passage between obstacle0 and obstacle1.
-    from kinder.envs.kinematic2d.motion2d import RectangleType
-    from kinder.envs.kinematic2d.object_types import CRVRobotType
-
     robot = state.get_objects(CRVRobotType)[0]
     obstacles = state.get_objects(RectangleType)
     obj_name_to_obj = {o.name: o for o in obstacles}
@@ -242,9 +232,7 @@ def test_motion2d_vlm_state_abstractor_at_passage():
         env.observation_space, env.action_space, num_passages=2, vlm=mock_vlm
     )
 
-    oracle_vlm = _create_oracle_vlm(
-        gt_models, perception_models, [state_at_passage]
-    )
+    oracle_vlm = _create_oracle_vlm(gt_models, perception_models, [state_at_passage])
     mock_vlm._responses = oracle_vlm._responses  # pylint: disable=protected-access
     mock_vlm._next_response_idx = 0  # pylint: disable=protected-access
 
@@ -258,14 +246,8 @@ def test_motion2d_vlm_state_abstractor_at_passage():
 
 def test_motion2d_vlm_prompt_construction():
     """Test that the VLM prompt is constructed correctly."""
-    from kinder.envs.kinematic2d.motion2d import RectangleType, TargetRegionType
-    from kinder.envs.kinematic2d.object_types import CRVRobotType
-    from relational_structs import Predicate
-
     AtTgt = Predicate("AtTgt", [CRVRobotType, TargetRegionType])
     NotAtTgt = Predicate("NotAtTgt", [CRVRobotType, TargetRegionType])
-
-    from relational_structs import Object
 
     robot = Object("robot", CRVRobotType)
     target_region = Object("target_region", TargetRegionType)
@@ -289,12 +271,6 @@ def test_motion2d_vlm_prompt_construction():
 
 def test_motion2d_vlm_response_parsing():
     """Test that VLM response parsing works correctly."""
-    from kinder_perception_planning.vlm_utils import _parse_vlm_response
-
-    from kinder.envs.kinematic2d.motion2d import TargetRegionType
-    from kinder.envs.kinematic2d.object_types import CRVRobotType
-    from relational_structs import Object, Predicate
-
     AtTgt = Predicate("AtTgt", [CRVRobotType, TargetRegionType])
     NotAtTgt = Predicate("NotAtTgt", [CRVRobotType, TargetRegionType])
     NotAtAnyPassage = Predicate("NotAtAnyPassage", [CRVRobotType])
@@ -395,8 +371,7 @@ def _setup_real_vlm_test(env_id, num_passages, vlm_model="gpt-4o"):
 
 @real_vlm
 def test_motion2d_real_vlm_initial_state():
-    """Query a real VLM on the initial state and compare against ground
-    truth.
+    """Query a real VLM on the initial state and compare against ground truth.
 
     The initial state is unambiguous: the robot is far from both the
     target and any passage, so the VLM should get this right.
@@ -415,9 +390,6 @@ def test_motion2d_real_vlm_initial_state():
 
     # The key easy predicates the VLM must get right.
     pred_names = {p.name: p for p in perception_models.predicates}
-    from kinder.envs.kinematic2d.motion2d import TargetRegionType
-    from kinder.envs.kinematic2d.object_types import CRVRobotType
-
     robot = state.get_objects(CRVRobotType)[0]
     target_region = state.get_objects(TargetRegionType)[0]
 
@@ -433,16 +405,12 @@ def test_motion2d_real_vlm_initial_state():
 
 @real_vlm
 def test_motion2d_real_vlm_at_target():
-    """Query a real VLM when the robot is positioned inside the target
-    region."""
+    """Query a real VLM when the robot is positioned inside the target region."""
     env, gt_models, perception_models = _setup_real_vlm_test(
         "kinder/Motion2D-p2-v0", num_passages=2
     )
     obs, _ = env.reset(seed=123)
     state = gt_models.observation_to_state(obs)
-
-    from kinder.envs.kinematic2d.motion2d import TargetRegionType
-    from kinder.envs.kinematic2d.object_types import CRVRobotType
 
     robot = state.get_objects(CRVRobotType)[0]
     target_region = state.get_objects(TargetRegionType)[0]
@@ -450,11 +418,13 @@ def test_motion2d_real_vlm_at_target():
     # Move robot to the centre of the target region.
     state_at_target = state.copy()
     state_at_target.set(
-        robot, "x",
+        robot,
+        "x",
         state.get(target_region, "x") + state.get(target_region, "width") / 2,
     )
     state_at_target.set(
-        robot, "y",
+        robot,
+        "y",
         state.get(target_region, "y") + state.get(target_region, "height") / 2,
     )
 
@@ -476,9 +446,8 @@ def test_motion2d_real_vlm_at_target():
 
 @real_vlm
 def test_motion2d_real_vlm_query_returns_parseable_response():
-    """Verify that the raw VLM response is parseable (every candidate
-    atom gets a True/False label) without asserting correctness of each
-    atom."""
+    """Verify that the raw VLM response is parseable (every candidate atom gets a
+    True/False label) without asserting correctness of each atom."""
     env = kinder.make("kinder/Motion2D-p2-v0", render_mode="rgb_array")
     obs, _ = env.reset(seed=123)
 
@@ -486,9 +455,6 @@ def test_motion2d_real_vlm_query_returns_parseable_response():
         env.observation_space, env.action_space, num_passages=2
     )
     state = gt_models.observation_to_state(obs)
-
-    from kinder.envs.kinematic2d.motion2d import RectangleType, TargetRegionType
-    from kinder.envs.kinematic2d.object_types import CRVRobotType
 
     robot = state.get_objects(CRVRobotType)[0]
     target_region = state.get_objects(TargetRegionType)[0]
@@ -513,8 +479,6 @@ def test_motion2d_real_vlm_query_returns_parseable_response():
                 candidate_atoms.append(GroundAtom(NotAtPassage, [robot, obs1, obs2]))
 
     # Render the scene.
-    from kinder.envs.kinematic2d.motion2d import ObjectCentricMotion2DEnv
-
     sim = ObjectCentricMotion2DEnv(num_passages=2)
     sim.reset(options={"init_state": state.copy()})
     rendered = sim.render()
@@ -525,8 +489,11 @@ def test_motion2d_real_vlm_query_returns_parseable_response():
         vlm, rendered, candidate_atoms, _PREDICATE_DESCRIPTIONS
     )
 
-    logging.info("VLM returned %d true atoms out of %d candidates",
-                 len(true_atoms), len(candidate_atoms))
+    logging.info(
+        "VLM returned %d true atoms out of %d candidates",
+        len(true_atoms),
+        len(candidate_atoms),
+    )
     for atom in true_atoms:
         logging.info("  TRUE: %s", atom)
 
@@ -538,8 +505,8 @@ def test_motion2d_real_vlm_query_returns_parseable_response():
     # AtTgt and NotAtTgt are mutually exclusive — at most one should be true.
     at_tgt = GroundAtom(AtTgt, [robot, target_region])
     not_at_tgt = GroundAtom(NotAtTgt, [robot, target_region])
-    assert not (at_tgt in true_atoms and not_at_tgt in true_atoms), (
-        "AtTgt and NotAtTgt should be mutually exclusive"
-    )
+    assert not (
+        at_tgt in true_atoms and not_at_tgt in true_atoms
+    ), "AtTgt and NotAtTgt should be mutually exclusive"
 
     env.close()

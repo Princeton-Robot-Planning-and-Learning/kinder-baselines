@@ -1,8 +1,7 @@
-"""Perception-based bilevel planning models for the stick button 2D
-environment.
+"""Perception-based bilevel planning models for the stick button 2D environment.
 
-The state_abstractor queries a VLM with a rendered image instead of
-using programmatic geometric/color checks.
+The state_abstractor queries a VLM with a rendered image instead of using programmatic
+geometric/color checks.
 """
 
 import numpy as np
@@ -44,9 +43,7 @@ _PREDICATE_DESCRIPTIONS: dict[str, str] = {
         "The robot (the multi-part mechanism at the top) is currently "
         "holding/grasping the stick (a thin rectangle)."
     ),
-    "HandEmpty": (
-        "The robot is NOT holding anything — its gripper is empty."
-    ),
+    "HandEmpty": ("The robot is NOT holding anything — its gripper is empty."),
     "Pressed": (
         "The specified button (circle) has been pressed. A pressed button "
         "appears in a different color than an unpressed one."
@@ -60,8 +57,7 @@ _PREDICATE_DESCRIPTIONS: dict[str, str] = {
         "with the specified button (circle)."
     ),
     "AboveNoButton": (
-        "Neither the robot nor the stick is currently positioned above "
-        "any button."
+        "Neither the robot nor the stick is currently positioned above " "any button."
     ),
 }
 
@@ -72,8 +68,7 @@ def create_perception_planning_models(
     num_buttons: int,
     vlm: PretrainedLargeModel | None = None,
 ) -> SesameModels:
-    """Create the env models for stick button 2D with VLM-based state
-    abstraction."""
+    """Create the env models for stick button 2D with VLM-based state abstraction."""
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, CRVRobotActionSpace)
 
@@ -81,8 +76,7 @@ def create_perception_planning_models(
 
     # Convert observations into states.
     def observation_to_state(o: NDArray[np.float32]) -> ObjectCentricState:
-        """Convert the vectors back into (hashable) object-centric
-        states."""
+        """Convert the vectors back into (hashable) object-centric states."""
         return observation_space.devectorize(o)
 
     # Create the transition function.
@@ -119,8 +113,7 @@ def create_perception_planning_models(
 
     # State abstractor: queries the VLM with a rendered image.
     def state_abstractor(x: ObjectCentricState) -> RelationalAbstractState:
-        """Get the abstract state by querying the VLM with a rendered
-        image."""
+        """Get the abstract state by querying the VLM with a rendered image."""
         robot = x.get_objects(CRVRobotType)[0]
         stick = x.get_objects(RectangleType)[0]
         buttons = x.get_objects(CircleType)

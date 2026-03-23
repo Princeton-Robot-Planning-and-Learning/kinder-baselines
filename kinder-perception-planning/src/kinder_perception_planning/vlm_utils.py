@@ -1,7 +1,7 @@
 """VLM utilities for predicate grounding.
 
-Renders environment states as images and queries a vision-language model
-to determine which ground atoms (predicates) are true.
+Renders environment states as images and queries a vision-language model to determine
+which ground atoms (predicates) are true.
 """
 
 import logging
@@ -12,8 +12,7 @@ import numpy as np
 import PIL.Image
 from numpy.typing import NDArray
 from prpl_llm_utils.cache import FilePretrainedLargeModelCache
-from prpl_llm_utils.models import PretrainedLargeModel
-from prpl_llm_utils.models import OpenAIModel  # noqa: F401
+from prpl_llm_utils.models import OpenAIModel, PretrainedLargeModel  # noqa: F401
 from relational_structs import GroundAtom
 
 

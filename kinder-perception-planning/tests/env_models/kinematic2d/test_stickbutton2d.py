@@ -9,15 +9,14 @@ import tempfile
 from pathlib import Path
 
 import kinder
+from kinder.envs.kinematic2d.object_types import CircleType, CRVRobotType, RectangleType
+from kinder_bilevel_planning.env_models.kinematic2d.stickbutton2d import (
+    create_bilevel_planning_models as create_gt_models,)
 from prpl_llm_utils.cache import FilePretrainedLargeModelCache
 from prpl_llm_utils.models import OrderedResponseModel
 from prpl_llm_utils.structs import Response
 from relational_structs import GroundAtom, Object, ObjectCentricState, Predicate
 
-from kinder.envs.kinematic2d.object_types import CircleType, CRVRobotType, RectangleType
-from kinder_bilevel_planning.env_models.kinematic2d.stickbutton2d import (
-    create_bilevel_planning_models as create_gt_models,
-)
 from kinder_perception_planning.env_models.kinematic2d.stickbutton2d import (
     _PREDICATE_DESCRIPTIONS,
     create_perception_planning_models,
@@ -43,8 +42,8 @@ def _make_vlm_response_for_atoms(
 
 
 def _build_candidate_atoms_for_state(state: ObjectCentricState, env_models):
-    """Reconstruct the same candidate atom list that the perception
-    state_abstractor would build."""
+    """Reconstruct the same candidate atom list that the perception state_abstractor
+    would build."""
     pred_name_to_pred = {p.name: p for p in env_models.predicates}
     Grasped = pred_name_to_pred["Grasped"]
     HandEmpty = pred_name_to_pred["HandEmpty"]
@@ -73,15 +72,13 @@ def _create_oracle_vlm(
     perception_models,
     states: list[ObjectCentricState],
 ) -> OrderedResponseModel:
-    """Create an OrderedResponseModel that returns ground-truth
-    responses for each state."""
+    """Create an OrderedResponseModel that returns ground-truth responses for each
+    state."""
     responses = []
     for state in states:
         gt_abstract = gt_models.state_abstractor(state)
         candidate_atoms = _build_candidate_atoms_for_state(state, perception_models)
-        response_text = _make_vlm_response_for_atoms(
-            candidate_atoms, gt_abstract.atoms
-        )
+        response_text = _make_vlm_response_for_atoms(candidate_atoms, gt_abstract.atoms)
         responses.append(Response(response_text, metadata={}))
     cache_dir = Path(tempfile.mkdtemp())
     cache = FilePretrainedLargeModelCache(cache_dir)
@@ -111,14 +108,12 @@ def _prime_mock_vlm(mock_vlm, gt_models, perception_models, states):
 
 
 def test_stickbutton2d_vlm_state_abstractor_initial():
-    """Test VLM state abstractor on the initial state (hand empty, above
-    no button, nothing pressed)."""
+    """Test VLM state abstractor on the initial state (hand empty, above no button,
+    nothing pressed)."""
     env = kinder.make("kinder/StickButton2D-b2-v0", render_mode="rgb_array")
     obs, _ = env.reset(seed=123)
 
-    gt_models = create_gt_models(
-        env.observation_space, env.action_space, num_buttons=2
-    )
+    gt_models = create_gt_models(env.observation_space, env.action_space, num_buttons=2)
     state = gt_models.observation_to_state(obs)
     gt_abstract = gt_models.state_abstractor(state)
 
@@ -145,9 +140,7 @@ def test_stickbutton2d_vlm_state_abstractor_grasped():
     env = kinder.make("kinder/StickButton2D-b1-v0", render_mode="rgb_array")
     obs, _ = env.reset(seed=123)
 
-    gt_models = create_gt_models(
-        env.observation_space, env.action_space, num_buttons=1
-    )
+    gt_models = create_gt_models(env.observation_space, env.action_space, num_buttons=1)
     state = gt_models.observation_to_state(obs)
 
     robot = state.get_objects(CRVRobotType)[0]
@@ -185,9 +178,7 @@ def test_stickbutton2d_vlm_state_abstractor_button_pressed():
     env = kinder.make("kinder/StickButton2D-b1-v0", render_mode="rgb_array")
     obs, _ = env.reset(seed=123)
 
-    gt_models = create_gt_models(
-        env.observation_space, env.action_space, num_buttons=1
-    )
+    gt_models = create_gt_models(env.observation_space, env.action_space, num_buttons=1)
     state = gt_models.observation_to_state(obs)
 
     buttons = state.get_objects(CircleType)
@@ -220,9 +211,7 @@ def test_stickbutton2d_vlm_state_abstractor_robot_above_button():
     env = kinder.make("kinder/StickButton2D-b1-v0", render_mode="rgb_array")
     obs, _ = env.reset(seed=123)
 
-    gt_models = create_gt_models(
-        env.observation_space, env.action_space, num_buttons=1
-    )
+    gt_models = create_gt_models(env.observation_space, env.action_space, num_buttons=1)
     state = gt_models.observation_to_state(obs)
 
     robot = state.get_objects(CRVRobotType)[0]
@@ -246,9 +235,7 @@ def test_stickbutton2d_vlm_state_abstractor_robot_above_button():
     RobotAboveButton = pred_name_to_pred["RobotAboveButton"]
     assert GroundAtom(RobotAboveButton, [robot, button0]) in vlm_abstract.atoms
     # AboveNoButton should NOT be present.
-    assert not any(
-        a.predicate.name == "AboveNoButton" for a in vlm_abstract.atoms
-    )
+    assert not any(a.predicate.name == "AboveNoButton" for a in vlm_abstract.atoms)
 
     env.close()
 
@@ -258,9 +245,7 @@ def test_stickbutton2d_vlm_state_abstractor_stick_above_button():
     env = kinder.make("kinder/StickButton2D-b1-v0", render_mode="rgb_array")
     obs, _ = env.reset(seed=123)
 
-    gt_models = create_gt_models(
-        env.observation_space, env.action_space, num_buttons=1
-    )
+    gt_models = create_gt_models(env.observation_space, env.action_space, num_buttons=1)
     state = gt_models.observation_to_state(obs)
 
     stick = state.get_objects(RectangleType)[0]
@@ -369,7 +354,7 @@ def test_stickbutton2d_goal_deriver():
     env = kinder.make("kinder/StickButton2D-b2-v0", render_mode="rgb_array")
     obs, _ = env.reset(seed=123)
 
-    mock_vlm, perception_models = _make_mock_vlm_and_models(env, num_buttons=2)
+    _, perception_models = _make_mock_vlm_and_models(env, num_buttons=2)
     state = perception_models.observation_to_state(obs)
     goal = perception_models.goal_deriver(state)
 
@@ -386,7 +371,7 @@ def test_stickbutton2d_observation_to_state():
     env = kinder.make("kinder/StickButton2D-b1-v0", render_mode="rgb_array")
     obs, _ = env.reset(seed=123)
 
-    mock_vlm, perception_models = _make_mock_vlm_and_models(env, num_buttons=1)
+    _, perception_models = _make_mock_vlm_and_models(env, num_buttons=1)
     state = perception_models.observation_to_state(obs)
     assert isinstance(hash(state), int)
     assert perception_models.state_space.contains(state)
@@ -395,14 +380,12 @@ def test_stickbutton2d_observation_to_state():
 
 
 def test_stickbutton2d_vlm_multiple_buttons():
-    """Test VLM state abstractor with multiple buttons (b2) to ensure
-    per-button atoms are handled correctly."""
+    """Test VLM state abstractor with multiple buttons (b2) to ensure per-button atoms
+    are handled correctly."""
     env = kinder.make("kinder/StickButton2D-b2-v0", render_mode="rgb_array")
     obs, _ = env.reset(seed=123)
 
-    gt_models = create_gt_models(
-        env.observation_space, env.action_space, num_buttons=2
-    )
+    gt_models = create_gt_models(env.observation_space, env.action_space, num_buttons=2)
     state = gt_models.observation_to_state(obs)
     gt_abstract = gt_models.state_abstractor(state)
 

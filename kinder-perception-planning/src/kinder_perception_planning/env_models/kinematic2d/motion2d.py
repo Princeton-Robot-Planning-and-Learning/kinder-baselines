@@ -1,7 +1,7 @@
 """Perception-based bilevel planning models for the motion 2D environment.
 
-The state_abstractor queries a VLM with a rendered image instead of
-using programmatic geometric checks.
+The state_abstractor queries a VLM with a rendered image instead of using programmatic
+geometric checks.
 """
 
 import numpy as np
@@ -56,8 +56,7 @@ _PREDICATE_DESCRIPTIONS: dict[str, str] = {
         "two specified rectangular obstacles."
     ),
     "NotAtAnyPassage": (
-        "The robot is not positioned at any passage between any pair "
-        "of obstacles."
+        "The robot is not positioned at any passage between any pair " "of obstacles."
     ),
 }
 
@@ -68,8 +67,7 @@ def create_perception_planning_models(
     num_passages: int = 2,
     vlm: PretrainedLargeModel | None = None,
 ) -> SesameModels:
-    """Create the env models for motion 2D with VLM-based state
-    abstraction."""
+    """Create the env models for motion 2D with VLM-based state abstraction."""
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, CRVRobotActionSpace)
 
@@ -77,8 +75,7 @@ def create_perception_planning_models(
 
     # Convert observations into states.
     def observation_to_state(o: NDArray[np.float32]) -> ObjectCentricState:
-        """Convert the vectors back into (hashable) object-centric
-        states."""
+        """Convert the vectors back into (hashable) object-centric states."""
         return observation_space.devectorize(o)
 
     # Create the transition function.
@@ -110,8 +107,7 @@ def create_perception_planning_models(
 
     # State abstractor: queries the VLM with a rendered image.
     def state_abstractor(x: ObjectCentricState) -> RelationalAbstractState:
-        """Get the abstract state by querying the VLM with a rendered
-        image."""
+        """Get the abstract state by querying the VLM with a rendered image."""
         robot = x.get_objects(CRVRobotType)[0]
         target_region = x.get_objects(TargetRegionType)[0]
         obstacles = x.get_objects(RectangleType)
@@ -125,9 +121,7 @@ def create_perception_planning_models(
         for obs1 in obstacles:
             for obs2 in obstacles:
                 if obs1 != obs2:
-                    candidate_atoms.append(
-                        GroundAtom(AtPassage, [robot, obs1, obs2])
-                    )
+                    candidate_atoms.append(GroundAtom(AtPassage, [robot, obs1, obs2]))
                     candidate_atoms.append(
                         GroundAtom(NotAtPassage, [robot, obs1, obs2])
                     )
