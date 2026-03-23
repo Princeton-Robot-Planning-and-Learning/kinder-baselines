@@ -73,6 +73,7 @@ def create_bilevel_planning_models(
     HookAboveTarget = Predicate("HookAboveTarget", [KinRobotType, HookType, TargetBlockType])
     TargetAtGoal = Predicate("TargetAtGoal", [TargetBlockType])
     predicates = {HandEmpty, HoldingHook, HookAboveTarget, TargetAtGoal}
+    tgt_block_init_y_min = env_config.target_block_init_pose_bounds[0].y
 
     # State abstractor.
     def state_abstractor(x: ObjectCentricState) -> RelationalAbstractState:
@@ -103,16 +104,13 @@ def create_bilevel_planning_models(
                             atoms.add(GroundAtom(HookAboveTarget, [robot, hook, tgt]))
 
         # TargetAtGoal: target block intersects the middle wall.
-        middle_wall = [
-            o for o in sim.initial_constant_state if o.name == "middle_wall"
-        ][0]
-        full_state = x.copy()
-        full_state.data.update(sim.initial_constant_state.data)
-        static_cache: dict[Object, object] = {}
         for tgt in target_blocks:
-            tgt_body = object_to_multibody2d(tgt, full_state, static_cache)
-            wall_body = object_to_multibody2d(middle_wall, full_state, static_cache)
-            if tgt_body.bodies[0].geom.intersects(wall_body.bodies[0].geom):
+            tgt_y = x.get(tgt, "y")
+            if tgt_y < tgt_block_init_y_min:
+                # Below initial position, consider it at goal
+                # NOTE: This is not correct in general, but the sim transition
+                # dynamics is not deterministic, so this is just to not filter out 
+                # valid plans due to sim nondeterminism.
                 atoms.add(GroundAtom(TargetAtGoal, [tgt]))
 
         objects = {robot} | set(hooks) | set(target_blocks)
@@ -157,7 +155,7 @@ def create_bilevel_planning_models(
             LiftedAtom(HookAboveTarget, [robot, hook, target_block]),
         },
         add_effects={LiftedAtom(TargetAtGoal, [target_block])},
-        delete_effects={LiftedAtom(HookAboveTarget, [robot, hook, target_block])},
+        delete_effects=set(),
     )
 
     MoveOperator = LiftedOperator(

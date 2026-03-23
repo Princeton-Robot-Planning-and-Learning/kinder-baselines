@@ -353,13 +353,12 @@ def test_dynpushpullhook2d_bilevel_planning_agent():
     state = env_models.observation_to_state(init_obs)
     abstract = env_models.state_abstractor(state)
     obj = {o.name: o for o in abstract.objects}
-    robot = obj["robot"]
     hook = obj["hook"]
     target_block = obj["target_block"]
 
     new_state = state.copy()
     new_state.set(target_block, "x", state.get(target_block, "x") + 2.3)
-    new_state.set(target_block, "y", state.get(target_block, "y") - 0.5)
+    new_state.set(target_block, "y", state.get(target_block, "y") - 0.4)
     new_state.set(hook, "x", state.get(hook, "x") - 0.2)
     obs, info = env.reset(options={"init_state": new_state})
 
