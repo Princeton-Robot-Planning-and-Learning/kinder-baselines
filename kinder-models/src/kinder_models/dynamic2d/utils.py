@@ -127,7 +127,7 @@ class Dynamic2dRobotController(GroundParameterizedController, abc.ABC):
         state: ObjectCentricState,
         waypoints: list[tuple[SE2Pose, float]],
         gripper_during_plan: float,
-    ) -> list[NDArray[np.float64]]:
+    ) -> list[NDArray[np.float32]]:
         """Convert waypoints to an action plan.
 
         Uses ``run_motion_planning_for_kin_robot`` (BiRRT on SE2) for
@@ -150,7 +150,7 @@ class Dynamic2dRobotController(GroundParameterizedController, abc.ABC):
         if self._init_constant_state is not None:
             full_state.data.update(self._init_constant_state.data)
 
-        plan: list[NDArray[np.float64]] = []
+        plan: list[NDArray[np.float32]] = []
         for (start_pose, start_arm), (end_pose, end_arm) in zip(
             waypoints[:-1], waypoints[1:]
         ):
@@ -207,7 +207,7 @@ class Dynamic2dRobotController(GroundParameterizedController, abc.ABC):
 
                 action = np.array(
                     [dx, dy, dtheta, darm, gripper_during_plan],
-                    dtype=np.float64,
+                    dtype=np.float32,
                 )
                 plan.append(action)
 
