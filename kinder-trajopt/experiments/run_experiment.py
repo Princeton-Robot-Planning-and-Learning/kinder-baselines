@@ -57,6 +57,8 @@ def _main(cfg: DictConfig) -> None:
         num_control_points=cfg.num_control_points,
         warm_start=cfg.warm_start,
         replan_interval=cfg.env.replan_interval,
+        wm_checkpoint="/home/yixuan/prbench_dir/kinder-baselines/kinder-mbrl/output/wm.pt",           # new
+        term_checkpoint="/home/yixuan/prbench_dir/kinder-baselines/kinder-mbrl/output/term.pt",       # new
     )
 
     # Evaluate.
@@ -113,6 +115,7 @@ def _run_single_episode_evaluation(
         obs, rew, done, truncated, info = env.step(action)
         reward = float(rew)
         total_reward += reward
+        print('obs', obs)
         assert not truncated
         with timer() as result:
             agent.update(obs, reward, done, info)

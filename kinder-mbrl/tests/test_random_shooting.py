@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from kinder_mbrl.models import MLPDynamics
-from kinder_mbrl.planning import state_cost, wm_get_next_state
+from kinder_mbrl.models import MLPDynamics, TerminationClassifier
+from kinder_mbrl.planning import state_cost, wm_get_next_state, wm_get_termination_prob
 
 
 @pytest.fixture(name="model_and_norms")
@@ -25,6 +25,39 @@ def model_and_norms_fixture():
         "de_std": np.ones(env_dim, dtype=np.float32),
     }
     return model, norms
+
+
+@pytest.fixture(name="term_model_and_norms")
+def term_model_and_norms_fixture():
+    """Return a small TerminationClassifier and identity-like norms for testing."""
+    state_dim = 12
+    model = TerminationClassifier(state_dim)
+    model.eval()
+    norms = {
+        "s_mean": np.zeros(state_dim, dtype=np.float32),
+        "s_std": np.ones(state_dim, dtype=np.float32),
+    }
+    return model, norms
+
+
+def test_wm_get_termination_prob_range(term_model_and_norms):
+    """wm_get_termination_prob should return a float in [0, 1]."""
+    model, norms = term_model_and_norms
+    state_dim = norms["s_mean"].shape[0]
+    next_state = np.zeros(state_dim, dtype=np.float32)
+    prob = wm_get_termination_prob(next_state, model, norms)
+    assert isinstance(prob, float)
+    assert 0.0 <= prob <= 1.0
+
+
+def test_wm_get_termination_prob_does_not_mutate_input(term_model_and_norms):
+    """wm_get_termination_prob should not modify the input next_state array."""
+    model, norms = term_model_and_norms
+    state_dim = norms["s_mean"].shape[0]
+    next_state = np.ones(state_dim, dtype=np.float32)
+    next_state_copy = next_state.copy()
+    wm_get_termination_prob(next_state, model, norms)
+    np.testing.assert_array_equal(next_state, next_state_copy)
 
 
 def test_state_cost_at_goal():

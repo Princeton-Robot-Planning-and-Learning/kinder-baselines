@@ -70,6 +70,48 @@ class MLPDynamics(nn.Module):
         return self.robot_head(features), self.env_head(features)
 
 
+class TerminationClassifier(nn.Module):
+    """Small MLP that predicts termination probability from a next state.
+
+    Takes the normalized next state as input and outputs a raw logit. Apply
+    sigmoid to obtain a probability in [0, 1]. Use BCEWithLogitsLoss during
+    training for numerical stability.
+
+    At inference the predicted next state from MLPDynamics is normalized with
+    the same state normalizer used during dynamics training and passed to this
+    model. The output probability can be used as a soft reward signal:
+        reward = -1.0 + term_prob
+    or thresholded to obtain a hard terminated flag.
+    """
+
+    def __init__(self, state_dim: int, hidden_dim: int = 64):
+        """Initialize the termination classifier.
+
+        Args:
+            state_dim: Dimensionality of the full state vector (robot + env).
+            hidden_dim: Width of each hidden layer.
+        """
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(self, next_state: torch.Tensor) -> torch.Tensor:
+        """Predict the termination logit for a batch of next states.
+
+        Args:
+            next_state: Normalized next-state tensor of shape (B, state_dim).
+
+        Returns:
+            Raw logit tensor of shape (B, 1). Apply sigmoid to get probability.
+        """
+        return self.net(next_state)
+
+
 class Normalizer:
     """Per-feature zero-mean unit-variance normalizer.
 

@@ -1,10 +1,10 @@
-"""Tests for MLPDynamics and Normalizer."""
+"""Tests for MLPDynamics, TerminationClassifier, and Normalizer."""
 
 import numpy as np
 import pytest
 import torch
 
-from kinder_mbrl.models import MLPDynamics, Normalizer
+from kinder_mbrl.models import MLPDynamics, Normalizer, TerminationClassifier
 
 
 @pytest.fixture(name="dims")
@@ -38,6 +38,40 @@ def test_mlp_dynamics_deterministic(dims):
         dr2, de2 = model(state, action)
     assert torch.allclose(dr1, dr2)
     assert torch.allclose(de1, de2)
+
+
+def test_termination_classifier_output_shape(dims):
+    """Forward pass produces a logit tensor of shape (B, 1)."""
+    state_dim, _, _, _ = dims
+    model = TerminationClassifier(state_dim)
+    batch_size = 8
+    next_state = torch.zeros(batch_size, state_dim)
+    logits = model(next_state)
+    assert logits.shape == (batch_size, 1)
+
+
+def test_termination_classifier_probability_range(dims):
+    """Sigmoid of the logit should be in [0, 1] for any input."""
+    state_dim, _, _, _ = dims
+    model = TerminationClassifier(state_dim)
+    model.eval()
+    next_state = torch.randn(16, state_dim)
+    with torch.no_grad():
+        probs = torch.sigmoid(model(next_state))
+    assert probs.min() >= 0.0
+    assert probs.max() <= 1.0
+
+
+def test_termination_classifier_deterministic(dims):
+    """Same input always produces the same logit."""
+    state_dim, _, _, _ = dims
+    model = TerminationClassifier(state_dim)
+    model.eval()
+    next_state = torch.randn(4, state_dim)
+    with torch.no_grad():
+        out1 = model(next_state)
+        out2 = model(next_state)
+    assert torch.allclose(out1, out2)
 
 
 def test_normalizer_round_trip():

@@ -1,7 +1,8 @@
 """Random-shooting MPC planning utilities.
 
-Provides helpers for loading a trained world model and performing one-step next-state
-prediction, used by the random-shooting MPC experiment script.
+Provides helpers for loading a trained world model and termination classifier,
+and performing one-step next-state prediction and termination probability
+estimation, used by the random-shooting MPC experiment script.
 """
 
 from typing import Tuple
@@ -9,7 +10,7 @@ from typing import Tuple
 import numpy as np
 import torch
 
-from kinder_mbrl.models.mlp_dynamics import MLPDynamics
+from kinder_mbrl.models.mlp_dynamics import MLPDynamics, TerminationClassifier
 
 
 def state_cost(state: np.ndarray) -> float:
@@ -59,6 +60,60 @@ def load_world_model(checkpoint: str) -> Tuple[MLPDynamics, dict]:
         "de_std": ckpt["de_norm"]["std"],
     }
     return model, norms
+
+
+def load_termination_classifier(checkpoint: str) -> Tuple[TerminationClassifier, dict]:
+    """Load a trained TerminationClassifier and its state normalizer from a checkpoint.
+
+    Args:
+        checkpoint: Path to the .pt file saved by train_termination_classifier().
+
+    Returns:
+        A tuple (model, norms) where model is the TerminationClassifier instance
+        in eval mode and norms is a dict containing the state mean/std arrays used
+        to normalize the next state before passing it to the model.
+    """
+    ckpt = torch.load(checkpoint, weights_only=False)
+    model = TerminationClassifier(ckpt["state_dim"])
+    model.load_state_dict(ckpt["model_state"])
+    model.eval()
+    norms = {
+        "s_mean": ckpt["s_norm"]["mean"],
+        "s_std": ckpt["s_norm"]["std"],
+    }
+    return model, norms
+
+
+def wm_get_termination_prob(
+    next_state: np.ndarray,
+    model: TerminationClassifier,
+    norms: dict,
+) -> float:
+    """Estimate the termination probability for a predicted next state.
+
+    Normalizes the next state using the state normalizer stored in the
+    termination classifier checkpoint, runs a forward pass, and applies sigmoid
+    to convert the raw logit to a probability.
+
+    The result can be used as a soft reward signal during planning:
+        reward = -1.0 + term_prob
+    or thresholded to obtain a hard terminated flag:
+        terminated = term_prob > threshold
+
+    Args:
+        next_state: Predicted next full state vector (robot + env concatenated),
+            in original (denormalized) scale.
+        model: Trained TerminationClassifier instance.
+        norms: Normalizer statistics dict returned by load_termination_classifier.
+
+    Returns:
+        Termination probability in [0, 1].
+    """
+    ns_norm = (next_state - norms["s_mean"]) / norms["s_std"]
+    ns_t = torch.tensor(ns_norm, dtype=torch.float32).unsqueeze(0)
+    with torch.no_grad():
+        logit = model(ns_t).squeeze()
+    return float(torch.sigmoid(logit).item())
 
 
 def wm_get_next_state(

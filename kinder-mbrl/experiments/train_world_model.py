@@ -1,15 +1,19 @@
-"""Train and evaluate a two-head MLP delta dynamics world model.
+"""Train and evaluate a two-head MLP delta dynamics world model and termination classifier.
 
-Trains two independent output heads on a shared trunk:
+Dynamics model — trains two independent output heads on a shared trunk:
     delta_robot, delta_env = f(s_t, a_t)
     s_{t+1} = s_t + concat(delta_robot, delta_env)
 
-Each head is trained with its own MSE loss and its own per-feature normalizer,
-allowing robot-state and env-state dynamics to be learned independently.
+Termination classifier — trained separately on ground-truth next states:
+    term_prob = sigmoid(g(s_{t+1}))
+    The last transition of each demo episode is labeled terminated=True.
 
 Usage:
     python experiments/train_world_model.py --mode train
+    python experiments/train_world_model.py --mode train_term
     python experiments/train_world_model.py --mode eval --checkpoint output/wm.pt
+    python experiments/train_world_model.py --mode eval \\
+        --checkpoint output/wm.pt --term_checkpoint output/term.pt
 """
 
 import argparse
@@ -23,7 +27,8 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from kinder_mbrl.data_utils import load_transitions
-from kinder_mbrl.models import MLPDynamics, Normalizer
+from kinder_mbrl.models import MLPDynamics, Normalizer, TerminationClassifier
+from kinder_mbrl.planning import load_termination_classifier, wm_get_termination_prob
 
 DEFAULT_HDF5 = (
     "/home/yixuan/prbench_dir/prpl-mono/prbench-models/datasets/motion2d_p0.hdf5"
@@ -52,7 +57,7 @@ def train(
         batch_size: Number of transitions per mini-batch.
         lr: Adam learning rate.
     """
-    states, actions, deltas, robot_dim = load_transitions(hdf5_path)
+    states, actions, deltas, robot_dim, _ = load_transitions(hdf5_path)
     env_dim = states.shape[1] - robot_dim
     robot_deltas = deltas[:, :robot_dim]
     env_deltas = deltas[:, robot_dim:]
@@ -113,19 +118,31 @@ def train(
     print(f"Checkpoint saved → {ckpt_path}")
 
 
-def eval_rollout(hdf5_path: str, checkpoint: str, num_episodes: int = 5) -> None:
+def eval_rollout(
+    hdf5_path: str,
+    checkpoint: str,
+    num_episodes: int = 5,
+    term_checkpoint: str = "",
+) -> None:
     """Evaluate the world model via open-loop multi-step rollouts.
 
     For each episode, starts from the ground-truth initial state and rolls out
     using only model predictions (no simulator corrections). Reports the L2
     error between the predicted and ground-truth full state at each step.
 
+    When term_checkpoint is provided the termination classifier is also
+    evaluated: the predicted termination probability is reported at the final
+    step of each episode (where terminated=True) and averaged over all
+    non-terminal steps. A well-trained classifier should produce a high
+    probability at the terminal step and a low probability elsewhere.
+
     Args:
         hdf5_path: Path to the HDF5 demo file used for evaluation.
-        checkpoint: Path to the .pt checkpoint saved by train().
+        checkpoint: Path to the wm.pt checkpoint saved by train().
         num_episodes: Number of episodes to evaluate.
+        term_checkpoint: Optional path to the term.pt checkpoint. When given,
+            the termination classifier is evaluated alongside the dynamics.
     """
-
     ckpt = torch.load(checkpoint, weights_only=False)
     model = MLPDynamics(
         ckpt["state_dim"], ckpt["action_dim"], ckpt["robot_dim"], ckpt["env_dim"]
@@ -138,7 +155,14 @@ def eval_rollout(hdf5_path: str, checkpoint: str, num_episodes: int = 5) -> None
     dr_mean, dr_std = ckpt["dr_norm"]["mean"], ckpt["dr_norm"]["std"]
     de_mean, de_std = ckpt["de_norm"]["mean"], ckpt["de_norm"]["std"]
 
-    all_errors = []
+    term_model, term_norms = None, None
+    if term_checkpoint:
+        term_model, term_norms = load_termination_classifier(term_checkpoint)
+
+    all_errors: list[float] = []
+    all_terminal_probs: list[float] = []
+    all_nonterminal_probs: list[float] = []
+
     with h5py.File(hdf5_path, "r") as file_handle:
         for key in sorted(file_handle["data"].keys())[:num_episodes]:
             ep = file_handle["data"][key]
@@ -147,8 +171,11 @@ def eval_rollout(hdf5_path: str, checkpoint: str, num_episodes: int = 5) -> None
             acts = ep["actions"][:]
 
             pred_state = np.concatenate([robot[0], env[0]])
-            ep_errors = []
-            for t_idx in range(len(robot) - 1):
+            ep_errors: list[float] = []
+            ep_term_probs: list[float] = []
+            n_steps = len(robot) - 1
+
+            for t_idx in range(n_steps):
                 s_in = torch.tensor((pred_state - s_mean) / s_std, dtype=torch.float32)
                 a_in = torch.tensor((acts[t_idx] - a_mean) / a_std, dtype=torch.float32)
                 with torch.no_grad():
@@ -159,9 +186,25 @@ def eval_rollout(hdf5_path: str, checkpoint: str, num_episodes: int = 5) -> None
                 gt_state = np.concatenate([robot[t_idx + 1], env[t_idx + 1]])
                 ep_errors.append(np.linalg.norm(pred_state - gt_state))
 
+                if term_model is not None:
+                    prob = wm_get_termination_prob(pred_state, term_model, term_norms)
+                    ep_term_probs.append(prob)
+
+            term_line = ""
+            if term_model is not None and ep_term_probs:
+                terminal_prob = ep_term_probs[-1]
+                nonterminal_mean = float(np.mean(ep_term_probs[:-1])) if n_steps > 1 else 0.0
+                all_terminal_probs.append(terminal_prob)
+                all_nonterminal_probs.extend(ep_term_probs[:-1])
+                term_line = (
+                    f"  term_prob(final)={terminal_prob:.3f}"
+                    f"  term_prob(non-term mean)={nonterminal_mean:.3f}"
+                )
+
             print(
                 f"  {key}: mean_err={np.mean(ep_errors):.4f}  "
                 f"final_err={ep_errors[-1]:.4f}  steps={len(ep_errors)}"
+                + term_line
             )
             all_errors.extend(ep_errors)
 
@@ -169,15 +212,110 @@ def eval_rollout(hdf5_path: str, checkpoint: str, num_episodes: int = 5) -> None
         f"\nOverall mean rollout error ({num_episodes} episodes): "
         f"{np.mean(all_errors):.4f}"
     )
+    if term_model is not None and all_terminal_probs:
+        print(
+            f"Termination classifier  —  "
+            f"mean term_prob at terminal step: {np.mean(all_terminal_probs):.3f}  "
+            f"(want ≈ 1.0)  |  "
+            f"mean term_prob at non-terminal steps: {np.mean(all_nonterminal_probs):.3f}  "
+            f"(want ≈ 0.0)"
+        )
+
+
+def train_termination_classifier(
+    hdf5_path: str,
+    output_dir: str,
+    epochs: int = 100,
+    batch_size: int = 512,
+    lr: float = 1e-3,
+) -> None:
+    """Train a TerminationClassifier on ground-truth next states and save the checkpoint.
+
+    Loads transitions from the HDF5 file and labels the last transition of each
+    episode as terminated=True (all others False). Fits a state normalizer, then
+    trains the classifier with binary cross-entropy loss weighted by the inverse
+    class frequency to handle the severe class imbalance typical of sparse-reward
+    goal-reaching tasks. Saves the model weights together with the state
+    normalizer statistics.
+
+    Args:
+        hdf5_path: Path to the HDF5 demo file.
+        output_dir: Directory where the checkpoint (term.pt) will be saved.
+        epochs: Number of full passes over the training data.
+        batch_size: Number of transitions per mini-batch.
+        lr: Adam learning rate.
+    """
+    states, actions, deltas, _, terminated = load_transitions(hdf5_path)
+    next_states = (states + deltas).astype(np.float32)
+
+    num_terminal = terminated.sum()
+    num_nonterminal = (~terminated).sum()
+    print(
+        f"Transitions: {len(states)}  |  "
+        f"terminal={num_terminal}  non-terminal={num_nonterminal}  "
+        f"pos_weight={num_nonterminal / num_terminal:.1f}"
+    )
+
+    s_norm = Normalizer(states)
+    ns_t = torch.tensor(s_norm.normalize(next_states))
+    term_t = torch.tensor(terminated, dtype=torch.float32)
+
+    pos_weight = torch.tensor(num_nonterminal / num_terminal, dtype=torch.float32)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+    loader = DataLoader(
+        TensorDataset(ns_t, term_t), batch_size=batch_size, shuffle=True
+    )
+    model = TerminationClassifier(states.shape[1])
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+
+    for epoch in range(epochs):
+        total = 0.0
+        for ns_b, t_b in loader:
+            logits = model(ns_b).squeeze(-1)
+            loss = criterion(logits, t_b)
+            opt.zero_grad()
+            loss.backward()  # type: ignore
+            opt.step()
+            total += loss.item() * len(ns_b)
+        if (epoch + 1) % 10 == 0:
+            print(f"Epoch {epoch+1:3d}/{epochs}  loss={total/len(ns_t):.6f}")
+
+    os.makedirs(output_dir, exist_ok=True)
+    ckpt_path = Path(output_dir) / "term.pt"
+    torch.save(
+        {
+            "model_state": model.state_dict(),
+            "state_dim": states.shape[1],
+            "s_norm": {"mean": s_norm.mean, "std": s_norm.std},
+        },
+        ckpt_path,
+    )
+    print(f"Checkpoint saved → {ckpt_path}")
 
 
 def main() -> None:
-    """Parse arguments and dispatch to train() or eval_rollout()."""
+    """Parse arguments and dispatch to train(), train_term(), or eval_rollout()."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--hdf5_path", default=DEFAULT_HDF5)
-    parser.add_argument("--mode", choices=["train", "eval"], default="train")
+    parser.add_argument(
+        "--mode",
+        choices=["train", "train_term", "eval"],
+        default="train",
+        help=(
+            "train: train the dynamics world model (wm.pt); "
+            "train_term: train the termination classifier (term.pt); "
+            "eval: open-loop rollout evaluation of the dynamics model."
+        ),
+    )
     parser.add_argument("--output_dir", default="output")
     parser.add_argument("--checkpoint", default="output/wm.pt")
+    parser.add_argument(
+        "--term_checkpoint",
+        default="",
+        help="Path to term.pt (eval mode only). When given, also evaluates the "
+        "termination classifier alongside the dynamics model.",
+    )
     parser.add_argument("--epochs", type=int, default=1000)
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -186,8 +324,17 @@ def main() -> None:
 
     if args.mode == "train":
         train(args.hdf5_path, args.output_dir, args.epochs, args.batch_size, args.lr)
+    elif args.mode == "train_term":
+        train_termination_classifier(
+            args.hdf5_path, args.output_dir, args.epochs, args.batch_size, args.lr
+        )
     else:
-        eval_rollout(args.hdf5_path, args.checkpoint, args.num_eval_episodes)
+        eval_rollout(
+            args.hdf5_path,
+            args.checkpoint,
+            args.num_eval_episodes,
+            args.term_checkpoint,
+        )
 
 
 if __name__ == "__main__":

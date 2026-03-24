@@ -1,7 +1,7 @@
 """TrajOptProblem implementation backed by a KinDER gymnasium env."""
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from gymnasium.spaces import Box
 from prpl_utils.structs import Image
@@ -16,9 +16,12 @@ from prpl_utils.trajopt.trajopt_problem import (
 class KinderTrajOptProblem(TrajOptProblem):
     """Wraps a KinDER env as a TrajOptProblem.
 
-    Uses `get_transition` for dynamics, reward, and termination. Caches
-    reward and termination from each `get_next_state` call so that
-    `get_traj_cost` does not need to re-simulate the trajectory.
+    Uses `get_transition` for dynamics, reward, and termination by default.
+    An optional `transition_fn` can be supplied to replace that call with any
+    callable that accepts (state, action) and returns (next_state, reward,
+    terminated) — for example, a learned world model with a termination
+    classifier. Caches reward and termination from each `get_next_state` call
+    so that `get_traj_cost` does not need to re-simulate the trajectory.
     """
 
     def __init__(
@@ -26,8 +29,17 @@ class KinderTrajOptProblem(TrajOptProblem):
         env: Any,
         initial_state: TrajOptState,
         horizon: int,
+        transition_fn: (
+            Callable[[TrajOptState, TrajOptAction], tuple[TrajOptState, float, bool]]
+            | None
+        ) = None,
     ) -> None:
         self._env = env
+        self._transition_fn = (
+            transition_fn
+            if transition_fn is not None
+            else env.unwrapped.get_transition
+        )
         self._initial_state = initial_state
         self._horizon = horizon
         self._cached_rewards: dict[int, float] = {}
@@ -60,9 +72,7 @@ class KinderTrajOptProblem(TrajOptProblem):
     def get_next_state(
         self, state: TrajOptState, action: TrajOptAction
     ) -> TrajOptState:
-        next_state, reward, terminated = self._env.unwrapped.get_transition(
-            state, action
-        )
+        next_state, reward, terminated = self._transition_fn(state, action)
         step = self._cache_step
         self._cached_rewards[step] = float(reward)
         self._cached_terminated[step] = terminated
