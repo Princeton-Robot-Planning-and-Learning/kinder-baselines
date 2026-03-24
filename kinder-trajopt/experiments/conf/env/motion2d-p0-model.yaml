@@ -1,6 +1,6 @@
 env_id: "kinder/Motion2D-p0-v0"
 max_eval_steps: 200
-replan_interval: 1
+replan_interval: 3
 
 use_checkpoint: True
 checkpoint: "../kinder-mbrl/output/wm_motion2d_p0_ep1000_20260324_140122.pt"
