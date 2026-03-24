@@ -94,10 +94,10 @@ def run_trial(start_x: float, end_x: float, seed: int = 123) -> dict:
             cube_z_values   - List of final z values for all cubes.
     """
     sweep_start = Pose.from_rpy((start_x, 0, 0.04), (-np.pi, 0, -np.pi / 2))
-    sweep_end   = Pose.from_rpy((end_x,   0, 0.02), (-np.pi, 0, -np.pi / 2))
+    sweep_end = Pose.from_rpy((end_x, 0, 0.02), (-np.pi, 0, -np.pi / 2))
 
     with (
-        patch.object(ps_module, "WIPER_SWEEP_TRANSFORM",     sweep_start),
+        patch.object(ps_module, "WIPER_SWEEP_TRANSFORM", sweep_start),
         patch.object(ps_module, "WIPER_SWEEP_TRANSFORM_END", sweep_end),
     ):
         num_cubes = 5
@@ -111,14 +111,14 @@ def run_trial(start_x: float, end_x: float, seed: int = 123) -> dict:
         state = env.observation_space.devectorize(obs)
 
         pybullet_sim = PyBulletSim(state, rendering=False)
-        controllers  = create_lifted_controllers(
+        controllers = create_lifted_controllers(
             env.action_space, pybullet_sim=pybullet_sim
         )
 
         # ── open_drawer ──────────────────────────────────────────────────
         robot = _get_robot(state)
         wiper = state.get_object_from_name("wiper_0")
-        ctrl  = controllers["open_drawer"].ground((robot, wiper))
+        ctrl = controllers["open_drawer"].ground((robot, wiper))
         ctrl.reset(state, np.array([0.7, -np.pi]))
         state, ok = _run_controller(ctrl, env, state, 300, "open_drawer")
         if not ok:
@@ -128,7 +128,7 @@ def run_trial(start_x: float, end_x: float, seed: int = 123) -> dict:
         # ── pick_wiper ───────────────────────────────────────────────────
         robot = _get_robot(state)
         wiper = state.get_object_from_name("wiper_0")
-        ctrl  = controllers["pick_wiper"].ground((robot, wiper))
+        ctrl = controllers["pick_wiper"].ground((robot, wiper))
         ctrl.reset(state, np.array([0.7, -np.pi]))
         state, ok = _run_controller(ctrl, env, state, 300, "pick_wiper")
         if not ok:
@@ -136,35 +136,38 @@ def run_trial(start_x: float, end_x: float, seed: int = 123) -> dict:
             return {"success": False, "cubes_off_table": 0, "cube_z_values": []}
 
         # ── sweep ────────────────────────────────────────────────────────
-        robot  = _get_robot(state)
-        wiper  = state.get_object_from_name("wiper_0")
+        robot = _get_robot(state)
+        wiper = state.get_object_from_name("wiper_0")
         target = state.get_object_from_name("cube_0")
-        ctrl   = controllers["sweep"].ground((robot, wiper, target))
+        ctrl = controllers["sweep"].ground((robot, wiper, target))
         ctrl.reset(state, np.array([0.55, -np.pi]))
         state, ok = _run_controller(ctrl, env, state, 200, "sweep")
 
         # ── measure cube z positions ─────────────────────────────────────
         cubes = sorted(
             [
-                obj for obj in state.get_objects(MujocoMovableObjectType)
+                obj
+                for obj in state.get_objects(MujocoMovableObjectType)
                 if obj.name.startswith("cube")
             ],
             key=lambda o: o.name,
         )
-        z_values  = [state.get(c, "z") for c in cubes]
+        z_values = [state.get(c, "z") for c in cubes]
         off_table = sum(z < TABLE_Z_THRESHOLD for z in z_values)
 
         env.close()
         return {
-            "success":         ok,
+            "success": ok,
             "cubes_off_table": off_table,
-            "cube_z_values":   z_values,
+            "cube_z_values": z_values,
         }
 
 
 def main() -> None:
     """Run grid search and print a summary table."""
-    header = f"{'start_x':>10} {'end_x':>8} {'success':>9} {'off_table':>10}  cube_z_values"
+    header = (
+        f"{'start_x':>10} {'end_x':>8} {'success':>9} {'off_table':>10}  cube_z_values"
+    )
     print(header)
     print("-" * len(header))
 
@@ -172,7 +175,7 @@ def main() -> None:
     for start_x, end_x in itertools.product(START_X_OFFSETS, END_X_OFFSETS):
         print(f"Running start_x={start_x:.3f}  end_x={end_x:.3f} ...", flush=True)
         result = run_trial(start_x, end_x)
-        z_str  = "  ".join(f"{z:.3f}" for z in result["cube_z_values"])
+        z_str = "  ".join(f"{z:.3f}" for z in result["cube_z_values"])
         print(
             f"{start_x:>10.3f} {end_x:>8.3f}"
             f"  {str(result['success']):>7}"
