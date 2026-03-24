@@ -29,12 +29,14 @@ class KinderTrajOptProblem(TrajOptProblem):
         horizon: int,
         wm_model: Any = None,
         wm_norms: dict | None = None,
+        preserved_indices: list[int] | None = None,
     ) -> None:
         self._env = env
         self._initial_state = initial_state
         self._horizon = horizon
         self._wm_model = wm_model
         self._wm_norms = wm_norms
+        self._preserved_indices = preserved_indices
         self._cached_rewards: dict[int, float] = {}
         self._cached_terminated: dict[int, bool] = {}
         self._cache_step = 0
@@ -68,8 +70,8 @@ class KinderTrajOptProblem(TrajOptProblem):
         if self._wm_model is not None:
             next_state = wm_get_next_state(state, action, self._wm_model, self._wm_norms)
             # next_state[2:] = state[2:]
-            next_state[:29] = state[:29]
-            next_state[32:] = state[32:]
+            if self._preserved_indices is not None:
+                next_state[self._preserved_indices] = state[self._preserved_indices]
 
             
             reward, terminated = self._env.unwrapped.get_reward_and_done(state, action)

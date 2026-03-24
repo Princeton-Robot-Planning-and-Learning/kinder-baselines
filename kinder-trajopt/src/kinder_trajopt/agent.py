@@ -34,6 +34,7 @@ class TrajOptAgent(Agent[NDArray[np.float32], NDArray[np.float32]]):
         warm_start: bool = True,
         replan_interval: int = 1,
         checkpoint: str | None = None,
+        preserved_indices: list[int] | None = None,
     ) -> None:
         super().__init__(seed)
         self._env = env
@@ -42,6 +43,7 @@ class TrajOptAgent(Agent[NDArray[np.float32], NDArray[np.float32]]):
             self._wm_model, self._wm_norms = load_world_model(checkpoint)
         else:
             self._wm_model, self._wm_norms = None, None
+        self._preserved_indices = preserved_indices
         self._problem: KinderTrajOptProblem | None = None
         action_range = env.action_space.high - env.action_space.low
         noise_scale = action_range * noise_fraction
@@ -65,6 +67,7 @@ class TrajOptAgent(Agent[NDArray[np.float32], NDArray[np.float32]]):
             horizon=self._horizon,
             wm_model=self._wm_model,
             wm_norms=self._wm_norms,
+            preserved_indices=self._preserved_indices,
         )
         self._mpc.reset(self._problem)
 
