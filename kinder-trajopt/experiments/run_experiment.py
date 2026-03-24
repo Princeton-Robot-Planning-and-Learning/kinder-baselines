@@ -57,6 +57,7 @@ def _main(cfg: DictConfig) -> None:
         num_control_points=cfg.num_control_points,
         warm_start=cfg.warm_start,
         replan_interval=cfg.env.replan_interval,
+        checkpoint=cfg.env.checkpoint if cfg.env.use_checkpoint else None,
     )
 
     # Evaluate.
