@@ -1,5 +1,6 @@
 [MASTER]
 
+init-hook='import sys; sys.path.insert(0, "src")'
 extension-pkg-whitelist=numpy,pybullet
 ignore=CVS,venv,.venv,third-party
 ignore-paths=
