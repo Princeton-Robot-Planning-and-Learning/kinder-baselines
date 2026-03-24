@@ -4,7 +4,7 @@ Model-based RL baselines for [KinDER](https://github.com/Princeton-Robot-Plannin
 
 Provides:
 - **`kinder_mbrl.models`** — MLP delta dynamics model (`MLPDynamics`) and per-feature normalizer.
-- **`kinder_mbrl.data`** — HDF5 dataset loading utilities.
+- **`kinder_mbrl.data_utils`** — HDF5 dataset loading utilities.
 - **`kinder_mbrl.planning`** — Random-shooting MPC planner that works with either the ground-truth simulator or a learned world model.
 
 ## Installation
