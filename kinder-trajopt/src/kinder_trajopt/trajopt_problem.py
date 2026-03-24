@@ -67,7 +67,11 @@ class KinderTrajOptProblem(TrajOptProblem):
     ) -> TrajOptState:
         if self._wm_model is not None:
             next_state = wm_get_next_state(state, action, self._wm_model, self._wm_norms)
-            next_state[8:] = state[8:]
+            # next_state[2:] = state[2:]
+            next_state[:29] = state[:29]
+            next_state[32:] = state[32:]
+
+            
             reward, terminated = self._env.unwrapped.get_reward_and_done(state, action)
         else:
             next_state, reward, terminated = self._env.unwrapped.get_transition(

@@ -1,0 +1,6 @@
+env_id: "kinder/StickButton2D-b1-v0"
+max_eval_steps: 200
+replan_interval: 1
+
+use_checkpoint: True
+checkpoint: "../kinder-mbrl/output/wm_stickbutton2d_b1_ep1000_20260324_133924.pt"

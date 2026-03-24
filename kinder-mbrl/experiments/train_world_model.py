@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import os
+from datetime import datetime
 from pathlib import Path
 
 import h5py  # type: ignore
@@ -95,7 +96,9 @@ def train(
             print(f"Epoch {epoch+1:3d}/{epochs}  loss={total/len(s_t):.6f}")
 
     os.makedirs(output_dir, exist_ok=True)
-    ckpt_path = Path(output_dir) / "wm.pt"
+    task_name = Path(hdf5_path).stem
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ckpt_path = Path(output_dir) / f"wm_{task_name}_ep{epochs}_{timestamp}.pt"
     torch.save(
         {
             "model_state": model.state_dict(),
