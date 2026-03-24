@@ -17,7 +17,6 @@ log_level: INFO
 # General.
 seed: 0
 num_eval_episodes: 50
-max_eval_steps: 200
 make_videos: False
 video_folder: ${hydra:runtime.output_dir}/videos
 
@@ -27,3 +26,4 @@ num_rollouts: 50
 noise_fraction: 1.0  # noise std = noise_fraction * action_range, per dimension
 num_control_points: 10
 warm_start: true
+replan_interval: 1

@@ -31,6 +31,7 @@ class TrajOptAgent(Agent[NDArray[np.float32], NDArray[np.float32]]):
         noise_fraction: float = 1.0,
         num_control_points: int = 10,
         warm_start: bool = True,
+        replan_interval: int = 1,
     ) -> None:
         super().__init__(seed)
         self._env = env
@@ -44,7 +45,7 @@ class TrajOptAgent(Agent[NDArray[np.float32], NDArray[np.float32]]):
             num_control_points=num_control_points,
         )
         solver = PredictiveSamplingSolver(seed, config, warm_start)
-        self._mpc = MPCWrapper(solver)
+        self._mpc = MPCWrapper(solver, replan_interval=replan_interval)
 
     def reset(
         self,
@@ -63,5 +64,6 @@ class TrajOptAgent(Agent[NDArray[np.float32], NDArray[np.float32]]):
         assert self._last_observation is not None
         action = self._mpc.step(self._last_observation)
         assert self._problem is not None
-        self._problem.log_and_reset_step_stats()
+        if self._problem.num_rollouts_scored > 0:
+            self._problem.log_and_reset_step_stats(self._timestep)
         return action

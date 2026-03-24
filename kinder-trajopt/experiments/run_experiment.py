@@ -56,6 +56,7 @@ def _main(cfg: DictConfig) -> None:
         noise_fraction=cfg.noise_fraction,
         num_control_points=cfg.num_control_points,
         warm_start=cfg.warm_start,
+        replan_interval=cfg.replan_interval,
     )
 
     # Evaluate.
@@ -67,7 +68,7 @@ def _main(cfg: DictConfig) -> None:
             agent,
             env,
             rng,
-            max_eval_steps=cfg.max_eval_steps,
+            max_eval_steps=cfg.env.max_eval_steps,
         )
         episode_metrics["eval_episode"] = eval_episode
         metrics.append(episode_metrics)
