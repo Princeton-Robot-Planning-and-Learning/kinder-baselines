@@ -84,7 +84,7 @@ def main() -> None:
             size=(args.num_candidates, args.horizon, 2),
         ).astype(np.float32)
         action_sequences = np.zeros(
-            (args.num_candidates, args.horizon, env.action_space.shape[0]),  # type: ignore
+            (args.num_candidates, args.horizon, env.action_space.shape[0]),  # type: ignore # pylint: disable=line-too-long
             dtype=np.float32,
         )
         action_sequences[:, :, :2] = raw
@@ -111,7 +111,7 @@ def main() -> None:
                 best_idx = cand_idx
 
         unwrapped.set_state(current_state)  # type: ignore
-        obs, _, terminated, truncated, _ = env.step(action_sequences[best_idx, 0])  # type: ignore
+        obs, _, terminated, truncated, _ = env.step(action_sequences[best_idx, 0])  # type: ignore # pylint: disable=line-too-long
         frames.append(env.render())
 
         if terminated or truncated:

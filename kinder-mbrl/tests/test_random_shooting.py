@@ -2,7 +2,6 @@
 
 import numpy as np
 import pytest
-import torch
 
 from kinder_mbrl.models import MLPDynamics
 from kinder_mbrl.planning import state_cost, wm_get_next_state

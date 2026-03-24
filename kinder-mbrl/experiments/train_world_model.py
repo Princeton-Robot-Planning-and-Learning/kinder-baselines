@@ -12,6 +12,7 @@ import argparse
 import os
 from pathlib import Path
 
+import h5py  # type: ignore
 import numpy as np
 import torch
 from torch import nn
@@ -106,7 +107,6 @@ def eval_rollout(hdf5_path: str, checkpoint: str, num_episodes: int = 5) -> None
         checkpoint: Path to the .pt checkpoint saved by train().
         num_episodes: Number of episodes to evaluate.
     """
-    import h5py  # type: ignore
 
     ckpt = torch.load(checkpoint, weights_only=False)
     model = MLPDynamics(ckpt["state_dim"], ckpt["action_dim"], ckpt["output_dim"])
@@ -128,12 +128,8 @@ def eval_rollout(hdf5_path: str, checkpoint: str, num_episodes: int = 5) -> None
             pred_state = np.concatenate([robot[0], env[0]])
             ep_errors = []
             for t_idx in range(len(robot) - 1):
-                s_in = torch.tensor(
-                    (pred_state - s_mean) / s_std, dtype=torch.float32
-                )
-                a_in = torch.tensor(
-                    (acts[t_idx] - a_mean) / a_std, dtype=torch.float32
-                )
+                s_in = torch.tensor((pred_state - s_mean) / s_std, dtype=torch.float32)
+                a_in = torch.tensor((acts[t_idx] - a_mean) / a_std, dtype=torch.float32)
                 with torch.no_grad():
                     d_pred = (
                         model(s_in.unsqueeze(0), a_in.unsqueeze(0)).squeeze(0).numpy()

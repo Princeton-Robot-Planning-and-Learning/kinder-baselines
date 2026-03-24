@@ -1,7 +1,7 @@
 """Random-shooting MPC planning utilities.
 
-Provides helpers for loading a trained world model and performing one-step
-next-state prediction, used by the random-shooting MPC experiment script.
+Provides helpers for loading a trained world model and performing one-step next-state
+prediction, used by the random-shooting MPC experiment script.
 """
 
 from typing import Tuple
@@ -76,9 +76,7 @@ def wm_get_next_state(
     Returns:
         Predicted next full state vector.
     """
-    s_in = torch.tensor(
-        (state - norms["s_mean"]) / norms["s_std"], dtype=torch.float32
-    )
+    s_in = torch.tensor((state - norms["s_mean"]) / norms["s_std"], dtype=torch.float32)
     a_in = torch.tensor(
         (action - norms["a_mean"]) / norms["a_std"], dtype=torch.float32
     )
