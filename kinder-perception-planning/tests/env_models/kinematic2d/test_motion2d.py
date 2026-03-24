@@ -484,7 +484,7 @@ def test_motion2d_real_vlm_query_returns_parseable_response():
     rendered = sim.render()
     assert rendered is not None
 
-    vlm = create_vlm("gpt-4o", cache_dir=Path(tempfile.mkdtemp()))
+    vlm = create_vlm("gpt-5.4-nano", cache_dir=Path(tempfile.mkdtemp()))
     true_atoms = query_vlm_for_atom_vals(
         vlm, rendered, candidate_atoms, _PREDICATE_DESCRIPTIONS
     )
