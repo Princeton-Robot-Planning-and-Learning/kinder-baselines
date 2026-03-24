@@ -11,7 +11,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
-import yaml
+import yaml  # type: ignore
 
 
 def load_job(job_dir: Path) -> dict | None:
@@ -21,14 +21,14 @@ def load_job(job_dir: Path) -> dict | None:
     if not config_path.exists() or not results_path.exists():
         return None
 
-    with open(config_path) as f:
+    with open(config_path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     env_id = config["env"]["env_id"]
     seed = config["seed"]
 
     successes = []
-    with open(results_path) as f:
+    with open(results_path, encoding="utf-8") as f:
         for row in csv.DictReader(f):
             successes.append(row["success"].strip().lower() == "true")
 
@@ -51,6 +51,7 @@ def summarize(log_dir: Path) -> dict[str, list[float]]:
 
 
 def main(log_dirs: list[str]) -> None:
+    """Main function to evaluate statistics from multiple log directories."""
     combined: dict[str, list[float]] = defaultdict(list)
     for log_dir_str in log_dirs:
         log_dir = Path(log_dir_str)
