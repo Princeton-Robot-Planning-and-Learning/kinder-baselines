@@ -58,7 +58,7 @@ def _main(cfg: DictConfig) -> None:
         warm_start=cfg.warm_start,
         replan_interval=cfg.env.replan_interval,
         checkpoint=cfg.env.checkpoint if cfg.env.use_checkpoint else None,
-        preserved_indices=cfg.env.preserved_indices if cfg.env.preserved_indices else None,
+        preserved_indices=cfg.env.preserved_indices if cfg.env.use_checkpoint else None,
     )
 
     # Evaluate.
