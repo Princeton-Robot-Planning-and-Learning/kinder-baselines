@@ -37,12 +37,15 @@ def load_world_model(checkpoint: str) -> Tuple[MLPDynamics, dict]:
         checkpoint: Path to the .pt file saved by the training script.
 
     Returns:
-        A tuple (model, norms) where model is the MLPDynamics instance in eval
-        mode and norms is a dict containing the mean/std arrays for states,
-        actions, and deltas.
+        A tuple (model, norms) where model is the two-head MLPDynamics instance
+        in eval mode and norms is a dict containing the mean/std arrays for
+        states, actions, robot deltas, and env deltas, plus robot_dim for
+        slicing the concatenated delta.
     """
     ckpt = torch.load(checkpoint, weights_only=False)
-    model = MLPDynamics(ckpt["state_dim"], ckpt["action_dim"], ckpt["output_dim"])
+    model = MLPDynamics(
+        ckpt["state_dim"], ckpt["action_dim"], ckpt["robot_dim"], ckpt["env_dim"]
+    )
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     norms = {
@@ -50,8 +53,10 @@ def load_world_model(checkpoint: str) -> Tuple[MLPDynamics, dict]:
         "s_std": ckpt["s_norm"]["std"],
         "a_mean": ckpt["a_norm"]["mean"],
         "a_std": ckpt["a_norm"]["std"],
-        "d_mean": ckpt["d_norm"]["mean"],
-        "d_std": ckpt["d_norm"]["std"],
+        "dr_mean": ckpt["dr_norm"]["mean"],
+        "dr_std": ckpt["dr_norm"]["std"],
+        "de_mean": ckpt["de_norm"]["mean"],
+        "de_std": ckpt["de_norm"]["std"],
     }
     return model, norms
 
@@ -64,13 +69,15 @@ def wm_get_next_state(
 ) -> np.ndarray:
     """Predict the next full state using the learned world model.
 
-    Normalizes (state, action), runs a forward pass to predict the state
-    delta, denormalizes the delta, and adds it to the current state.
+    Normalizes (state, action), runs a forward pass through both heads to
+    predict the robot and env state deltas separately, denormalizes each
+    delta with its own statistics, concatenates them, and adds the result to
+    the current state.
 
     Args:
         state: Current full state vector (robot + env concatenated).
         action: Action vector to apply.
-        model: Trained MLPDynamics instance.
+        model: Trained two-head MLPDynamics instance.
         norms: Normalizer statistics dict returned by load_world_model.
 
     Returns:
@@ -81,8 +88,9 @@ def wm_get_next_state(
         (action - norms["a_mean"]) / norms["a_std"], dtype=torch.float32
     )
     with torch.no_grad():
-        d_pred = model(s_in.unsqueeze(0), a_in.unsqueeze(0)).squeeze(0).numpy()
-    delta = d_pred * norms["d_std"] + norms["d_mean"]
+        pred_dr, pred_de = model(s_in.unsqueeze(0), a_in.unsqueeze(0))
+    dr = pred_dr.squeeze(0).numpy() * norms["dr_std"] + norms["dr_mean"]
+    de = pred_de.squeeze(0).numpy() * norms["de_std"] + norms["de_mean"]
     next_state = state.copy()
-    next_state += delta
+    next_state += np.concatenate([dr, de])
     return next_state

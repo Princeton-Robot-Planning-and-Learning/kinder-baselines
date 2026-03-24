@@ -9,17 +9,20 @@ from kinder_mbrl.planning import state_cost, wm_get_next_state
 
 @pytest.fixture(name="model_and_norms")
 def model_and_norms_fixture():
-    """Return a small MLPDynamics and identity-like norms for testing."""
-    state_dim, action_dim = 12, 4
-    model = MLPDynamics(state_dim, action_dim, output_dim=state_dim)
+    """Return a small two-head MLPDynamics and identity-like norms for testing."""
+    robot_dim, env_dim, action_dim = 9, 3, 4
+    state_dim = robot_dim + env_dim
+    model = MLPDynamics(state_dim, action_dim, robot_dim=robot_dim, env_dim=env_dim)
     model.eval()
     norms = {
         "s_mean": np.zeros(state_dim, dtype=np.float32),
         "s_std": np.ones(state_dim, dtype=np.float32),
         "a_mean": np.zeros(action_dim, dtype=np.float32),
         "a_std": np.ones(action_dim, dtype=np.float32),
-        "d_mean": np.zeros(state_dim, dtype=np.float32),
-        "d_std": np.ones(state_dim, dtype=np.float32),
+        "dr_mean": np.zeros(robot_dim, dtype=np.float32),
+        "dr_std": np.ones(robot_dim, dtype=np.float32),
+        "de_mean": np.zeros(env_dim, dtype=np.float32),
+        "de_std": np.ones(env_dim, dtype=np.float32),
     }
     return model, norms
 

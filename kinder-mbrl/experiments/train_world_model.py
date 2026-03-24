@@ -1,7 +1,11 @@
-"""Train and evaluate an MLP delta dynamics world model.
+"""Train and evaluate a two-head MLP delta dynamics world model.
 
-Trains f(s_t, a_t) -> delta_full_state, where:
-    s_{t+1} = s_t + delta_full_state
+Trains two independent output heads on a shared trunk:
+    delta_robot, delta_env = f(s_t, a_t)
+    s_{t+1} = s_t + concat(delta_robot, delta_env)
+
+Each head is trained with its own MSE loss and its own per-feature normalizer,
+allowing robot-state and env-state dynamics to be learned independently.
 
 Usage:
     python experiments/train_world_model.py --mode train
@@ -18,7 +22,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from kinder_mbrl.data import load_transitions
+from kinder_mbrl.data_utils import load_transitions
 from kinder_mbrl.models import MLPDynamics, Normalizer
 
 DEFAULT_HDF5 = (
@@ -33,12 +37,13 @@ def train(
     batch_size: int = 512,
     lr: float = 1e-3,
 ) -> None:
-    """Train an MLPDynamics model and save the checkpoint.
+    """Train a two-head MLPDynamics model and save the checkpoint.
 
     Loads transitions from the HDF5 file, fits per-feature normalizers for
-    states, actions, and deltas, then trains the model with MSE loss on
-    normalized delta predictions. Prints loss every 10 epochs and saves the
-    model weights together with normalizer statistics.
+    states, actions, robot deltas, and env deltas independently, then trains
+    the model with separate MSE losses on each normalized delta head. Prints
+    the combined loss every 10 epochs and saves the model weights together
+    with all normalizer statistics.
 
     Args:
         hdf5_path: Path to the HDF5 demo file.
@@ -47,30 +52,41 @@ def train(
         batch_size: Number of transitions per mini-batch.
         lr: Adam learning rate.
     """
-    states, actions, deltas = load_transitions(hdf5_path)
+    states, actions, deltas, robot_dim = load_transitions(hdf5_path)
+    env_dim = states.shape[1] - robot_dim
+    robot_deltas = deltas[:, :robot_dim]
+    env_deltas = deltas[:, robot_dim:]
     print(
         f"Transitions: {len(states)}  |  "
-        f"state_dim={states.shape[1]}  action_dim={actions.shape[1]}"
+        f"state_dim={states.shape[1]}  action_dim={actions.shape[1]}  "
+        f"robot_dim={robot_dim}  env_dim={env_dim}"
     )
 
     s_norm = Normalizer(states)
     a_norm = Normalizer(actions)
-    d_norm = Normalizer(deltas)
+    dr_norm = Normalizer(robot_deltas)
+    de_norm = Normalizer(env_deltas)
 
     s_t = torch.tensor(s_norm.normalize(states))
     a_t = torch.tensor(a_norm.normalize(actions))
-    d_t = torch.tensor(d_norm.normalize(deltas))
+    dr_t = torch.tensor(dr_norm.normalize(robot_deltas))
+    de_t = torch.tensor(de_norm.normalize(env_deltas))
 
     loader = DataLoader(
-        TensorDataset(s_t, a_t, d_t), batch_size=batch_size, shuffle=True
+        TensorDataset(s_t, a_t, dr_t, de_t), batch_size=batch_size, shuffle=True
     )
-    model = MLPDynamics(states.shape[1], actions.shape[1], output_dim=states.shape[1])
+    model = MLPDynamics(
+        states.shape[1], actions.shape[1], robot_dim=robot_dim, env_dim=env_dim
+    )
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 
     for epoch in range(epochs):
         total = 0.0
-        for s_b, a_b, d_b in loader:
-            loss = nn.functional.mse_loss(model(s_b, a_b), d_b)
+        for s_b, a_b, dr_b, de_b in loader:
+            pred_dr, pred_de = model(s_b, a_b)
+            loss = nn.functional.mse_loss(pred_dr, dr_b) + nn.functional.mse_loss(
+                pred_de, de_b
+            )
             opt.zero_grad()
             loss.backward()  # type: ignore
             opt.step()
@@ -85,10 +101,12 @@ def train(
             "model_state": model.state_dict(),
             "state_dim": states.shape[1],
             "action_dim": actions.shape[1],
-            "output_dim": states.shape[1],
+            "robot_dim": robot_dim,
+            "env_dim": env_dim,
             "s_norm": {"mean": s_norm.mean, "std": s_norm.std},
             "a_norm": {"mean": a_norm.mean, "std": a_norm.std},
-            "d_norm": {"mean": d_norm.mean, "std": d_norm.std},
+            "dr_norm": {"mean": dr_norm.mean, "std": dr_norm.std},
+            "de_norm": {"mean": de_norm.mean, "std": de_norm.std},
         },
         ckpt_path,
     )
@@ -109,13 +127,16 @@ def eval_rollout(hdf5_path: str, checkpoint: str, num_episodes: int = 5) -> None
     """
 
     ckpt = torch.load(checkpoint, weights_only=False)
-    model = MLPDynamics(ckpt["state_dim"], ckpt["action_dim"], ckpt["output_dim"])
+    model = MLPDynamics(
+        ckpt["state_dim"], ckpt["action_dim"], ckpt["robot_dim"], ckpt["env_dim"]
+    )
     model.load_state_dict(ckpt["model_state"])
     model.eval()
 
     s_mean, s_std = ckpt["s_norm"]["mean"], ckpt["s_norm"]["std"]
     a_mean, a_std = ckpt["a_norm"]["mean"], ckpt["a_norm"]["std"]
-    d_mean, d_std = ckpt["d_norm"]["mean"], ckpt["d_norm"]["std"]
+    dr_mean, dr_std = ckpt["dr_norm"]["mean"], ckpt["dr_norm"]["std"]
+    de_mean, de_std = ckpt["de_norm"]["mean"], ckpt["de_norm"]["std"]
 
     all_errors = []
     with h5py.File(hdf5_path, "r") as file_handle:
@@ -131,10 +152,10 @@ def eval_rollout(hdf5_path: str, checkpoint: str, num_episodes: int = 5) -> None
                 s_in = torch.tensor((pred_state - s_mean) / s_std, dtype=torch.float32)
                 a_in = torch.tensor((acts[t_idx] - a_mean) / a_std, dtype=torch.float32)
                 with torch.no_grad():
-                    d_pred = (
-                        model(s_in.unsqueeze(0), a_in.unsqueeze(0)).squeeze(0).numpy()
-                    )
-                pred_state = pred_state + d_pred * d_std + d_mean
+                    pred_dr, pred_de = model(s_in.unsqueeze(0), a_in.unsqueeze(0))
+                dr = pred_dr.squeeze(0).numpy() * dr_std + dr_mean
+                de = pred_de.squeeze(0).numpy() * de_std + de_mean
+                pred_state = pred_state + np.concatenate([dr, de])
                 gt_state = np.concatenate([robot[t_idx + 1], env[t_idx + 1]])
                 ep_errors.append(np.linalg.norm(pred_state - gt_state))
 
