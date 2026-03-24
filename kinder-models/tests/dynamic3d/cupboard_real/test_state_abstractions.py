@@ -29,7 +29,7 @@ def test_cupboard_real_state_abstraction():
     kinder.register_all_environments()
     num_objects = 1
     env = kinder.make(
-        f"kinder/TidyBot3D-cupboard_real-o{num_objects}-v0", render_mode="rgb_array"
+        f"kinder/Shelf3D-o{num_objects}-v0", render_mode="rgb_array"
     )
     if MAKE_VIDEOS:
         env = RecordVideo(

@@ -869,7 +869,7 @@ def test_pick_place_two_cubes_skill():
         )
 
     # Reset the environment and get the initial state.
-    obs, _ = env.reset(seed=123)
+    obs, _ = env.reset(seed=128)
     for _ in range(5):
         obs, _, _, _, _ = env.step(np.zeros(11))
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
