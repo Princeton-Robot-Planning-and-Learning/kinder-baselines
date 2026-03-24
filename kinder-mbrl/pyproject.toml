@@ -62,6 +62,7 @@ module = [
     "torch.*",
     "gymnasium.*",
     "kinder.*",
+    "kinder_mbrl.*",
     "PIL.*",
 ]
 ignore_missing_imports = true
