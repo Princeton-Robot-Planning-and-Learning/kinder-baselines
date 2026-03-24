@@ -1068,6 +1068,15 @@ class PickGroundController(GroundParameterizedController[ObjectCentricState, Arr
         self.home_joints = np.deg2rad(
             [0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0]
         )  # retract configuration
+        # Trapezoidal velocity profiles (approach and retract phases).
+        self._approach_trajectory: np.ndarray = np.array([])
+        self._approach_traj_dir: np.ndarray = np.zeros(7)
+        self._approach_start_joints: np.ndarray = np.zeros(7)
+        self._approach_step_idx: int = 0
+        self._retract_trajectory: np.ndarray = np.array([])
+        self._retract_traj_dir: np.ndarray = np.zeros(7)
+        self._retract_start_joints: np.ndarray = np.zeros(7)
+        self._retract_step_idx: int = 0
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         target_object = self.objects[1]
@@ -1226,6 +1235,20 @@ class PickGroundController(GroundParameterizedController[ObjectCentricState, Arr
 
         self._current_arm_joint_plan = plan
         self._current_retract_plan = retract_plan
+        # Compute trapezoidal velocity profile for approach (current → grasp conf).
+        curr = np.array(self._get_current_robot_arm_conf()[:7])
+        final = np.array(plan[-1][:7])
+        self._approach_trajectory, self._approach_traj_dir = _compute_per_joint_profile(
+            curr, final, _ARM_MAX_VEL, _ARM_MAX_ACCEL
+        )
+        self._approach_start_joints = curr.copy()
+        self._approach_step_idx = 0
+        # Compute trapezoidal velocity profile for retract (grasp conf → home).
+        self._retract_trajectory, self._retract_traj_dir = _compute_per_joint_profile(
+            final, self.home_joints[:7], _ARM_MAX_VEL, _ARM_MAX_ACCEL
+        )
+        self._retract_start_joints = final.copy()
+        self._retract_step_idx = 0
 
     def terminated(self) -> bool:
         assert (
@@ -1260,31 +1283,17 @@ class PickGroundController(GroundParameterizedController[ObjectCentricState, Arr
             action[-1] = self._get_current_robot_gripper_pose()
             return action
         if self._navigated and not self._pre_grasp and not self._closed_gripper:
-            while len(self._current_arm_joint_plan) > 1:
-                peek_conf = self._current_arm_joint_plan[0]
-                # Close enough, pop and continue.
-                if len(self._current_arm_joint_plan) == 2:
-                    if self._robot_is_close_to_conf(peek_conf, atol=0.02):
-                        self._current_arm_joint_plan.pop(0)
-                else:
-                    if self._robot_is_close_to_conf(peek_conf):
-                        self._current_arm_joint_plan.pop(0)
-                # Not close enough, stop popping.
-                break
-            if self._robot_is_close_to_conf(self._current_arm_joint_plan[-1]):
+            if self._approach_step_idx >= len(self._approach_trajectory):
                 self._pre_grasp = True
-            robot_conf = self._get_current_robot_arm_conf()
-            gripper_pose = self._get_current_robot_gripper_pose()
-            next_conf = self._current_arm_joint_plan[0]
+            idx = min(self._approach_step_idx, len(self._approach_trajectory) - 1)
+            s = float(self._approach_trajectory[idx])
+            kp = 2.0
+            curr = np.array(self._get_current_robot_arm_conf()[:7])
+            target = self._approach_start_joints + self._approach_traj_dir * s
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
-            free_joints_infos = [
-                joint_info for joint_info in joint_infos if joint_info.qIndex > -1
-            ]
-            action[3:10] = get_jointwise_difference(
-                free_joints_infos[:7], next_conf[:7], robot_conf[:7]
-            )
-            action[-1] = gripper_pose
+            action[3:10] = kp * (target - curr)
+            action[-1] = self._get_current_robot_gripper_pose()
+            self._approach_step_idx += 1
             return action
         if self._pre_grasp and not self._closed_gripper:
             if self._get_current_robot_gripper_pose() > 0.2 and np.isclose(
@@ -1298,27 +1307,17 @@ class PickGroundController(GroundParameterizedController[ObjectCentricState, Arr
             self._last_gripper_state = self._get_current_robot_gripper_pose()
             return action
         if self._pre_grasp and self._closed_gripper:
-            while len(self._current_retract_plan) > 1:  # type: ignore
-                peek_conf = self._current_retract_plan[0]  # type: ignore
-                # Close enough, pop and continue.
-                if self._robot_is_close_to_conf(peek_conf, atol=0.08):
-                    self._current_retract_plan.pop(0)  # type: ignore
-                # Not close enough, stop popping.
-                break
-            if self._robot_is_close_to_conf(self._current_retract_plan[-1]):  # type: ignore # pylint: disable=line-too-long
+            if self._retract_step_idx >= len(self._retract_trajectory):
                 self._lifted = True
-            robot_conf = self._get_current_robot_arm_conf()
-            gripper_pose = self._get_current_robot_gripper_pose()
-            next_conf = self._current_retract_plan[0]  # type: ignore
+            idx = min(self._retract_step_idx, len(self._retract_trajectory) - 1)
+            s = float(self._retract_trajectory[idx])
+            kp = 2.0
+            curr = np.array(self._get_current_robot_arm_conf()[:7])
+            target = self._retract_start_joints + self._retract_traj_dir * s
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
-            free_joints_infos = [
-                joint_info for joint_info in joint_infos if joint_info.qIndex > -1
-            ]
-            action[3:10] = get_jointwise_difference(
-                free_joints_infos[:7], next_conf[:7], robot_conf[:7]
-            )
-            action[-1] = gripper_pose
+            action[3:10] = kp * (target - curr)
+            action[-1] = self._get_current_robot_gripper_pose()
+            self._retract_step_idx += 1
             return action
         raise ValueError("Invalid state")
 
@@ -1411,6 +1410,15 @@ class PlaceGroundController(GroundParameterizedController[ObjectCentricState, Ar
         self.home_joints = np.deg2rad(
             [0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0]
         )  # retract configuration
+        # Trapezoidal velocity profiles (approach and retract phases).
+        self._approach_trajectory: np.ndarray = np.array([])
+        self._approach_traj_dir: np.ndarray = np.zeros(7)
+        self._approach_start_joints: np.ndarray = np.zeros(7)
+        self._approach_step_idx: int = 0
+        self._retract_trajectory: np.ndarray = np.array([])
+        self._retract_traj_dir: np.ndarray = np.zeros(7)
+        self._retract_start_joints: np.ndarray = np.zeros(7)
+        self._retract_step_idx: int = 0
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         cupboard_obj = x.get_object_from_name("cupboard_1")
@@ -1565,6 +1573,20 @@ class PlaceGroundController(GroundParameterizedController[ObjectCentricState, Ar
 
         self._current_arm_joint_plan = plan
         self._current_retract_plan = retract_plan
+        # Compute trapezoidal velocity profile for approach (current → place conf).
+        curr = np.array(self._get_current_robot_arm_conf()[:7])
+        final = np.array(plan[-1][:7])
+        self._approach_trajectory, self._approach_traj_dir = _compute_per_joint_profile(
+            curr, final, _ARM_MAX_VEL, _ARM_MAX_ACCEL
+        )
+        self._approach_start_joints = curr.copy()
+        self._approach_step_idx = 0
+        # Compute trapezoidal velocity profile for retract (place conf → home).
+        self._retract_trajectory, self._retract_traj_dir = _compute_per_joint_profile(
+            final, self.home_joints[:7], _ARM_MAX_VEL, _ARM_MAX_ACCEL
+        )
+        self._retract_start_joints = final.copy()
+        self._retract_step_idx = 0
 
     def terminated(self) -> bool:
         assert (
@@ -1599,27 +1621,17 @@ class PlaceGroundController(GroundParameterizedController[ObjectCentricState, Ar
             action[-1] = self._get_current_robot_gripper_pose()
             return action
         if self._navigated and not self._pre_place and not self._open_gripper:
-            while len(self._current_arm_joint_plan) > 1:
-                peek_conf = self._current_arm_joint_plan[0]
-                # Close enough, pop and continue.
-                if self._robot_is_close_to_conf(peek_conf):
-                    self._current_arm_joint_plan.pop(0)
-                # Not close enough, stop popping.
-                break
-            if self._robot_is_close_to_conf(self._current_arm_joint_plan[-1]):
+            if self._approach_step_idx >= len(self._approach_trajectory):
                 self._pre_place = True
-            robot_conf = self._get_current_robot_arm_conf()
-            gripper_pose = self._get_current_robot_gripper_pose()
-            next_conf = self._current_arm_joint_plan[0]
+            idx = min(self._approach_step_idx, len(self._approach_trajectory) - 1)
+            s = float(self._approach_trajectory[idx])
+            kp = 2.0
+            curr = np.array(self._get_current_robot_arm_conf()[:7])
+            target = self._approach_start_joints + self._approach_traj_dir * s
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
-            free_joints_infos = [
-                joint_info for joint_info in joint_infos if joint_info.qIndex > -1
-            ]
-            action[3:10] = get_jointwise_difference(
-                free_joints_infos[:7], next_conf[:7], robot_conf[:7]
-            )
-            action[-1] = gripper_pose
+            action[3:10] = kp * (target - curr)
+            action[-1] = self._get_current_robot_gripper_pose()
+            self._approach_step_idx += 1
             return action
         if self._pre_place and not self._open_gripper:
             if self._get_current_robot_gripper_pose() < GRIPPER_OPEN_THRESHOLD:
@@ -1629,27 +1641,17 @@ class PlaceGroundController(GroundParameterizedController[ObjectCentricState, Ar
             self._last_gripper_state = self._get_current_robot_gripper_pose()
             return action
         if self._pre_place and self._open_gripper:
-            while len(self._current_retract_plan) > 1:  # type: ignore
-                peek_conf = self._current_retract_plan[0]  # type: ignore
-                # Close enough, pop and continue.
-                if self._robot_is_close_to_conf(peek_conf, atol=0.08):
-                    self._current_retract_plan.pop(0)  # type: ignore
-                # Not close enough, stop popping.
-                break
-            if self._robot_is_close_to_conf(self._current_retract_plan[-1]):  # type: ignore # pylint: disable=line-too-long
+            if self._retract_step_idx >= len(self._retract_trajectory):
                 self._returned = True
-            robot_conf = self._get_current_robot_arm_conf()
-            gripper_pose = self._get_current_robot_gripper_pose()
-            next_conf = self._current_retract_plan[0]  # type: ignore
+            idx = min(self._retract_step_idx, len(self._retract_trajectory) - 1)
+            s = float(self._retract_trajectory[idx])
+            kp = 2.0
+            curr = np.array(self._get_current_robot_arm_conf()[:7])
+            target = self._retract_start_joints + self._retract_traj_dir * s
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
-            free_joints_infos = [
-                joint_info for joint_info in joint_infos if joint_info.qIndex > -1
-            ]
-            action[3:10] = get_jointwise_difference(
-                free_joints_infos[:7], next_conf[:7], robot_conf[:7]
-            )
-            action[-1] = gripper_pose
+            action[3:10] = kp * (target - curr)
+            action[-1] = self._get_current_robot_gripper_pose()
+            self._retract_step_idx += 1
             return action
         raise ValueError("Invalid state")
 
