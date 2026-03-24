@@ -13,6 +13,7 @@ from prpl_utils.trajopt.trajopt_problem import (
     TrajOptTraj,
 )
 
+import numpy as np
 
 class KinderTrajOptProblem(TrajOptProblem):
     """Wraps a KinDER env as a TrajOptProblem.
@@ -69,16 +70,15 @@ class KinderTrajOptProblem(TrajOptProblem):
     ) -> TrajOptState:
         if self._wm_model is not None:
             next_state = wm_get_next_state(state, action, self._wm_model, self._wm_norms)
-            # next_state[2:] = state[2:]
             if self._preserved_indices is not None:
                 next_state[self._preserved_indices] = state[self._preserved_indices]
-
-            
             reward, terminated = self._env.unwrapped.get_reward_and_done(state, action)
         else:
             next_state, reward, terminated = self._env.unwrapped.get_transition(
                 state, action
             )
+        
+        
         step = self._cache_step
         self._cached_rewards[step] = float(reward)
         self._cached_terminated[step] = terminated
