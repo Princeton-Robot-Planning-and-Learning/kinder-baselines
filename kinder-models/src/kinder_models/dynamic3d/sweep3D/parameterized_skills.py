@@ -51,6 +51,7 @@ from kinder_models.dynamic3d.utils import (
     WAYPOINT_TOL,
     WIPER_SWEEP_TRANSFORM,
     WIPER_SWEEP_TRANSFORM_END,
+    WIPER_SWEEP_TRANSFORM_END_2,
     WIPER_TRANSFORM_TO_OBJECT,
     WORLD_X_BOUNDS,
     WORLD_Y_BOUNDS,
@@ -825,6 +826,7 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         self._pre_place: bool = False
         self._open_gripper: bool = False
         self._returned: bool = False
+        self._returned_2: bool = False
         self._last_gripper_state: float = 0.0
         self.home_joints = np.deg2rad(
             [0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0]
@@ -833,11 +835,14 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         self._approach_trajectory: np.ndarray = np.array([])
         self._approach_traj_dir: np.ndarray = np.zeros(7)
         self._approach_start_joints: np.ndarray = np.zeros(7)
+        self.target_joints_end: list[float] = []
+        self.target_joints_end_2: list[float] = []
         self._approach_step_idx: int = 0
         self._sweep_trajectory: np.ndarray = np.array([])
         self._sweep_traj_dir: np.ndarray = np.zeros(7)
         self._sweep_start_joints: np.ndarray = np.zeros(7)
         self._sweep_step_idx: int = 0
+        self._sweep_step_idx_2: int = 0
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         cupboard_obj = x.get_object_from_name("cupboard_1")
@@ -949,6 +954,11 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             WIPER_SWEEP_TRANSFORM_END,
         )
 
+        target_end_effector_pose_end_2 = multiply_poses(
+            target_place_pose_world,
+            WIPER_SWEEP_TRANSFORM_END_2,
+        )
+
         self._pybullet_sim.base_link_to_held_obj = multiply_poses(
             target_end_effector_pose.invert(),
             target_place_pose_world,
@@ -965,6 +975,14 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             target_end_effector_pose_end,
             set_joints=False,
         )
+
+        target_joints_end_2 = inverse_kinematics(
+            self._pybullet_sim.robot,
+            target_end_effector_pose_end_2,
+            set_joints=False,
+        )
+        self.target_joints_end = target_joints_end
+        self.target_joints_end_2 = target_joints_end_2
 
         # Run motion planning.
         plan = run_motion_planning(
@@ -1025,7 +1043,7 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             self._current_arm_joint_plan is not None
             and self._current_retract_plan is not None
         )
-        return self._returned
+        return self._returned_2
 
     def step(self) -> Array:
         assert self._current_arm_joint_plan is not None
@@ -1065,18 +1083,25 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             action[-1] = self._get_current_robot_gripper_pose()
             self._approach_step_idx += 1
             return action
-        if self._pre_place:
-            if self._sweep_step_idx >= len(self._sweep_trajectory):
+        if self._pre_place and not self._returned:
+            if self._sweep_step_idx >= 5:
                 self._returned = True
-            idx = min(self._sweep_step_idx, len(self._sweep_trajectory) - 1)
-            s = float(self._sweep_trajectory[idx])
-            kp = 2.0
             curr = np.array(self._get_current_robot_arm_conf()[:7])
-            target = self._sweep_start_joints + self._sweep_traj_dir * s
+            target = self.target_joints_end
             action = np.zeros(11, dtype=np.float32)
-            action[3:10] = kp * (target - curr)
+            action[3:10] = target[:7] - curr[:7]
             action[-1] = self._get_current_robot_gripper_pose()
             self._sweep_step_idx += 1
+            return action
+        if self._returned:
+            if self._sweep_step_idx_2 >= 10:
+                self._returned_2 = True
+            curr = np.array(self._get_current_robot_arm_conf()[:7])
+            target = self.target_joints_end_2
+            action = np.zeros(11, dtype=np.float32)
+            action[3:10] = target[:7] - curr[:7]
+            action[-1] = self._get_current_robot_gripper_pose()
+            self._sweep_step_idx_2 += 1
             return action
         raise ValueError("Invalid state")
 
