@@ -26,7 +26,7 @@ from pybullet_helpers.inverse_kinematics import (
     inverse_kinematics,
     set_robot_joints_with_held_object,
 )
-from pybullet_helpers.joint import JointPositions, get_jointwise_difference
+from pybullet_helpers.joint import JointPositions
 from pybullet_helpers.motion_planning import (
     create_joint_distance_fn,
     remap_joint_position_plan_to_constant_distance,
@@ -69,7 +69,7 @@ WIPER_TRANSFORM_TO_OBJECT = Pose.from_rpy(
     (0.06, 0, 0.03), (-np.pi - np.pi / 16, 0, -np.pi / 2)
 )  # Pose((0.035, 0, 0.04), (-0.707, 0.707, 0, 0))
 WIPER_SWEEP_TRANSFORM = Pose.from_rpy(
-    (-0.02, -0.02, 0.005), (-np.pi + np.pi/16, 0, -np.pi / 2)
+    (-0.02, -0.02, 0.005), (-np.pi + np.pi / 16, 0, -np.pi / 2)
 )  # Pose((-0.05, 0, 0.04), (-0.707, 0.707, 0, 0))
 WIPER_SWEEP_TRANSFORM_END = Pose.from_rpy(
     (0.15, -0.02, 0.005), (-np.pi + np.pi / 16, 0, -np.pi / 2)
@@ -2660,7 +2660,7 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
 
         self._current_arm_joint_plan = plan
         self._current_retract_plan = retract_plan
-        # Compute trapezoidal velocity profile for approach (current -> sweep start conf).
+        # Compute trapezoidal velocity profile for approach
         curr = np.array(self._get_current_robot_arm_conf()[:7])
         sweep_start_conf = np.array(plan[-1][:7])
         sweep_end_conf = np.array(retract_plan[-1][:7])
