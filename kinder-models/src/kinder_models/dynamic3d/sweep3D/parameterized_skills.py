@@ -9,33 +9,23 @@ from bilevel_planning.structs import (
 )
 from kinder.envs.dynamic3d.object_types import (
     MujocoMovableObjectType,
-    MujocoObjectType,
     MujocoTidyBotRobotObjectType,
 )
 from kinder.envs.dynamic3d.robots.tidybot_robot_env import (
     TidyBot3DRobotActionSpace,
 )
 from prpl_utils.utils import get_signed_angle_distance
-from pybullet_helpers.geometry import Pose, multiply_poses, set_pose
-from pybullet_helpers.gui import create_gui_connection
+from pybullet_helpers.geometry import Pose, multiply_poses
 from pybullet_helpers.inverse_kinematics import (
     inverse_kinematics,
-    set_robot_joints_with_held_object,
 )
 from pybullet_helpers.joint import JointPositions
 from pybullet_helpers.motion_planning import (
-    create_joint_distance_fn,
     remap_joint_position_plan_to_constant_distance,
     run_motion_planning,
 )
-from pybullet_helpers.robots import SingleArmPyBulletRobot, create_pybullet_robot
-from pybullet_helpers.utils import (
-    create_pybullet_block,
-    create_pybullet_shelf,
-)
 from relational_structs import (
     Array,
-    Object,
     ObjectCentricState,
     Variable,
 )

@@ -18,25 +18,16 @@ from kinder.envs.dynamic3d.robots.tidybot_robot_env import (
 )
 from prpl_utils.utils import get_signed_angle_distance
 from pybullet_helpers.geometry import Pose, multiply_poses
-from pybullet_helpers.gui import create_gui_connection
 from pybullet_helpers.inverse_kinematics import (
+    JointPositions,
     inverse_kinematics,
-    set_robot_joints_with_held_object,
 )
-from pybullet_helpers.joint import JointPositions
 from pybullet_helpers.motion_planning import (
-    create_joint_distance_fn,
     remap_joint_position_plan_to_constant_distance,
     run_motion_planning,
 )
-from pybullet_helpers.robots import SingleArmPyBulletRobot, create_pybullet_robot
-from pybullet_helpers.utils import (
-    create_pybullet_block,
-    create_pybullet_shelf,
-)
 from relational_structs import (
     Array,
-    Object,
     ObjectCentricState,
     Variable,
 )
@@ -49,13 +40,10 @@ from kinder_models.dynamic3d.utils import (
     ARM_MOVEMENT_CUPBOARD,
     BASE_DISTANCE_TO_CUPBOARD,
     BASE_TO_CUPBOARD_ROTATION,
-    DRAWER_TRANSFORM_TO_OBJECT,
-    DRAWER_TRANSFORM_TO_OBJECT_END,
     GRASP_CLOSE_THRESHOLD,
     GRASP_TRANSFORM_TO_OBJECT,
     GRIPPER_CLOSED_THRESHOLD,
     GRIPPER_OPEN_THRESHOLD,
-    MAX_BASE_MOVEMENT_MAGNITUDE,
     MAX_SAMPLER_ATTEMPTS,
     MOVE_TO_TARGET_DISTANCE_BOUNDS,
     MOVE_TO_TARGET_ROT_BOUNDS,
@@ -64,9 +52,6 @@ from kinder_models.dynamic3d.utils import (
     PLACE_SAMPLER_Y_OFFSET_BOUNDS,
     ROBOT_ARM_POSE_TO_BASE,
     WAYPOINT_TOL,
-    WIPER_SWEEP_TRANSFORM,
-    WIPER_SWEEP_TRANSFORM_END,
-    WIPER_TRANSFORM_TO_OBJECT,
     WORLD_X_BOUNDS,
     WORLD_Y_BOUNDS,
     PyBulletSim,
