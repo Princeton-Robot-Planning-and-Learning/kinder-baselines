@@ -1,5 +1,6 @@
 """Utils for tidybot environments."""
 
+import math
 from typing import Iterable
 
 import numpy as np
@@ -18,6 +19,9 @@ from relational_structs import (
 from spatialmath import SE2, UnitQuaternion
 from tomsgeoms2d.structs import Geom2D, Rectangle
 from tomsgeoms2d.utils import geom2ds_intersect
+
+# Control period in seconds (10 Hz).
+_CONTROL_DT = 0.1
 
 
 def get_overhead_object_se2_pose(state: ObjectCentricState, obj: Object) -> SE2:
@@ -228,3 +232,110 @@ def run_base_motion_planning(
 
     initial_pose = get_overhead_robot_se2_pose(state, robot)
     return birrt.query(initial_pose, target_base_pose)
+
+
+# Based on https://github.com/jimmyyhwu/tidybot/blob/main/robot/kinova.py#L310
+def _trapezoidal_motion_profile(
+    total_dist: float,
+    max_vel: float,
+    max_accel: float,
+    max_decel: float,
+    step_size: float,
+) -> np.ndarray:
+    """Compute a trapezoidal motion profile.
+
+    Returns array of positions along the path sampled at step_size.
+    """
+    assert total_dist >= 0
+
+    # Duration of each phase.
+    if total_dist < 0.5 * max_vel**2 / max_accel + 0.5 * max_vel**2 / max_decel:
+        accel_duration = (
+            2 * total_dist / (max_accel + max_accel**2 / max_decel)
+        ) ** 0.5
+        decel_duration = (max_accel / max_decel) * accel_duration
+        const_duration = 0.0
+    else:
+        accel_duration = max_vel / max_accel
+        decel_duration = max_vel / max_decel
+        const_duration = (
+            total_dist / max_vel - 0.5 * max_vel / max_accel - 0.5 * max_vel / max_decel
+        )
+    total_duration = accel_duration + const_duration + decel_duration
+
+    t = np.arange(0, total_duration + step_size, step_size)
+    pos = np.zeros_like(t)
+
+    accel_idx = math.ceil(accel_duration / step_size)
+    pos[:accel_idx] = 0.5 * max_accel * t[:accel_idx] ** 2
+
+    decel_idx = math.ceil((accel_duration + const_duration) / step_size)
+    pos[accel_idx:decel_idx] = 0.5 * max_accel * accel_duration**2 + max_vel * (
+        t[accel_idx:decel_idx] - accel_duration
+    )
+
+    tmp = t[decel_idx:] - (accel_duration + const_duration)
+    pos[decel_idx:] = 0.5 * max_accel * accel_duration**2 + max_vel * const_duration
+    pos[decel_idx:] += (max_decel * decel_duration) * tmp - 0.5 * max_decel * tmp**2
+
+    return pos
+
+
+def _compute_per_joint_profile(
+    start_conf: np.ndarray,
+    end_conf: np.ndarray,
+    max_vel: np.ndarray,
+    max_accel: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute trapezoidal profile along a straight-line joint path.
+
+    Parameterizes the path as q(s) = start + direction * s, where s goes from 0 to
+    total_dist. The scalar max velocity and acceleration along the path are determined
+    by the most constrained joint.
+
+    Returns (trajectory_positions, direction) where trajectory_positions is a 1-D array
+    of s values at each control step.
+    """
+    dq = end_conf - start_conf
+    s_total = float(np.linalg.norm(dq))
+    if s_total < 1e-8:
+        return np.array([0.0]), np.zeros(len(end_conf))
+
+    direction = dq / s_total
+    abs_dir = np.abs(direction)
+
+    # The effective scalar limits along the path: for each joint i,
+    # |dir_i| * ds/dt <= max_vel_i  =>  ds/dt <= max_vel_i / |dir_i|
+    # Take the minimum across joints that actually move.
+    moving = abs_dir > 1e-6
+    effective_max_vel = float(np.min(max_vel[moving] / abs_dir[moving]))
+    effective_max_accel = float(np.min(max_accel[moving] / abs_dir[moving]))
+
+    trajectory = _trapezoidal_motion_profile(
+        s_total,
+        max_vel=effective_max_vel,
+        max_accel=effective_max_accel,
+        max_decel=effective_max_accel,
+        step_size=_CONTROL_DT,
+    )
+    return trajectory, direction
+
+
+def get_target_robot_pose_from_parameters(
+    target_object_pose: SE2, target_distance: float, target_rot: float
+) -> SE2:
+    """Determine the pose for the robot given the state and parameters.
+
+    The robot will be facing the target_object_pose position while being target_distance
+    away, and rotated w.r.t. the target_object_pose rotation by target_rot.
+    """
+    # Absolute angle of the line from the robot to the target.
+    ang = target_object_pose.theta() + target_rot
+
+    # Place the robot `target_distance` away from the target along -ang
+    tx, ty = target_object_pose.t  # target translation (x, y).
+    rx = tx - target_distance * np.cos(ang)
+    ry = ty - target_distance * np.sin(ang)
+
+    # Robot faces the target: heading points along +ang (toward the target).
+    return SE2(rx, ry, ang)
