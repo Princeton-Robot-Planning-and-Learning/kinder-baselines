@@ -9,10 +9,10 @@ import subprocess
 import sys
 
 ENVS = [
-    "motion2d-p0-model",
     "stickbutton2d-b1-model",
     "dynobstruction2d-o1-model",
     "basemotion3d-model",
+    "motion2d-p0-model",
 ]
 
 for env in ENVS:
