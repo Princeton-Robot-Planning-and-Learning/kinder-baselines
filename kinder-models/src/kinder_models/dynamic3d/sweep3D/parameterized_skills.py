@@ -21,8 +21,10 @@ from pybullet_helpers.inverse_kinematics import (
 )
 from pybullet_helpers.joint import JointPositions
 from pybullet_helpers.motion_planning import (
+    create_joint_distance_fn,
     remap_joint_position_plan_to_constant_distance,
     run_motion_planning,
+    smoothly_follow_end_effector_path,
 )
 from relational_structs import (
     Array,
@@ -826,7 +828,6 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         self._pre_place: bool = False
         self._open_gripper: bool = False
         self._returned: bool = False
-        self._returned_2: bool = False
         self._last_gripper_state: float = 0.0
         self.home_joints = np.deg2rad(
             [0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0]
@@ -970,20 +971,6 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             set_joints=False,
         )
 
-        target_joints_end = inverse_kinematics(
-            self._pybullet_sim.robot,
-            target_end_effector_pose_end,
-            set_joints=False,
-        )
-
-        target_joints_end_2 = inverse_kinematics(
-            self._pybullet_sim.robot,
-            target_end_effector_pose_end_2,
-            set_joints=False,
-        )
-        self.target_joints_end = target_joints_end
-        self.target_joints_end_2 = target_joints_end_2
-
         # Run motion planning.
         plan = run_motion_planning(
             self._pybullet_sim.robot,
@@ -994,13 +981,16 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
 
-        retract_plan = run_motion_planning(
+        joint_distance_fn = create_joint_distance_fn(self._pybullet_sim.robot)
+        # Run motion planning to the target joint positions.
+        retract_plan = smoothly_follow_end_effector_path(
             self._pybullet_sim.robot,
-            self._pybullet_sim.get_robot_joints(),
-            target_joints_end,
-            collision_bodies=self._pybullet_sim.get_collision_bodies(),
-            seed=0,  # use a constant seed to make this effectively deterministic
-            physics_client_id=self._pybullet_sim.physics_client_id,
+            [target_end_effector_pose_end, target_end_effector_pose_end_2],
+            initial_joints=target_joints,
+            collision_ids={},  # type: ignore
+            seed=0,  # for determinism
+            joint_distance_fn=joint_distance_fn,
+            max_smoothing_iters_per_step=1,
         )
 
         assert plan is not None, "Motion planning failed"
@@ -1043,7 +1033,7 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             self._current_arm_joint_plan is not None
             and self._current_retract_plan is not None
         )
-        return self._returned_2
+        return self._returned
 
     def step(self) -> Array:
         assert self._current_arm_joint_plan is not None
@@ -1083,26 +1073,20 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             action[-1] = self._get_current_robot_gripper_pose()
             self._approach_step_idx += 1
             return action
-        if self._pre_place and not self._returned:
-            if self._sweep_step_idx >= 5:
+        if self._pre_place:
+            if self._sweep_step_idx >= len(self._sweep_trajectory):
                 self._returned = True
+            idx = min(self._sweep_step_idx, len(self._sweep_trajectory) - 1)
+            s = float(self._sweep_trajectory[idx])
+            kp = 2.0
             curr = np.array(self._get_current_robot_arm_conf()[:7])
-            target = self.target_joints_end
+            target = self._sweep_start_joints + self._sweep_traj_dir * s
             action = np.zeros(11, dtype=np.float32)
-            action[3:10] = target[:7] - curr[:7]
+            action[3:10] = kp * (target - curr)
             action[-1] = self._get_current_robot_gripper_pose()
             self._sweep_step_idx += 1
             return action
-        if self._returned:
-            if self._sweep_step_idx_2 >= 10:
-                self._returned_2 = True
-            curr = np.array(self._get_current_robot_arm_conf()[:7])
-            target = self.target_joints_end_2
-            action = np.zeros(11, dtype=np.float32)
-            action[3:10] = target[:7] - curr[:7]
-            action[-1] = self._get_current_robot_gripper_pose()
-            self._sweep_step_idx_2 += 1
-            return action
+
         raise ValueError("Invalid state")
 
     def observe(self, x: ObjectCentricState) -> None:

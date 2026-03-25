@@ -70,7 +70,7 @@ WIPER_SWEEP_TRANSFORM_END = Pose.from_rpy(
     (0.15, 0.05, 0.025), (-np.pi + np.pi / 16, 0, -np.pi / 2)
 )  # Pose((0.15, 0, 0.04), (-0.707, 0.707, 0, 0))
 WIPER_SWEEP_TRANSFORM_END_2 = Pose.from_rpy(
-    (0.25, 0.15, 0.025), (-np.pi + np.pi / 16, 0, -np.pi / 2)
+    (0.28, 0.15, 0.025), (-np.pi + np.pi / 16, 0, -np.pi / 2)
 )  # Pose((0.15, 0, 0.04), (-0.707, 0.707, 0, 0))
 DRAWER_TRANSFORM_TO_OBJECT = Pose.from_rpy(
     (0.07, 0.3, -0.12), (-np.pi - np.pi / 16, 0, -np.pi / 2)
