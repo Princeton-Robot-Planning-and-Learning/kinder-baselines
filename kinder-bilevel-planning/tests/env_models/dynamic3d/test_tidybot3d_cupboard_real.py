@@ -1,14 +1,13 @@
 """Tests for tidybot3d_cupboard.py."""
 
 import kinder
-import pytest
+import numpy as np
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 
 from kinder_bilevel_planning.agent import BilevelPlanningAgent
 from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
-import numpy as np
 kinder.register_all_environments()
 
 
@@ -17,9 +16,7 @@ def test_tidybot3d_cupboard_bilevel_planning():
     """Tests for bilevel planning in the Shelf3D real environment."""
 
     num_objects = 1
-    env = kinder.make(
-        f"kinder/Shelf3D-o{num_objects}-v0", render_mode="rgb_array"
-    )
+    env = kinder.make(f"kinder/Shelf3D-o{num_objects}-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos", name_prefix="TidyBot3D-shelf3d")
