@@ -4,14 +4,25 @@ import math
 from typing import Iterable
 
 import numpy as np
+import pybullet as p
 from kinder.envs.dynamic3d.object_types import (
     MujocoFixtureObjectType,
     MujocoObjectType,
     MujocoTidyBotRobotObjectType,
 )
+from kinder.envs.kinematic3d.utils import extend_joints_to_include_fingers
 from matplotlib import pyplot as plt
 from prpl_utils.motion_planning import BiRRT
 from prpl_utils.utils import get_signed_angle_distance, wrap_angle
+from pybullet_helpers.geometry import Pose, multiply_poses, set_pose
+from pybullet_helpers.gui import create_gui_connection
+from pybullet_helpers.inverse_kinematics import (
+    set_robot_joints_with_held_object,
+)
+from pybullet_helpers.joint import JointPositions
+from pybullet_helpers.motion_planning import create_joint_distance_fn
+from pybullet_helpers.robots import SingleArmPyBulletRobot, create_pybullet_robot
+from pybullet_helpers.utils import create_pybullet_block, create_pybullet_shelf
 from relational_structs import (
     Object,
     ObjectCentricState,
@@ -22,6 +33,57 @@ from tomsgeoms2d.utils import geom2ds_intersect
 
 # Control period in seconds (10 Hz).
 _CONTROL_DT = 0.1
+
+# Robot geometry.
+ROBOT_ARM_POSE_TO_BASE = Pose((0.12, 0.0, 0.4))
+
+# Arm joint velocity and acceleration limits (rad/s, rad/s²).
+_ARM_MAX_VEL = np.deg2rad(np.array([80.0, 80.0, 80.0, 80.0, 70.0, 70.0, 70.0]))
+_ARM_MAX_ACCEL = np.deg2rad(np.array([297.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0]))
+
+# Base motion limits.
+MAX_BASE_MOVEMENT_MAGNITUDE = 1e-1
+
+# Gripper thresholds.
+GRIPPER_OPEN_THRESHOLD = 0.01
+GRASP_CLOSE_THRESHOLD = 1.0  # for stable grasp
+GRIPPER_CLOSED_THRESHOLD = 0.02
+
+# Waypoint tolerance for arm configuration convergence.
+WAYPOINT_TOL = 4 * 1e-2
+
+# Base navigation sampling bounds.
+MOVE_TO_TARGET_DISTANCE_BOUNDS = (0.5, 0.6)
+MOVE_TO_TARGET_ROT_BOUNDS = (-np.pi / 4, np.pi / 4)
+WORLD_X_BOUNDS = (-2.5, 2.5)
+WORLD_Y_BOUNDS = (-2.5, 2.5)
+
+# End-effector transforms for each skill.
+GRASP_TRANSFORM_TO_OBJECT = Pose((-0.005, 0, 0.01), (0.707, 0.707, 0, 0))
+WIPER_TRANSFORM_TO_OBJECT = Pose.from_rpy(
+    (0.06, 0, 0.03), (-np.pi - np.pi / 16, 0, -np.pi / 2)
+)  # Pose((0.035, 0, 0.04), (-0.707, 0.707, 0, 0))
+WIPER_SWEEP_TRANSFORM = Pose.from_rpy(
+    (-0.02, -0.02, 0.005), (-np.pi + np.pi / 16, 0, -np.pi / 2)
+)  # Pose((-0.05, 0, 0.04), (-0.707, 0.707, 0, 0))
+WIPER_SWEEP_TRANSFORM_END = Pose.from_rpy(
+    (0.15, -0.02, 0.005), (-np.pi + np.pi / 16, 0, -np.pi / 2)
+)  # Pose((0.15, 0, 0.04), (-0.707, 0.707, 0, 0))
+DRAWER_TRANSFORM_TO_OBJECT = Pose.from_rpy(
+    (0.07, 0.3, -0.12), (-np.pi - np.pi / 16, 0, -np.pi / 2)
+)
+DRAWER_TRANSFORM_TO_OBJECT_END = Pose.from_rpy(
+    (0.18, 0.3, -0.12), (-np.pi - np.pi / 16, 0, -np.pi / 2)
+)
+
+# Cupboard-specific geometry and sampling bounds.
+BASE_DISTANCE_TO_CUPBOARD = 0.95
+ARM_MOVEMENT_CUPBOARD = Pose((0.8, 0.0, 0.28), (0.5, 0.5, 0.5, 0.5))
+PLACE_SAMPLER_COLLISION_THRESHOLD = 0.05
+PLACE_SAMPLER_X_OFFSET_BOUNDS = (0.05, 0.1)
+PLACE_SAMPLER_Y_OFFSET_BOUNDS = (-0.05, 0.05)
+MAX_SAMPLER_ATTEMPTS = 100
+BASE_TO_CUPBOARD_ROTATION = -np.pi / 2
 
 
 def get_overhead_object_se2_pose(state: ObjectCentricState, obj: Object) -> SE2:
@@ -339,3 +401,184 @@ def get_target_robot_pose_from_parameters(
 
     # Robot faces the target: heading points along +ang (toward the target).
     return SE2(rx, ry, ang)
+
+
+class PyBulletSim:
+    """An interface to PyBullet for the TidyBot3D ground environment."""
+
+    def __init__(
+        self, initial_state: ObjectCentricState, rendering: bool = False
+    ) -> None:
+        """NOTE: for now, this is extremely specific to the Ground environment where
+        there is exactly one cube. We will generalize this later."""
+
+        # Hardcode the transform from the base pose to the arm pose.
+        self._base_to_arm_pose = ROBOT_ARM_POSE_TO_BASE
+
+        # Create the PyBullet simulator.
+        if rendering:
+            self._physics_client_id = create_gui_connection(
+                camera_pitch=-90, background_rgb=(1.0, 1.0, 1.0)
+            )
+        else:
+            self._physics_client_id = p.connect(p.DIRECT)
+
+        # Create the robot, assuming that it is a kinova gen3.
+        self._robot = create_pybullet_robot(
+            "kinova-gen3",
+            self._physics_client_id,
+            fixed_base=False,
+            control_mode="reset",
+        )
+
+        self.base_link_to_held_obj: Pose | None = None
+
+        # Create all the cubes.
+        self._cubes: dict[str, int] = {}
+        for cube_name in initial_state.get_object_names():
+            if "cube" in cube_name:
+                cube_obj = initial_state.get_object_from_name(cube_name)
+                cube_half_extents = (
+                    initial_state.get(cube_obj, "bb_x") / 2,
+                    initial_state.get(cube_obj, "bb_y") / 2,
+                    initial_state.get(cube_obj, "bb_z") / 2,
+                )
+                self._cubes[cube_name] = create_pybullet_block(
+                    color=(1.0, 0.0, 0.0, 1.0),  # doesn't matter,
+                    half_extents=cube_half_extents,
+                    physics_client_id=self._physics_client_id,
+                )
+
+        self._cupboard1_shelf_id = None
+        if "cupboard_1" in initial_state.get_object_names():
+            self._cupboard1_shelf_id, self._cupboard1_surface_ids = (
+                create_pybullet_shelf(
+                    color=(0.5, 0.5, 0.5, 1.0),
+                    shelf_width=0.60198,
+                    shelf_depth=0.254,
+                    shelf_height=0.0127,
+                    spacing=0.254,
+                    support_width=0.0127,
+                    num_layers=4,
+                    physics_client_id=self._physics_client_id,
+                )
+            )
+
+        # Used for checking if two confs are close.
+        self._joint_distance_fn = create_joint_distance_fn(self._robot)
+
+    @property
+    def physics_client_id(self) -> int:
+        """The physics client ID."""
+        return self._physics_client_id
+
+    @property
+    def robot(self) -> SingleArmPyBulletRobot:
+        """The robot pybullet."""
+        return self._robot
+
+    def get_robot_joints(self) -> JointPositions:
+        """Get the current robot joints from the simulator."""
+        return self._robot.get_joint_positions()
+
+    def set_state(
+        self, x: ObjectCentricState, held_object: Object | None = None
+    ) -> None:
+        """Update the internal state of the simulator from an object-centric state."""
+        # Update the robot state.
+        robots = x.get_objects(MujocoTidyBotRobotObjectType)
+        assert len(robots) == 1, f"Expected 1 robot, got {len(robots)}"
+        robot_obj = list(robots)[0]
+        # Update the arm base.
+        base_pose = Pose.from_rpy(
+            (x.get(robot_obj, "pos_base_x"), x.get(robot_obj, "pos_base_y"), 0.0),
+            (0, 0, x.get(robot_obj, "pos_base_rot")),
+        )
+        arm_pose = multiply_poses(base_pose, self._base_to_arm_pose)
+        self._robot.set_base(arm_pose)
+        # Update the arm conf.
+        arm_conf = [
+            x.get(robot_obj, "pos_arm_joint1"),
+            x.get(robot_obj, "pos_arm_joint2"),
+            x.get(robot_obj, "pos_arm_joint3"),
+            x.get(robot_obj, "pos_arm_joint4"),
+            x.get(robot_obj, "pos_arm_joint5"),
+            x.get(robot_obj, "pos_arm_joint6"),
+            x.get(robot_obj, "pos_arm_joint7"),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ]
+        self._robot.set_joints(arm_conf)
+
+        # Update the cube state.
+        for cube_name in x.get_object_names():
+            if "cube" in cube_name:
+                cube_obj = x.get_object_from_name(cube_name)
+                cube_pose = Pose(
+                    (x.get(cube_obj, "x"), x.get(cube_obj, "y"), x.get(cube_obj, "z")),
+                    (
+                        x.get(cube_obj, "qx"),
+                        x.get(cube_obj, "qy"),
+                        x.get(cube_obj, "qz"),
+                        x.get(cube_obj, "qw"),
+                    ),
+                )
+                set_pose(self._cubes[cube_name], cube_pose, self._physics_client_id)
+
+        if "cupboard_1" in x.get_object_names():
+            cupboard1_obj = x.get_object_from_name("cupboard_1")
+            cupboard1_shelf_pose = Pose(
+                (
+                    x.get(cupboard1_obj, "x"),
+                    x.get(cupboard1_obj, "y"),
+                    x.get(cupboard1_obj, "z"),
+                ),
+                (
+                    x.get(cupboard1_obj, "qx"),
+                    x.get(cupboard1_obj, "qy"),
+                    x.get(cupboard1_obj, "qz"),
+                    x.get(cupboard1_obj, "qw"),
+                ),
+            )
+            assert self._cupboard1_shelf_id is not None
+            set_pose(
+                self._cupboard1_shelf_id,
+                cupboard1_shelf_pose,
+                self._physics_client_id,
+            )
+
+        if held_object:
+            held_object_id = self._cubes[held_object.name]
+            set_robot_joints_with_held_object(
+                self._robot,
+                self._physics_client_id,
+                held_object_id,
+                self.base_link_to_held_obj,
+                extend_joints_to_include_fingers(arm_conf[:7]),
+            )
+
+    def get_ee_pose(self) -> Pose:
+        """Get the end effector pose."""
+        return self._robot.get_end_effector_pose()
+
+    def get_collision_bodies(self, held_object: int | None = None) -> set[int]:
+        """Get pybullet IDs for collision bodies."""
+        collision_bodies: set[int] = set()
+        collision_bodies.update(self._cubes.values())
+        if self._cupboard1_shelf_id is not None:
+            collision_bodies.add(self._cupboard1_shelf_id)
+        if held_object is not None:
+            collision_bodies.discard(held_object)
+        return collision_bodies
+
+    def get_joint_distance(self, conf1: JointPositions, conf2: JointPositions) -> float:
+        """Get the distance between two arm confs."""
+        return self._joint_distance_fn(conf1, conf2)
+
+    def close(self) -> None:
+        """Close the PyBullet simulator."""
+        p.disconnect(self._physics_client_id)
