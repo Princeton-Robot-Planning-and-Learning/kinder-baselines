@@ -1,3 +1,5 @@
 env_id: "kinder/SweepIntoDrawer3D-o5-v0"
 max_eval_steps: 700
 replan_interval: 50
+
+use_checkpoint: False

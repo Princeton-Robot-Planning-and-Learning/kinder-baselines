@@ -8,15 +8,20 @@ Run from the kinder-trajopt directory.
 import subprocess
 import sys
 
+# ENVS = [
+#     "motion2d-p0",
+#     "stickbutton2d-b1",
+#     "dynobstruction2d-o1",
+#     "dynpushpullhook2d-o5",
+#     "basemotion3d",
+#     "shelf3d-o1",
+#     "transport3d-o2",
+#     "sweepintodrawer3d-o5",
+# ]
+
 ENVS = [
-    "motion2d-p0",
-    "stickbutton2d-b1",
-    "dynobstruction2d-o1",
-    "dynpushpullhook2d-o5",
-    "basemotion3d",
-    "shelf3d-o1",
-    "transport3d-o2",
     "sweepintodrawer3d-o5",
+    "dynobstruction2d-o1",
 ]
 
 for env in ENVS:

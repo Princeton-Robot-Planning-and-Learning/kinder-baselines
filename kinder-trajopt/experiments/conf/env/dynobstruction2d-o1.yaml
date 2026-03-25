@@ -1,5 +1,5 @@
 env_id: "kinder/DynObstruction2D-o1-v0"
-max_eval_steps: 100
+max_eval_steps: 200
 replan_interval: 1
 
 use_checkpoint: False
