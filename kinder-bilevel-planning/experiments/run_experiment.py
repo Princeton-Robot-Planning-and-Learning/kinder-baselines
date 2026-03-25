@@ -53,13 +53,12 @@ def _main(cfg: DictConfig) -> None:
         video_path.mkdir(parents=True, exist_ok=True)
         env = RecordVideo(env, str(video_path), episode_trigger=lambda _: True)
 
-    
     # Create the env models.
     if cfg.env.env_name == "tidybot3d_cupboard_real":
-        obs, info = env.reset(seed=cfg.seed)
+        obs, _ = env.reset(seed=cfg.seed)
         for _ in range(5):
             obs, _, _, _, _ = env.step(np.zeros(11))
-        state = env.observation_space.devectorize(obs)
+        state = env.observation_space.devectorize(obs) # type: ignore
         env_models = create_bilevel_planning_models(
             cfg.env.env_name,
             env.observation_space,
@@ -76,6 +75,7 @@ def _main(cfg: DictConfig) -> None:
             **cfg.env.env_model_kwargs,
         )
         dynamic_env = False
+
     # Create the agent.  Per-env overrides (cfg.env.*) take priority over
     # the top-level defaults (cfg.*) so that env configs can customise the
     # approach parameters.
