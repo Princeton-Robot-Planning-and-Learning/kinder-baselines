@@ -69,10 +69,10 @@ WIPER_TRANSFORM_TO_OBJECT = Pose.from_rpy(
     (0.06, 0, 0.03), (-np.pi - np.pi / 16, 0, -np.pi / 2)
 )  # Pose((0.035, 0, 0.04), (-0.707, 0.707, 0, 0))
 WIPER_SWEEP_TRANSFORM = Pose.from_rpy(
-    (-0.04, 0, 0.045), (-np.pi, 0, -np.pi / 2)
+    (-0.02, -0.02, 0.005), (-np.pi + np.pi/16, 0, -np.pi / 2)
 )  # Pose((-0.05, 0, 0.04), (-0.707, 0.707, 0, 0))
 WIPER_SWEEP_TRANSFORM_END = Pose.from_rpy(
-    (0.25, 0, 0.095), (-np.pi + np.pi / 4, 0, -np.pi / 2)
+    (0.15, -0.02, 0.005), (-np.pi + np.pi / 16, 0, -np.pi / 2)
 )  # Pose((0.15, 0, 0.04), (-0.707, 0.707, 0, 0))
 DRAWER_TRANSFORM_TO_OBJECT = Pose.from_rpy(
     (0.07, 0.3, -0.12), (-np.pi - np.pi / 16, 0, -np.pi / 2)
@@ -1749,6 +1749,19 @@ class OpenDrawerSweepController(
         self.home_joints = np.deg2rad(
             [0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0]
         )  # retract configuration
+        # Trapezoidal velocity profiles (approach, open-drawer, and retract phases).
+        self._approach_trajectory: np.ndarray = np.array([])
+        self._approach_traj_dir: np.ndarray = np.zeros(7)
+        self._approach_start_joints: np.ndarray = np.zeros(7)
+        self._approach_step_idx: int = 0
+        self._open_trajectory: np.ndarray = np.array([])
+        self._open_traj_dir: np.ndarray = np.zeros(7)
+        self._open_start_joints: np.ndarray = np.zeros(7)
+        self._open_step_idx: int = 0
+        self._retract_trajectory: np.ndarray = np.array([])
+        self._retract_traj_dir: np.ndarray = np.zeros(7)
+        self._retract_start_joints: np.ndarray = np.zeros(7)
+        self._retract_step_idx: int = 0
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         target_object = self.objects[1]
@@ -1933,6 +1946,27 @@ class OpenDrawerSweepController(
         self._current_arm_joint_plan = plan
         self._current_open_plan = open_plan
         self._current_retract_plan = retract_plan
+        # Compute trapezoidal velocity profile for approach (current -> grasp conf).
+        curr = np.array(self._get_current_robot_arm_conf()[:7])
+        grasp_conf = np.array(plan[-1][:7])
+        open_conf = np.array(open_plan[-1][:7])
+        self._approach_trajectory, self._approach_traj_dir = _compute_per_joint_profile(
+            curr, grasp_conf, _ARM_MAX_VEL, _ARM_MAX_ACCEL
+        )
+        self._approach_start_joints = curr.copy()
+        self._approach_step_idx = 0
+        # Compute trapezoidal velocity profile for open-drawer (grasp conf -> open conf).
+        self._open_trajectory, self._open_traj_dir = _compute_per_joint_profile(
+            grasp_conf, open_conf, _ARM_MAX_VEL, _ARM_MAX_ACCEL
+        )
+        self._open_start_joints = grasp_conf.copy()
+        self._open_step_idx = 0
+        # Compute trapezoidal velocity profile for retract (open conf -> home).
+        self._retract_trajectory, self._retract_traj_dir = _compute_per_joint_profile(
+            open_conf, self.home_joints[:7], _ARM_MAX_VEL, _ARM_MAX_ACCEL
+        )
+        self._retract_start_joints = open_conf.copy()
+        self._retract_step_idx = 0
 
     def terminated(self) -> bool:
         assert (
@@ -1968,31 +2002,17 @@ class OpenDrawerSweepController(
             action[-1] = self._get_current_robot_gripper_pose()
             return action
         if self._navigated and not self._pre_grasp and not self._closed_gripper:
-            while len(self._current_arm_joint_plan) > 1:
-                peek_conf = self._current_arm_joint_plan[0]
-                # Close enough, pop and continue.
-                if len(self._current_arm_joint_plan) == 2:
-                    if self._robot_is_close_to_conf(peek_conf, atol=0.02):
-                        self._current_arm_joint_plan.pop(0)
-                else:
-                    if self._robot_is_close_to_conf(peek_conf):
-                        self._current_arm_joint_plan.pop(0)
-                # Not close enough, stop popping.
-                break
-            if self._robot_is_close_to_conf(self._current_arm_joint_plan[-1]):
+            if self._approach_step_idx >= len(self._approach_trajectory):
                 self._pre_grasp = True
-            robot_conf = self._get_current_robot_arm_conf()
-            gripper_pose = self._get_current_robot_gripper_pose()
-            next_conf = self._current_arm_joint_plan[0]
+            idx = min(self._approach_step_idx, len(self._approach_trajectory) - 1)
+            s = float(self._approach_trajectory[idx])
+            kp = 2.0
+            curr = np.array(self._get_current_robot_arm_conf()[:7])
+            target = self._approach_start_joints + self._approach_traj_dir * s
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
-            free_joints_infos = [
-                joint_info for joint_info in joint_infos if joint_info.qIndex > -1
-            ]
-            action[3:10] = get_jointwise_difference(
-                free_joints_infos[:7], next_conf[:7], robot_conf[:7]
-            )
-            action[-1] = gripper_pose
+            action[3:10] = kp * (target - curr)
+            action[-1] = self._get_current_robot_gripper_pose()
+            self._approach_step_idx += 1
             return action
         if self._pre_grasp and not self._closed_gripper:
             if self._get_current_robot_gripper_pose() > 0.2 and np.isclose(
@@ -2006,27 +2026,17 @@ class OpenDrawerSweepController(
             self._last_gripper_state = self._get_current_robot_gripper_pose()
             return action
         if self._pre_grasp and self._closed_gripper and not self._lifted:
-            while len(self._current_open_plan) > 1:  # type: ignore
-                peek_conf = self._current_open_plan[0]  # type: ignore
-                # Close enough, pop and continue.
-                if self._robot_is_close_to_conf(peek_conf, atol=0.08):
-                    self._current_open_plan.pop(0)  # type: ignore
-                # Not close enough, stop popping.
-                break
-            if self._robot_is_close_to_conf(self._current_open_plan[-1]):  # type: ignore # pylint: disable=line-too-long
+            if self._open_step_idx >= len(self._open_trajectory):
                 self._lifted = True
-            robot_conf = self._get_current_robot_arm_conf()
-            gripper_pose = self._get_current_robot_gripper_pose()
-            next_conf = self._current_open_plan[0]  # type: ignore
+            idx = min(self._open_step_idx, len(self._open_trajectory) - 1)
+            s = float(self._open_trajectory[idx])
+            kp = 2.0
+            curr = np.array(self._get_current_robot_arm_conf()[:7])
+            target = self._open_start_joints + self._open_traj_dir * s
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
-            free_joints_infos = [
-                joint_info for joint_info in joint_infos if joint_info.qIndex > -1
-            ]
-            action[3:10] = get_jointwise_difference(
-                free_joints_infos[:7], next_conf[:7], robot_conf[:7]
-            )
-            action[-1] = gripper_pose
+            action[3:10] = kp * (target - curr)
+            action[-1] = self._get_current_robot_gripper_pose()
+            self._open_step_idx += 1
             return action
         if self._lifted and not self._open_gripper:
             if self._get_current_robot_gripper_pose() < GRIPPER_OPEN_THRESHOLD:
@@ -2036,27 +2046,17 @@ class OpenDrawerSweepController(
             self._last_gripper_state = self._get_current_robot_gripper_pose()
             return action
         if self._open_gripper:
-            while len(self._current_retract_plan) > 1:  # type: ignore
-                peek_conf = self._current_retract_plan[0]  # type: ignore
-                # Close enough, pop and continue.
-                if self._robot_is_close_to_conf(peek_conf, atol=0.08):
-                    self._current_retract_plan.pop(0)  # type: ignore
-                # Not close enough, stop popping.
-                break
-            if self._robot_is_close_to_conf(self._current_retract_plan[-1]):  # type: ignore # pylint: disable=line-too-long
+            if self._retract_step_idx >= len(self._retract_trajectory):
                 self._returned = True
-            robot_conf = self._get_current_robot_arm_conf()
-            gripper_pose = self._get_current_robot_gripper_pose()
-            next_conf = self._current_retract_plan[0]  # type: ignore
+            idx = min(self._retract_step_idx, len(self._retract_trajectory) - 1)
+            s = float(self._retract_trajectory[idx])
+            kp = 2.0
+            curr = np.array(self._get_current_robot_arm_conf()[:7])
+            target = self._retract_start_joints + self._retract_traj_dir * s
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
-            free_joints_infos = [
-                joint_info for joint_info in joint_infos if joint_info.qIndex > -1
-            ]
-            action[3:10] = get_jointwise_difference(
-                free_joints_infos[:7], next_conf[:7], robot_conf[:7]
-            )
-            action[-1] = gripper_pose
+            action[3:10] = kp * (target - curr)
+            action[-1] = self._get_current_robot_gripper_pose()
+            self._retract_step_idx += 1
             return action
         raise ValueError("Invalid state")
 
@@ -2149,6 +2149,15 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
         self.home_joints = np.deg2rad(
             [0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0]
         )  # retract configuration
+        # Trapezoidal velocity profiles (approach and retract phases).
+        self._approach_trajectory: np.ndarray = np.array([])
+        self._approach_traj_dir: np.ndarray = np.zeros(7)
+        self._approach_start_joints: np.ndarray = np.zeros(7)
+        self._approach_step_idx: int = 0
+        self._retract_trajectory: np.ndarray = np.array([])
+        self._retract_traj_dir: np.ndarray = np.zeros(7)
+        self._retract_start_joints: np.ndarray = np.zeros(7)
+        self._retract_step_idx: int = 0
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         target_object = self.objects[1]
@@ -2300,6 +2309,20 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
 
         self._current_arm_joint_plan = plan
         self._current_retract_plan = retract_plan
+        # Compute trapezoidal velocity profile for approach (current -> grasp conf).
+        curr = np.array(self._get_current_robot_arm_conf()[:7])
+        grasp_conf = np.array(plan[-1][:7])
+        self._approach_trajectory, self._approach_traj_dir = _compute_per_joint_profile(
+            curr, grasp_conf, _ARM_MAX_VEL, _ARM_MAX_ACCEL
+        )
+        self._approach_start_joints = curr.copy()
+        self._approach_step_idx = 0
+        # Compute trapezoidal velocity profile for retract (grasp conf -> home).
+        self._retract_trajectory, self._retract_traj_dir = _compute_per_joint_profile(
+            grasp_conf, self.home_joints[:7], _ARM_MAX_VEL, _ARM_MAX_ACCEL
+        )
+        self._retract_start_joints = grasp_conf.copy()
+        self._retract_step_idx = 0
 
     def terminated(self) -> bool:
         assert (
@@ -2334,31 +2357,17 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
             action[-1] = self._get_current_robot_gripper_pose()
             return action
         if self._navigated and not self._pre_grasp and not self._closed_gripper:
-            while len(self._current_arm_joint_plan) > 1:
-                peek_conf = self._current_arm_joint_plan[0]
-                # Close enough, pop and continue.
-                if len(self._current_arm_joint_plan) == 2:
-                    if self._robot_is_close_to_conf(peek_conf, atol=0.02):
-                        self._current_arm_joint_plan.pop(0)
-                else:
-                    if self._robot_is_close_to_conf(peek_conf):
-                        self._current_arm_joint_plan.pop(0)
-                # Not close enough, stop popping.
-                break
-            if self._robot_is_close_to_conf(self._current_arm_joint_plan[-1]):
+            if self._approach_step_idx >= len(self._approach_trajectory):
                 self._pre_grasp = True
-            robot_conf = self._get_current_robot_arm_conf()
-            gripper_pose = self._get_current_robot_gripper_pose()
-            next_conf = self._current_arm_joint_plan[0]
+            idx = min(self._approach_step_idx, len(self._approach_trajectory) - 1)
+            s = float(self._approach_trajectory[idx])
+            kp = 2.0
+            curr = np.array(self._get_current_robot_arm_conf()[:7])
+            target = self._approach_start_joints + self._approach_traj_dir * s
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
-            free_joints_infos = [
-                joint_info for joint_info in joint_infos if joint_info.qIndex > -1
-            ]
-            action[3:10] = get_jointwise_difference(
-                free_joints_infos[:7], next_conf[:7], robot_conf[:7]
-            )
-            action[-1] = gripper_pose
+            action[3:10] = kp * (target - curr)
+            action[-1] = self._get_current_robot_gripper_pose()
+            self._approach_step_idx += 1
             return action
         if self._pre_grasp and not self._closed_gripper:
             if self._get_current_robot_gripper_pose() > 0.2 and np.isclose(
@@ -2372,27 +2381,17 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
             self._last_gripper_state = self._get_current_robot_gripper_pose()
             return action
         if self._pre_grasp and self._closed_gripper:
-            while len(self._current_retract_plan) > 1:  # type: ignore
-                peek_conf = self._current_retract_plan[0]  # type: ignore
-                # Close enough, pop and continue.
-                if self._robot_is_close_to_conf(peek_conf, atol=0.08):
-                    self._current_retract_plan.pop(0)  # type: ignore
-                # Not close enough, stop popping.
-                break
-            if self._robot_is_close_to_conf(self._current_retract_plan[-1]):  # type: ignore # pylint: disable=line-too-long
+            if self._retract_step_idx >= len(self._retract_trajectory):
                 self._lifted = True
-            robot_conf = self._get_current_robot_arm_conf()
-            gripper_pose = self._get_current_robot_gripper_pose()
-            next_conf = self._current_retract_plan[0]  # type: ignore
+            idx = min(self._retract_step_idx, len(self._retract_trajectory) - 1)
+            s = float(self._retract_trajectory[idx])
+            kp = 2.0
+            curr = np.array(self._get_current_robot_arm_conf()[:7])
+            target = self._retract_start_joints + self._retract_traj_dir * s
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
-            free_joints_infos = [
-                joint_info for joint_info in joint_infos if joint_info.qIndex > -1
-            ]
-            action[3:10] = get_jointwise_difference(
-                free_joints_infos[:7], next_conf[:7], robot_conf[:7]
-            )
-            action[-1] = gripper_pose
+            action[3:10] = kp * (target - curr)
+            action[-1] = self._get_current_robot_gripper_pose()
+            self._retract_step_idx += 1
             return action
         raise ValueError("Invalid state")
 
@@ -2486,6 +2485,15 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         self.home_joints = np.deg2rad(
             [0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0]
         )  # retract configuration
+        # Trapezoidal velocity profiles (approach and sweep phases).
+        self._approach_trajectory: np.ndarray = np.array([])
+        self._approach_traj_dir: np.ndarray = np.zeros(7)
+        self._approach_start_joints: np.ndarray = np.zeros(7)
+        self._approach_step_idx: int = 0
+        self._sweep_trajectory: np.ndarray = np.array([])
+        self._sweep_traj_dir: np.ndarray = np.zeros(7)
+        self._sweep_start_joints: np.ndarray = np.zeros(7)
+        self._sweep_step_idx: int = 0
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         cupboard_obj = x.get_object_from_name("cupboard_1")
@@ -2652,6 +2660,21 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
 
         self._current_arm_joint_plan = plan
         self._current_retract_plan = retract_plan
+        # Compute trapezoidal velocity profile for approach (current -> sweep start conf).
+        curr = np.array(self._get_current_robot_arm_conf()[:7])
+        sweep_start_conf = np.array(plan[-1][:7])
+        sweep_end_conf = np.array(retract_plan[-1][:7])
+        self._approach_trajectory, self._approach_traj_dir = _compute_per_joint_profile(
+            curr, sweep_start_conf, _ARM_MAX_VEL, _ARM_MAX_ACCEL
+        )
+        self._approach_start_joints = curr.copy()
+        self._approach_step_idx = 0
+        # Compute trapezoidal velocity profile for sweep (sweep start -> sweep end conf).
+        self._sweep_trajectory, self._sweep_traj_dir = _compute_per_joint_profile(
+            sweep_start_conf, sweep_end_conf, _ARM_MAX_VEL, _ARM_MAX_ACCEL
+        )
+        self._sweep_start_joints = sweep_start_conf.copy()
+        self._sweep_step_idx = 0
 
     def terminated(self) -> bool:
         assert (
@@ -2686,50 +2709,30 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             action[-1] = self._get_current_robot_gripper_pose()
             return action
         if self._navigated and not self._pre_place:
-            while len(self._current_arm_joint_plan) > 1:
-                peek_conf = self._current_arm_joint_plan[0]
-                # Close enough, pop and continue.
-                if self._robot_is_close_to_conf(peek_conf):
-                    self._current_arm_joint_plan.pop(0)
-                # Not close enough, stop popping.
-                break
-            if self._robot_is_close_to_conf(self._current_arm_joint_plan[-1]):
+            if self._approach_step_idx >= len(self._approach_trajectory):
                 self._pre_place = True
-            robot_conf = self._get_current_robot_arm_conf()
-            gripper_pose = self._get_current_robot_gripper_pose()
-            next_conf = self._current_arm_joint_plan[0]
+            idx = min(self._approach_step_idx, len(self._approach_trajectory) - 1)
+            s = float(self._approach_trajectory[idx])
+            kp = 2.0
+            curr = np.array(self._get_current_robot_arm_conf()[:7])
+            target = self._approach_start_joints + self._approach_traj_dir * s
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
-            free_joints_infos = [
-                joint_info for joint_info in joint_infos if joint_info.qIndex > -1
-            ]
-            action[3:10] = get_jointwise_difference(
-                free_joints_infos[:7], next_conf[:7], robot_conf[:7]
-            )
-            action[-1] = gripper_pose
+            action[3:10] = kp * (target - curr)
+            action[-1] = self._get_current_robot_gripper_pose()
+            self._approach_step_idx += 1
             return action
         if self._pre_place:
-            while len(self._current_retract_plan) > 1:  # type: ignore
-                peek_conf = self._current_retract_plan[0]  # type: ignore
-                # Close enough, pop and continue.
-                if self._robot_is_close_to_conf(peek_conf, atol=0.08):
-                    self._current_retract_plan.pop(0)  # type: ignore
-                # Not close enough, stop popping.
-                break
-            if self._robot_is_close_to_conf(self._current_retract_plan[-1]):  # type: ignore # pylint: disable=line-too-long
+            if self._sweep_step_idx >= len(self._sweep_trajectory):
                 self._returned = True
-            robot_conf = self._get_current_robot_arm_conf()
-            gripper_pose = self._get_current_robot_gripper_pose()
-            next_conf = self._current_retract_plan[0]  # type: ignore
+            idx = min(self._sweep_step_idx, len(self._sweep_trajectory) - 1)
+            s = float(self._sweep_trajectory[idx])
+            kp = 2.0
+            curr = np.array(self._get_current_robot_arm_conf()[:7])
+            target = self._sweep_start_joints + self._sweep_traj_dir * s
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
-            free_joints_infos = [
-                joint_info for joint_info in joint_infos if joint_info.qIndex > -1
-            ]
-            action[3:10] = get_jointwise_difference(
-                free_joints_infos[:7], next_conf[:7], robot_conf[:7]
-            )
-            action[-1] = gripper_pose
+            action[3:10] = kp * (target - curr)
+            action[-1] = self._get_current_robot_gripper_pose()
+            self._sweep_step_idx += 1
             return action
         raise ValueError("Invalid state")
 
