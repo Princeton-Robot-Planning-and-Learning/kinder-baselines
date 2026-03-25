@@ -53,14 +53,29 @@ def _main(cfg: DictConfig) -> None:
         video_path.mkdir(parents=True, exist_ok=True)
         env = RecordVideo(env, str(video_path), episode_trigger=lambda _: True)
 
+    
     # Create the env models.
-    env_models = create_bilevel_planning_models(
-        cfg.env.env_name,
-        env.observation_space,
-        env.action_space,
-        **cfg.env.env_model_kwargs,
-    )
-
+    if cfg.env.env_name == "tidybot3d_cupboard_real":
+        obs, info = env.reset(seed=cfg.seed)
+        for _ in range(5):
+            obs, _, _, _, _ = env.step(np.zeros(11))
+        state = env.observation_space.devectorize(obs)
+        env_models = create_bilevel_planning_models(
+            cfg.env.env_name,
+            env.observation_space,
+            env.action_space,
+            initial_state=state,
+            **cfg.env.env_model_kwargs,
+        )
+        dynamic_env = True
+    else:
+        env_models = create_bilevel_planning_models(
+            cfg.env.env_name,
+            env.observation_space,
+            env.action_space,
+            **cfg.env.env_model_kwargs,
+        )
+        dynamic_env = False
     # Create the agent.  Per-env overrides (cfg.env.*) take priority over
     # the top-level defaults (cfg.*) so that env configs can customise the
     # approach parameters.
@@ -87,6 +102,7 @@ def _main(cfg: DictConfig) -> None:
             env,
             rng,
             max_eval_steps=cfg.max_eval_steps,
+            dynamic_env=dynamic_env,
         )
         episode_metrics["eval_episode"] = eval_episode
         metrics.append(episode_metrics)
@@ -117,12 +133,16 @@ def _run_single_episode_evaluation(
     env: Env,
     rng: np.random.Generator,
     max_eval_steps: int,
+    dynamic_env: bool = False,
 ) -> dict[str, float]:
     steps = 0
     success = False
     total_reward = 0.0
     seed = sample_seed_from_rng(rng)
     obs, info = env.reset(seed=seed)
+    if dynamic_env:
+        for _ in range(5):
+            obs, _, _, _, _ = env.step(np.zeros(11))
     planning_time = 0.0  # time spent generating plans (abstract + skill planning)
     execution_time = 0.0  # time spent executing the policy (getting actions)
     planning_failed = False
