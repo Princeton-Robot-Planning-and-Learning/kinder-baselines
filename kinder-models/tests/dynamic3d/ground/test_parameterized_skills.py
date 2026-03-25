@@ -1104,7 +1104,7 @@ def test_pick_toss():
     target_distance = 0.5
     target_rotation = 0
     params = np.array([target_distance, target_rotation])
-    
+
     # Reset and execute the controller until it terminates.
     controller.reset(state, params)
     for _ in range(200):
@@ -1302,7 +1302,7 @@ def test_pick_ground_toss():
 
     # Create the move-base controller.
     controllers = create_lifted_controllers(env.action_space)
-    
+
     # create the pick ground controller.
     lifted_controller = controllers["pick_ground"]
     robot = _get_robot_from_state(state)

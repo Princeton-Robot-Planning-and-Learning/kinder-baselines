@@ -28,9 +28,7 @@ def test_cupboard_real_state_abstraction():
     """Tests for CupboardRealStateAbstractor()."""
     kinder.register_all_environments()
     num_objects = 1
-    env = kinder.make(
-        f"kinder/Shelf3D-o{num_objects}-v0", render_mode="rgb_array"
-    )
+    env = kinder.make(f"kinder/Shelf3D-o{num_objects}-v0", render_mode="rgb_array")
     if MAKE_VIDEOS:
         env = RecordVideo(
             env,
