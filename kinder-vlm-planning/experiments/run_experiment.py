@@ -41,10 +41,13 @@ def _main(cfg: DictConfig) -> None:
     logging.info(f"Running seed={cfg.seed}, env={cfg.env}, vlm_model={cfg.vlm_model}")
     # Create the environment.
     kinder.register_all_environments()
+    make_kwargs = {}
     if cfg.get("rgb_observation", False):
-        env = kinder.make(f"kinder/{cfg.env}", render_mode="rgb_array")
-    else:
-        env = kinder.make(f"kinder/{cfg.env}")
+        make_kwargs["render_mode"] = "rgb_array"
+    # Enable state access for 3D environments (controllers need to call set_state)
+    if "3D" in cfg.env or "3d" in cfg.env:
+        make_kwargs["allow_state_access"] = True
+    env = kinder.make(f"kinder/{cfg.env}", **make_kwargs)
     assert env.spec is not None, "Environment spec must not be None"
     assert hasattr(
         env.spec, "entry_point"
@@ -58,7 +61,7 @@ def _main(cfg: DictConfig) -> None:
 
     # Load environment-specific controllers if available.
     env_controllers = get_controllers_for_environment(
-        env_class_name, env_name, action_space=env.action_space
+        env_class_name, env_name, action_space=env.action_space, make_kwargs=make_kwargs
     )
     assert env_controllers is not None, "Environment controllers must be available"
 
