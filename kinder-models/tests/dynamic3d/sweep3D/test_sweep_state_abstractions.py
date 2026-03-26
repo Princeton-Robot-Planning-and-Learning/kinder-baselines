@@ -60,7 +60,8 @@ def test_sweep3D_state_abstraction():
     abstract_state = abstractor.state_abstractor(state)
     robot = _get_robot_from_state(state)
     assert str(sorted(abstract_state.atoms)) == (
-        f"[(HandEmpty {robot.name}), "
+        f"[(DrawerClosed kitchen_island_drawer_s1c1), "
+        f"(HandEmpty {robot.name}), "
         f"(OnTable cube_0), "
         f"(OnTable cube_1), "
         f"(OnTable cube_2), "

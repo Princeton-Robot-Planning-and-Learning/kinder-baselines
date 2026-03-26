@@ -22,6 +22,7 @@ from kinder_models.dynamic3d.ground.parameterized_skills import PyBulletSim
 
 # Predicates.
 DrawerOpen = Predicate("DrawerOpen", [MujocoDrawerObjectType])
+DrawerClosed = Predicate("DrawerClosed", [MujocoDrawerObjectType])
 InDrawer = Predicate("InDrawer", [MujocoMovableObjectType, MujocoDrawerObjectType])
 OnTable = Predicate("OnTable", [MujocoMovableObjectType])
 Holding = Predicate("Holding", [MujocoTidyBotRobotObjectType, MujocoMovableObjectType])
@@ -69,9 +70,12 @@ class Sweep3DStateAbstractor:
         # drawer open
         open_drawer = None
         for drawer in drawers:
-            if state.get(drawer, "pos") > 0.04:
-                atoms.add(GroundAtom(DrawerOpen, [drawer]))
-                open_drawer = drawer
+            if drawer.name == "kitchen_island_drawer_s1c1":
+                if state.get(drawer, "pos") > 0.04:
+                    atoms.add(GroundAtom(DrawerOpen, [drawer]))
+                    open_drawer = drawer
+                else:
+                    atoms.add(GroundAtom(DrawerClosed, [drawer]))
         # OnTable.
         GraspThreshold = 0.1
         for target in movables:
