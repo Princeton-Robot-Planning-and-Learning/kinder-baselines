@@ -106,9 +106,16 @@ class Sweep3DStateAbstractor:
         objects = {robot} | all_mujoco_objects
         return RelationalAbstractState(atoms, objects)
 
-    def goal_deriver_grasp(self, state: ObjectCentricState) -> RelationalAbstractGoal:
-        """The goal is to grasp the target."""
-        target = state.get_object_from_name("cube1")
+    def goal_deriver(self, state: ObjectCentricState) -> RelationalAbstractGoal:
+        """The goal is to sweep the target into the drawer."""
+        wiper = state.get_object_from_name("wiper_0")
+        cubes = state.get_objects(MujocoMovableObjectType)
+        drawer = state.get_object_from_name("kitchen_island_drawer_s1c1")
         robot = state.get_object_from_name(self._robot_name)
-        atoms = {GroundAtom(Holding, [robot, target])}
+        atoms = {
+            GroundAtom(Holding, [robot, wiper]),
+            GroundAtom(DrawerOpen, [drawer]),
+        }
+        for cube in cubes:
+            atoms.add(GroundAtom(InDrawer, [cube, drawer]))
         return RelationalAbstractGoal(atoms, self.state_abstractor)
