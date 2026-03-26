@@ -1,12 +1,13 @@
 """Parameterized skills for the TidyBot3D ground environment."""
 
-from typing import Any
+from typing import Any, Union
 
 import numpy as np
 from bilevel_planning.structs import (
     GroundParameterizedController,
     LiftedParameterizedController,
 )
+from gymnasium.spaces import Box
 from kinder.envs.dynamic3d.object_types import (
     MujocoFixtureObjectType,
     MujocoMovableObjectType,
@@ -86,7 +87,7 @@ class MoveToTargetGroundController(
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._last_state: ObjectCentricState | None = None
-        self._current_params: np.ndarray | None = None
+        self._current_params: Union[tuple[float, ...], float, None] = None
         self._current_base_motion_plan: list[SE2] | None = None
 
     def sample_parameters(
@@ -108,14 +109,13 @@ class MoveToTargetGroundController(
     def reset(
         self,
         x: ObjectCentricState,
-        params: Any,
+        params: Union[tuple[float, ...], float],
         extend_xy_magnitude: float = 0.025,
         extend_rot_magnitude: float = np.pi / 8,
         disable_collision_objects: list[str] | None = None,
     ) -> None:
         self._last_state = x
-        assert isinstance(params, np.ndarray)
-        self._current_params = params.copy()
+        self._current_params = params
         # Derive the target pose for the robot.
         target_distance, target_rot = self._current_params
         target_object = self.objects[1]
@@ -214,7 +214,7 @@ class MoveArmToConfController(GroundParameterizedController[ObjectCentricState, 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._last_state: ObjectCentricState | None = None
-        self._current_params: np.ndarray | None = None
+        self._current_params: Union[tuple[float, ...], float, None] = None
         self._current_arm_joint_plan: list[JointPositions] | None = None
         self._pybullet_sim: PyBulletSim | None = None
         self._trajectory: np.ndarray = np.array([])
@@ -227,15 +227,14 @@ class MoveArmToConfController(GroundParameterizedController[ObjectCentricState, 
         # want to specify the target arm conf themselves.
         raise NotImplementedError
 
-    def reset(self, x: ObjectCentricState, params: Any) -> None:
+    def reset(self, x: ObjectCentricState, params: Union[tuple[float, ...], float]) -> None:
         # Initialize the PyBullet interface if this is the first time ever.
         if self._pybullet_sim is None:
             self._pybullet_sim = PyBulletSim(x)
         # Update the current state and parameters.
         self._last_state = x
-        assert isinstance(params, np.ndarray)
-        self._current_params = params.copy()
-        target_joints = self._current_params.tolist() + ([0.0] * 6)
+        self._current_params = params
+        target_joints = list(self._current_params) + ([0.0] * 6)
         # Reset PyBullet given the current state.
         self._pybullet_sim.set_state(x)
         # Run motion planning.
@@ -338,7 +337,7 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._last_state: ObjectCentricState | None = None
-        self._current_params: np.ndarray | None = None
+        self._current_params: Union[tuple[float, ...], float, None] = None
         self._current_arm_joint_plan: list[JointPositions] | None = None
         self._pybullet_sim: PyBulletSim | None = None
         # Fraction of toss path at which to release gripper.
@@ -354,15 +353,14 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
         # want to specify the target arm conf themselves.
         raise NotImplementedError
 
-    def reset(self, x: ObjectCentricState, params: Any) -> None:
+    def reset(self, x: ObjectCentricState, params: Union[tuple[float, ...], float]) -> None:
         # Initialize the PyBullet interface if this is the first time ever.
         if self._pybullet_sim is None:
             self._pybullet_sim = PyBulletSim(x)
         # Update the current state and parameters.
         self._last_state = x
-        assert isinstance(params, np.ndarray)
-        self._current_params = params.copy()
-        target_joints = self._current_params.tolist() + ([0.0] * 6)
+        self._current_params = params
+        target_joints = list(self._current_params) + ([0.0] * 6)
         # Reset PyBullet given the current state.
         self._pybullet_sim.set_state(x)
         # Run motion planning.
@@ -495,7 +493,7 @@ class MoveArmToEndEffectorController(
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._last_state: ObjectCentricState | None = None
-        self._current_params: np.ndarray | None = None
+        self._current_params: Union[tuple[float, ...], float, None] = None
         self._current_arm_joint_plan: list[JointPositions] | None = None
         self._pybullet_sim: PyBulletSim | None = None
         self._trajectory: np.ndarray = np.array([])
@@ -508,14 +506,13 @@ class MoveArmToEndEffectorController(
         # want to specify the target end effector pose themselves.
         raise NotImplementedError
 
-    def reset(self, x: ObjectCentricState, params: Any) -> None:
+    def reset(self, x: ObjectCentricState, params: Union[tuple[float, ...], float]) -> None:
         # Initialize the PyBullet interface if this is the first time ever.
         if self._pybullet_sim is None:
             self._pybullet_sim = PyBulletSim(x)
         # Update the current state and parameters.
         self._last_state = x
-        assert isinstance(params, np.ndarray)
-        self._current_params = params.copy()
+        self._current_params = params
 
         # Reset PyBullet given the current state.
         self._pybullet_sim.set_state(x)
@@ -651,7 +648,7 @@ class CloseGripperController(GroundParameterizedController[ObjectCentricState, A
         # want to specify the target end effector pose themselves.
         raise NotImplementedError
 
-    def reset(self, x: ObjectCentricState, params: Any | None = None) -> None:
+    def reset(self, x: ObjectCentricState, params: Union[tuple[float, ...], float, None] = None) -> None:
         # Update the current state and parameters.
         self._last_state = x
 
@@ -697,7 +694,7 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
         # want to specify the target end effector pose themselves.
         raise NotImplementedError
 
-    def reset(self, x: ObjectCentricState, params: Any | None = None) -> None:
+    def reset(self, x: ObjectCentricState, params: Union[tuple[float, ...], float, None] = None) -> None:
         # Update the current state and parameters.
         self._last_state = x
 
@@ -737,7 +734,7 @@ class PickGroundController(GroundParameterizedController[ObjectCentricState, Arr
     ) -> None:
         super().__init__(*args, **kwargs)
         self._last_state: ObjectCentricState | None = None
-        self._current_params: np.ndarray | None = None
+        self._current_params: Union[tuple[float, ...], float, None] = None
         self._current_arm_joint_plan: list[JointPositions] | None = None
         self._current_retract_plan: list[JointPositions] | None = None
         self._current_base_motion_plan: list[SE2] | None = None
@@ -796,7 +793,7 @@ class PickGroundController(GroundParameterizedController[ObjectCentricState, Arr
     def reset(
         self,
         x: ObjectCentricState,
-        params: Any,
+        params: Union[tuple[float, ...], float],
         extend_xy_magnitude: float = 0.025,
         extend_rot_magnitude: float = np.pi / 8,
     ) -> None:
@@ -806,8 +803,7 @@ class PickGroundController(GroundParameterizedController[ObjectCentricState, Arr
         # Update the current state and parameters.
         self._last_state = x
 
-        assert isinstance(params, np.ndarray)
-        self._current_params = params.copy()
+        self._current_params = params
         # Derive the target pose for the robot.
         target_distance, target_rot = self._current_params
         target_object = self.objects[1]
@@ -1079,7 +1075,7 @@ class PlaceGroundController(GroundParameterizedController[ObjectCentricState, Ar
     ) -> None:
         super().__init__(*args, **kwargs)
         self._last_state: ObjectCentricState | None = None
-        self._current_params: np.ndarray | None = None
+        self._current_params: Union[tuple[float, ...], float, None] = None
         self._current_arm_joint_plan: list[JointPositions] | None = None
         self._current_retract_plan: list[JointPositions] | None = None
         self._current_base_motion_plan: list[SE2] | None = None
@@ -1144,7 +1140,7 @@ class PlaceGroundController(GroundParameterizedController[ObjectCentricState, Ar
     def reset(
         self,
         x: ObjectCentricState,
-        params: Any,
+        params: Union[tuple[float, ...], float],
         extend_xy_magnitude: float = 0.025,
         extend_rot_magnitude: float = np.pi / 8,
     ) -> None:
@@ -1154,8 +1150,7 @@ class PlaceGroundController(GroundParameterizedController[ObjectCentricState, Ar
         # Update the current state and parameters.
         self._last_state = x
 
-        assert isinstance(params, np.ndarray)
-        self._current_params = params.copy()
+        self._current_params = params
         # Derive the target pose for the robot.
         target_distance, target_offset, target_rot = self._current_params
         target_object = self.objects[2]
@@ -1414,10 +1409,19 @@ def create_lifted_controllers(
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     target = Variable("?target", MujocoObjectType)
 
+    # Parameter space: [distance, rotation]
+    # Based on sample_parameters: distance can be 0.5, 0.85, 0.92; rotation can be 0.0, -π/2
+    move_to_target_params_space = Box(
+        low=np.array([0.3, -np.pi], dtype=np.float32),
+        high=np.array([1.5, np.pi], dtype=np.float32),
+        dtype=np.float32,
+    )
+
     LiftedMoveToTargetController: LiftedParameterizedController = (
         LiftedParameterizedController(
             [robot, target],
             MoveToTargetGroundController,
+            params_space=move_to_target_params_space,
         )
     )
 
@@ -1425,38 +1429,93 @@ def create_lifted_controllers(
     target = Variable("?target", MujocoObjectType)
     prev_target = Variable("?prev_target", MujocoObjectType)
 
+    # Uses same parameter space as move_to_target
     LiftedMoveToTargetFromOtherTargetController: LiftedParameterizedController = (
         LiftedParameterizedController(
             [robot, target, prev_target],
             MoveToTargetGroundController,
+            params_space=move_to_target_params_space,
         )
     )
 
     # Move arm to conf controller.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
 
+    # Parameter space: [joint1, joint2, joint3, joint4, joint5, joint6, joint7]
+    # Based on reset(): expects 7 joint angle parameters
+    # Joint limits from Kinova Gen3 robot (gen3_2f85.xml):
+    # joint_1, 3, 5, 7: unlimited rotation → use ±2π
+    # joint_2: ±2.24, joint_4: ±2.57, joint_6: ±2.09
+    arm_conf_params_space = Box(
+        low=np.array(
+            [-2 * np.pi, -2.24, -2 * np.pi, -2.57, -2 * np.pi, -2.09, -2 * np.pi],
+            dtype=np.float32,
+        ),
+        high=np.array(
+            [2 * np.pi, 2.24, 2 * np.pi, 2.57, 2 * np.pi, 2.09, 2 * np.pi],
+            dtype=np.float32,
+        ),
+        dtype=np.float32,
+    )
+
     LiftedMoveArmToConfController: LiftedParameterizedController = (
         LiftedParameterizedController(
             [robot],
             MoveArmToConfController,
+            params_space=arm_conf_params_space,
         )
     )
 
     # Toss controller.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
 
+    # Uses same parameter space as move_arm_to_conf (7 joint angles)
     LiftedTossController: LiftedParameterizedController = LiftedParameterizedController(
         [robot],
         TossController,
+        params_space=arm_conf_params_space,
     )
 
     # Move arm to end effector controller.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
 
+    # Parameter space: [x, y, z, qw, qx, qy, qz, rot]
+    # Based on reset(): params are [x, y, z, qw, qx, qy, qz, rot] for end effector pose
+    end_effector_params_space = Box(
+        low=np.array(
+            [
+                WORLD_X_BOUNDS[0],  # x
+                WORLD_Y_BOUNDS[0],  # y
+                0.0,  # z (above ground)
+                -1.0,  # qw
+                -1.0,  # qx
+                -1.0,  # qy
+                -1.0,  # qz
+                -np.pi,  # rot
+            ],
+            dtype=np.float32,
+        ),
+        high=np.array(
+            [
+                WORLD_X_BOUNDS[1],  # x
+                WORLD_Y_BOUNDS[1],  # y
+                2.0,  # z
+                1.0,  # qw
+                1.0,  # qx
+                1.0,  # qy
+                1.0,  # qz
+                np.pi,  # rot
+            ],
+            dtype=np.float32,
+        ),
+        dtype=np.float32,
+    )
+
     LiftedMoveArmToEndEffectorController: LiftedParameterizedController = (
         LiftedParameterizedController(
             [robot],
             MoveArmToEndEffectorController,
+            params_space=end_effector_params_space,
         )
     )
 
@@ -1497,10 +1556,24 @@ def create_lifted_controllers(
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     target = Variable("?target", MujocoMovableObjectType)
 
+    # Parameter space: [distance, rotation]
+    pick_ground_params_space = Box(
+        low=np.array(
+            [MOVE_TO_TARGET_DISTANCE_BOUNDS[0], MOVE_TO_TARGET_ROT_BOUNDS[0]],
+            dtype=np.float32,
+        ),
+        high=np.array(
+            [MOVE_TO_TARGET_DISTANCE_BOUNDS[1], MOVE_TO_TARGET_ROT_BOUNDS[1]],
+            dtype=np.float32,
+        ),
+        dtype=np.float32,
+    )
+
     LiftedPickGroundController: LiftedParameterizedController = (
         LiftedParameterizedController(
             [robot, target],
             PickController,
+            params_space=pick_ground_params_space,
         )
     )
 
@@ -1509,10 +1582,32 @@ def create_lifted_controllers(
     target = Variable("?target", MujocoMovableObjectType)
     target_place = Variable("?target_place", MujocoFixtureObjectType)
 
+    # Parameter space: [distance, y_offset, rotation]
+    place_ground_params_space = Box(
+        low=np.array(
+            [
+                BASE_DISTANCE_TO_CUPBOARD + PLACE_SAMPLER_X_OFFSET_BOUNDS[0],
+                PLACE_SAMPLER_Y_OFFSET_BOUNDS[0],
+                BASE_TO_CUPBOARD_ROTATION,
+            ],
+            dtype=np.float32,
+        ),
+        high=np.array(
+            [
+                BASE_DISTANCE_TO_CUPBOARD + PLACE_SAMPLER_X_OFFSET_BOUNDS[1],
+                PLACE_SAMPLER_Y_OFFSET_BOUNDS[1],
+                BASE_TO_CUPBOARD_ROTATION,
+            ],
+            dtype=np.float32,
+        ),
+        dtype=np.float32,
+    )
+
     LiftedPlaceGroundController: LiftedParameterizedController = (
         LiftedParameterizedController(
             [robot, target, target_place],
             PlaceController,
+            params_space=place_ground_params_space,
         )
     )
 
