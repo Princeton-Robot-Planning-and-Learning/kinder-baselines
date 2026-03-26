@@ -1,6 +1,7 @@
 """Bilevel planning models for the TidyBot3D sweep3D environment."""
 
 import numpy as np
+import kinder
 from bilevel_planning.structs import (
     LiftedSkill,
     SesameModels,
@@ -22,6 +23,7 @@ from kinder_models.dynamic3d.sweep3D.state_abstractions import (
     OnTable,
     InDrawer,
     DrawerOpen,
+    DrawerClosed,
 )
 from kinder_models.dynamic3d.sweep3D.parameterized_skills import (
     PyBulletSim,
@@ -95,43 +97,107 @@ def create_bilevel_planning_models(
         OnTable,
         InDrawer,
         DrawerOpen,
+        DrawerClosed,
     }
 
-    # Open drawer controller.
+    # Open drawer operator.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
-    target = Variable("?target", MujocoMovableObjectType)
+    wiper = Variable("?wiper", MujocoMovableObjectType)
+    drawer = Variable("?drawer", MujocoDrawerObjectType)
+    cube0 = Variable("?cube0", MujocoMovableObjectType)
+    cube1 = Variable("?cube1", MujocoMovableObjectType)
+    cube2 = Variable("?cube2", MujocoMovableObjectType)
+    cube3 = Variable("?cube3", MujocoMovableObjectType)
+    cube4 = Variable("?cube4", MujocoMovableObjectType)
 
     OpenDrawerOperator = LiftedOperator(
         "open_drawer",
-        [robot, target],
+        [robot, wiper, drawer, cube0, cube1, cube2, cube3, cube4],
         preconditions={
             LiftedAtom(HandEmpty, [robot]),
-            LiftedAtom(OnGround, [target]),
+            LiftedAtom(OnTable, [wiper]),
+            LiftedAtom(OnTable, [cube0]),
+            LiftedAtom(OnTable, [cube1]),
+            LiftedAtom(OnTable, [cube2]),
+            LiftedAtom(OnTable, [cube3]),
+            LiftedAtom(OnTable, [cube4]),
+            LiftedAtom(DrawerClosed, [drawer]),
         },
-        add_effects={LiftedAtom(Holding, [robot, target])},
+        add_effects={
+            LiftedAtom(DrawerOpen, [drawer]),
+        },
         delete_effects={
-            LiftedAtom(HandEmpty, [robot]),
-            LiftedAtom(OnGround, [target]),
+            LiftedAtom(DrawerClosed, [drawer]),
         },
     )
 
-    # Place cupboard controller.
+    # Place cupboard operator.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
-    target = Variable("?target", MujocoMovableObjectType)
-    target_place = Variable("?target_place", MujocoFixtureObjectType)
+    wiper = Variable("?wiper", MujocoMovableObjectType)
+    drawer = Variable("?drawer", MujocoDrawerObjectType)
+    cube0 = Variable("?cube0", MujocoMovableObjectType)
+    cube1 = Variable("?cube1", MujocoMovableObjectType)
+    cube2 = Variable("?cube2", MujocoMovableObjectType)
+    cube3 = Variable("?cube3", MujocoMovableObjectType)
+    cube4 = Variable("?cube4", MujocoMovableObjectType)
 
-    PlaceTargetOperator = LiftedOperator(
-        "place_target",
-        [robot, target, target_place],
+    PickWiperOperator = LiftedOperator(
+        "pick_wiper",
+        [robot, wiper, drawer, cube0, cube1, cube2, cube3, cube4],
         preconditions={
-            LiftedAtom(Holding, [robot, target]),
+            LiftedAtom(HandEmpty, [robot]),
+            LiftedAtom(OnTable, [wiper]),
+            LiftedAtom(OnTable, [cube0]),
+            LiftedAtom(OnTable, [cube1]),
+            LiftedAtom(OnTable, [cube2]),
+            LiftedAtom(OnTable, [cube3]),
+            LiftedAtom(OnTable, [cube4]),
+            LiftedAtom(DrawerOpen, [drawer]),
         },
         add_effects={
-            LiftedAtom(HandEmpty, [robot]),
-            LiftedAtom(OnFixture, [target, target_place]),
+            LiftedAtom(Holding, [robot, wiper]),
         },
         delete_effects={
-            LiftedAtom(Holding, [robot, target]),
+            LiftedAtom(HandEmpty, [robot]),
+            LiftedAtom(OnTable, [wiper]),
+        },
+    )
+
+    # Sweep operator.
+    robot = Variable("?robot", MujocoTidyBotRobotObjectType)
+    wiper = Variable("?wiper", MujocoMovableObjectType)
+    drawer = Variable("?drawer", MujocoDrawerObjectType)
+    cube0 = Variable("?cube0", MujocoMovableObjectType)
+    cube1 = Variable("?cube1", MujocoMovableObjectType)
+    cube2 = Variable("?cube2", MujocoMovableObjectType)
+    cube3 = Variable("?cube3", MujocoMovableObjectType)
+    cube4 = Variable("?cube4", MujocoMovableObjectType)
+
+    SweepOperator = LiftedOperator(
+        "sweep",
+        [robot, wiper, drawer, cube0, cube1, cube2, cube3, cube4],
+        preconditions={
+            LiftedAtom(Holding, [robot, wiper]),
+            LiftedAtom(OnTable, [cube0]),
+            LiftedAtom(OnTable, [cube1]),
+            LiftedAtom(OnTable, [cube2]),
+            LiftedAtom(OnTable, [cube3]),
+            LiftedAtom(OnTable, [cube4]),
+            LiftedAtom(DrawerOpen, [drawer]),
+        },
+        add_effects={
+            LiftedAtom(InDrawer, [cube0, drawer]),
+            LiftedAtom(InDrawer, [cube1, drawer]),
+            LiftedAtom(InDrawer, [cube2, drawer]),
+            LiftedAtom(InDrawer, [cube3, drawer]),
+            LiftedAtom(InDrawer, [cube4, drawer]),
+        },
+        delete_effects={
+            LiftedAtom(OnTable, [cube0]),
+            LiftedAtom(OnTable, [cube1]),
+            LiftedAtom(OnTable, [cube2]),
+            LiftedAtom(OnTable, [cube3]),
+            LiftedAtom(OnTable, [cube4]),
         },
     )
 
@@ -143,13 +209,15 @@ def create_bilevel_planning_models(
     )
 
     # Controllers.
-    LiftedPickGroundController = controllers["pick_ground"]
-    LiftedPlaceGroundController = controllers["place_ground"]
+    LiftedOpenDrawerController = controllers["open_drawer"]
+    LiftedPickWiperController = controllers["pick_wiper"]
+    LiftedSweepController = controllers["sweep"]
 
     # Finalize the skills.
     skills = {
-        LiftedSkill(PickTargetOperator, LiftedPickGroundController),
-        LiftedSkill(PlaceTargetOperator, LiftedPlaceGroundController),
+        LiftedSkill(OpenDrawerOperator, LiftedOpenDrawerController),
+        LiftedSkill(PickWiperOperator, LiftedPickWiperController),
+        LiftedSkill(SweepOperator, LiftedSweepController),
     }
 
     # Finalize the models.
