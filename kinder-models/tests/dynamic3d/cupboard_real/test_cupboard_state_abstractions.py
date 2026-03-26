@@ -12,9 +12,9 @@ from kinder_models.dynamic3d.cupboard_real.state_abstractions import (
     CupboardRealStateAbstractor,
 )
 from kinder_models.dynamic3d.ground.parameterized_skills import (
-    PyBulletSim,
     create_lifted_controllers,
 )
+from kinder_models.dynamic3d.utils import PyBulletSim
 
 
 def _get_robot_from_state(state: ObjectCentricState):
