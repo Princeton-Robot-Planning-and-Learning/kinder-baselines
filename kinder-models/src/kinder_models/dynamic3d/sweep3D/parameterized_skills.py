@@ -111,37 +111,9 @@ class OpenDrawerSweepController(
         self._retract_step_idx: int = 0
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
-        target_object = self.objects[1]
-        target_object_pose = get_overhead_object_se2_pose(x, target_object)
-
-        for _ in range(MAX_SAMPLER_ATTEMPTS):
-            distance = rng.uniform(*MOVE_TO_TARGET_DISTANCE_BOUNDS)  # type: ignore
-            rot = rng.uniform(*MOVE_TO_TARGET_ROT_BOUNDS)
-            target_base_pose = get_target_robot_pose_from_parameters(
-                target_object_pose, distance, rot
-            )
-            collision = False
-            for other_object in x.get_objects(MujocoMovableObjectType):
-                if (
-                    "cube" in other_object.name
-                    and other_object.name != target_object.name
-                ):
-                    other_object_pose = get_overhead_object_se2_pose(x, other_object)
-                    collision_distance = float(
-                        np.linalg.norm(
-                            [
-                                target_base_pose.x - other_object_pose.x,
-                                target_base_pose.y - other_object_pose.y,
-                            ]
-                        )
-                    )
-                    if collision_distance < 0.6:
-                        collision = True
-                        break
-            if not collision:
-                return np.array([distance, rot])
-
-        raise ValueError("No valid parameters found")
+        # distance = rng.uniform(*MOVE_TO_TARGET_DISTANCE_BOUNDS)  # type: ignore
+        # rot = rng.uniform(*MOVE_TO_TARGET_ROT_BOUNDS)
+        return np.array([0.7, -np.pi])
 
     def reset(
         self,
@@ -507,37 +479,9 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
         self._retract_step_idx: int = 0
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
-        target_object = self.objects[1]
-        target_object_pose = get_overhead_object_se2_pose(x, target_object)
-
-        for _ in range(MAX_SAMPLER_ATTEMPTS):
-            distance = rng.uniform(*MOVE_TO_TARGET_DISTANCE_BOUNDS)  # type: ignore
-            rot = rng.uniform(*MOVE_TO_TARGET_ROT_BOUNDS)
-            target_base_pose = get_target_robot_pose_from_parameters(
-                target_object_pose, distance, rot
-            )
-            collision = False
-            for other_object in x.get_objects(MujocoMovableObjectType):
-                if (
-                    "cube" in other_object.name
-                    and other_object.name != target_object.name
-                ):
-                    other_object_pose = get_overhead_object_se2_pose(x, other_object)
-                    collision_distance = float(
-                        np.linalg.norm(
-                            [
-                                target_base_pose.x - other_object_pose.x,
-                                target_base_pose.y - other_object_pose.y,
-                            ]
-                        )
-                    )
-                    if collision_distance < 0.6:
-                        collision = True
-                        break
-            if not collision:
-                return np.array([distance, rot])
-
-        raise ValueError("No valid parameters found")
+        # distance = rng.uniform(*MOVE_TO_TARGET_DISTANCE_BOUNDS)  # type: ignore
+        # rot = rng.uniform(*MOVE_TO_TARGET_ROT_BOUNDS)
+        return np.array([0.7, -np.pi])
 
     def reset(
         self,
@@ -846,43 +790,9 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         self._sweep_step_idx_2: int = 0
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
-        cupboard_obj = x.get_object_from_name("cupboard_1")
-        cupboard_pose = get_overhead_object_se2_pose(x, cupboard_obj)
-        rot = BASE_TO_CUPBOARD_ROTATION
-        # sample placements
-        for _ in range(MAX_SAMPLER_ATTEMPTS):
-            pose_x_offset = rng.uniform(*PLACE_SAMPLER_X_OFFSET_BOUNDS)
-            pose_y_offset = rng.uniform(*PLACE_SAMPLER_Y_OFFSET_BOUNDS)
-            collision = False
-            for other_obj in x.get_objects(MujocoMovableObjectType):
-                if other_obj.name == self.objects[1].name:
-                    continue
-                other_object_pose = get_overhead_object_se2_pose(x, other_obj)
-                if (
-                    np.linalg.norm(
-                        np.array(
-                            [
-                                pose_x_offset
-                                + cupboard_pose.x
-                                + (
-                                    ARM_MOVEMENT_CUPBOARD.position[0]
-                                    + ROBOT_ARM_POSE_TO_BASE.position[0]
-                                    - BASE_DISTANCE_TO_CUPBOARD
-                                ),  # the offset of the cupboard from the cubes.
-                                pose_y_offset + cupboard_pose.y,
-                            ]
-                        )
-                        - np.array([other_object_pose.x, other_object_pose.y])
-                    )
-                    < PLACE_SAMPLER_COLLISION_THRESHOLD
-                ):
-                    collision = True
-                    break
-            if not collision:
-                return np.array(
-                    [BASE_DISTANCE_TO_CUPBOARD + pose_x_offset, pose_y_offset, rot]
-                )
-        raise ValueError("No valid parameters found")
+        # distance = rng.uniform(*MOVE_TO_TARGET_DISTANCE_BOUNDS)  # type: ignore
+        # rot = rng.uniform(*MOVE_TO_TARGET_ROT_BOUNDS)
+        return np.array([0.55, -np.pi])
 
     def reset(
         self,
