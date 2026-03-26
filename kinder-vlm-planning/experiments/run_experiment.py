@@ -60,6 +60,9 @@ def _main(cfg: DictConfig) -> None:
     env_name = parts[-1]  # "motion2d"
 
     # Load environment-specific controllers if available.
+    if env_name == "tidybot3d":
+        env_name = "ground"  # NOTE: this renaming is needed for parameterized skills
+        # use "ground" for Shelf3D task
     env_controllers = get_controllers_for_environment(
         env_class_name, env_name, action_space=env.action_space, make_kwargs=make_kwargs
     )
