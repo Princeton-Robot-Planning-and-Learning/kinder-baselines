@@ -10,6 +10,7 @@ from bilevel_planning.structs import (
 from kinder.envs.dynamic3d.object_types import (
     MujocoMovableObjectType,
     MujocoTidyBotRobotObjectType,
+    MujocoDrawerObjectType,
 )
 from kinder.envs.dynamic3d.robots.tidybot_robot_env import (
     TidyBot3DRobotActionSpace,
@@ -801,7 +802,7 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         self._current_params = params.copy()
         # Derive the target pose for the robot.
         target_distance, target_rot = self._current_params
-        target_object = self.objects[2]
+        target_object = self.objects[3]
         target_object_pose_ori = get_overhead_object_se2_pose(x, target_object)
         target_object_pose = SE2(
             target_object_pose_ori.x,
@@ -835,7 +836,7 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         # Reset PyBullet given the current state.
         self._pybullet_sim.set_state(plan_x)
 
-        target_object = self.objects[2]
+        target_object = self.objects[3]
 
         target_place_pose_world = Pose(
             (
@@ -1081,34 +1082,51 @@ def create_lifted_controllers(
 
     # Open drawer controller.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
-    target = Variable("?target", MujocoMovableObjectType)
+    wiper = Variable("?wiper", MujocoMovableObjectType)
+    drawer = Variable("?drawer", MujocoDrawerObjectType)
+    cube0 = Variable("?cube0", MujocoMovableObjectType)
+    cube1 = Variable("?cube1", MujocoMovableObjectType)
+    cube2 = Variable("?cube2", MujocoMovableObjectType)
+    cube3 = Variable("?cube3", MujocoMovableObjectType)
+    cube4 = Variable("?cube4", MujocoMovableObjectType)
 
     LiftedOpenDrawerController: LiftedParameterizedController = (
         LiftedParameterizedController(
-            [robot, target],
+            [robot, wiper, drawer, cube0, cube1, cube2, cube3, cube4],
             OpenDrawerController,
         )
     )
 
     # Pick wiper controller.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
-    target = Variable("?target", MujocoMovableObjectType)
+    wiper = Variable("?wiper", MujocoMovableObjectType)
+    drawer = Variable("?drawer", MujocoDrawerObjectType)
+    cube0 = Variable("?cube0", MujocoMovableObjectType)
+    cube1 = Variable("?cube1", MujocoMovableObjectType)
+    cube2 = Variable("?cube2", MujocoMovableObjectType)
+    cube3 = Variable("?cube3", MujocoMovableObjectType)
+    cube4 = Variable("?cube4", MujocoMovableObjectType)
 
     LiftedPickWiperController: LiftedParameterizedController = (
         LiftedParameterizedController(
-            [robot, target],
+            [robot, wiper, drawer, cube0, cube1, cube2, cube3, cube4],
             PickWiperController,
         )
     )
 
-    # Sweep controller.
+    # Pick wiper controller.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     wiper = Variable("?wiper", MujocoMovableObjectType)
-    target = Variable("?target", MujocoMovableObjectType)
+    drawer = Variable("?drawer", MujocoDrawerObjectType)
+    cube0 = Variable("?cube0", MujocoMovableObjectType)
+    cube1 = Variable("?cube1", MujocoMovableObjectType)
+    cube2 = Variable("?cube2", MujocoMovableObjectType)
+    cube3 = Variable("?cube3", MujocoMovableObjectType)
+    cube4 = Variable("?cube4", MujocoMovableObjectType)
 
     LiftedSweepController: LiftedParameterizedController = (
         LiftedParameterizedController(
-            [robot, wiper, target],
+            [robot, wiper, drawer, cube0, cube1, cube2, cube3, cube4],
             SweepController,
         )
     )
