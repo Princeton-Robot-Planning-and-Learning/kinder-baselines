@@ -49,10 +49,21 @@ def create_bilevel_planning_models(
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, TidyBot3DRobotActionSpace)
 
-    env = kinder.make(
-        f"kinder/SweepIntoDrawer3D-o{num_objects}-v0", render_mode="rgb_array"
+    # env = kinder.make(
+    #     f"kinder/SweepIntoDrawer3D-o{num_objects}-v0", render_mode="rgb_array"
+    # )
+    # sim = env.unwrapped._object_centric_env # pylint: disable=protected-access
+    from pathlib import Path
+    task_config_path = str(
+        Path(kinder.__file__).parent
+        / "envs/dynamic3d/tasks/SweepIntoDrawer3D"
+        / f"SweepIntoDrawer3D-o{num_objects}.json"
     )
-    sim = env.unwrapped._object_centric_env # pylint: disable=protected-access
+    sim = ObjectCentricTidyBot3DEnv(
+        task_config_path=task_config_path,
+        num_objects=num_objects,
+        allow_state_access=True
+    )
 
     # State and goal abstractors.
     abstractor = Sweep3DStateAbstractor(sim)
