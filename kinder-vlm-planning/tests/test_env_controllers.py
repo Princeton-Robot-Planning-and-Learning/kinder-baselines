@@ -152,7 +152,7 @@ def test_get_controllers_dynobstruction2d():
     """Test loading controllers for DynObstruction2D (integration)."""
     env = kinder.make("kinder/DynObstruction2D-o1-v0")
     controllers = get_controllers_for_environment(
-        "dynamic2d", "dynobstruction2d", action_space=env.action_space
+        "dynamic2d", "dyn_obstruction2d", action_space=env.action_space
     )
     assert controllers is not None
     expected = {
@@ -173,7 +173,7 @@ def test_get_controllers_dynpushpullhook2d():
     """Test loading controllers for DynPushPullHook2D (integration)."""
     env = kinder.make("kinder/DynPushPullHook2D-o0-v0")
     controllers = get_controllers_for_environment(
-        "dynamic2d", "dynpushpullhook2d", action_space=env.action_space
+        "dynamic2d", "dyn_pushpullhook2d", action_space=env.action_space
     )
     assert controllers is not None
     expected = {"grasp_hook", "prehook", "hookdown", "move"}
