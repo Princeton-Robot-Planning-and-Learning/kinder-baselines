@@ -296,7 +296,8 @@ def run_base_motion_planning(
     )
 
     initial_pose = get_overhead_robot_se2_pose(state, robot)
-    return birrt.query(initial_pose, target_base_pose)
+    path, _ = birrt.query(initial_pose, target_base_pose)
+    return path
 
 
 # Based on https://github.com/jimmyyhwu/tidybot/blob/main/robot/kinova.py#L310
