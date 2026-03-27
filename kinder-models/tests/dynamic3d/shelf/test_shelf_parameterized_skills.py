@@ -13,7 +13,7 @@ from relational_structs import Object, ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
 from relational_structs.utils import create_state_from_dict
 
-from kinder_models.dynamic3d.ground.parameterized_skills import (
+from kinder_models.dynamic3d.shelf.parameterized_skills import (
     create_lifted_controllers,
 )
 from kinder_models.dynamic3d.utils import PyBulletSim

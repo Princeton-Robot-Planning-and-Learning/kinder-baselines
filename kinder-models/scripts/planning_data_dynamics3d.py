@@ -9,7 +9,7 @@ from episode_storage import EpisodeWriter
 from relational_structs.spaces import ObjectCentricBoxSpace
 
 from kinder_models.dynamic3d.fk_solver import TidybotFKSolver
-from kinder_models.dynamic3d.ground.parameterized_skills import (
+from kinder_models.dynamic3d.shelf.parameterized_skills import (
     PyBulletSim,
     create_lifted_controllers,
 )

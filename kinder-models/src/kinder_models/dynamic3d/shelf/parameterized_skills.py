@@ -1,4 +1,4 @@
-"""Parameterized skills for the TidyBot3D ground environment."""
+"""Parameterized skills for the TidyBot3D shelf environment."""
 
 from typing import Any
 

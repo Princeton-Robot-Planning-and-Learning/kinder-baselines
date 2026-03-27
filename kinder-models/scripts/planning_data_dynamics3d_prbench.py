@@ -11,7 +11,7 @@ import kinder
 import numpy as np
 from relational_structs.spaces import ObjectCentricBoxSpace
 
-from kinder_models.dynamic3d.ground.parameterized_skills import (
+from kinder_models.dynamic3d.shelf.parameterized_skills import (
     PyBulletSim,
     create_lifted_controllers,
 )

@@ -18,7 +18,7 @@ from relational_structs import (
     Predicate,
 )
 
-from kinder_models.dynamic3d.ground.parameterized_skills import PyBulletSim
+from kinder_models.dynamic3d.shelf.parameterized_skills import PyBulletSim
 
 # Predicates.
 OnFixture = Predicate("OnFixture", [MujocoObjectType, MujocoFixtureObjectType])

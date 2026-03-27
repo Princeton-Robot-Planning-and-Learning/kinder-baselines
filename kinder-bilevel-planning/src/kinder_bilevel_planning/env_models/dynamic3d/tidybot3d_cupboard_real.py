@@ -21,7 +21,7 @@ from kinder_models.dynamic3d.cupboard_real.state_abstractions import (
     OnFixture,
     OnGround,
 )
-from kinder_models.dynamic3d.ground.parameterized_skills import (
+from kinder_models.dynamic3d.shelf.parameterized_skills import (
     PyBulletSim,
     create_lifted_controllers,
 )

@@ -11,7 +11,7 @@ from relational_structs import ObjectCentricState
 from kinder_models.dynamic3d.cupboard_real.state_abstractions import (
     CupboardRealStateAbstractor,
 )
-from kinder_models.dynamic3d.ground.parameterized_skills import (
+from kinder_models.dynamic3d.shelf.parameterized_skills import (
     create_lifted_controllers,
 )
 from kinder_models.dynamic3d.utils import PyBulletSim

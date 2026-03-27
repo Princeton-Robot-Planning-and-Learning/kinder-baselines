@@ -14,8 +14,8 @@ from relational_structs.spaces import ObjectCentricBoxSpace
 from relational_structs.utils import create_state_from_dict
 from spatialmath import SE2
 
-from kinder_models.dynamic3d.ground.parameterized_skills import (
-    create_lifted_controllers as ground_create_lifted_controllers,)
+from kinder_models.dynamic3d.shelf.parameterized_skills import (
+    create_lifted_controllers as shelf_create_lifted_controllers,)
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,
@@ -1102,7 +1102,7 @@ def test_pick_ground_toss():
     state = env.observation_space.devectorize(obs)
 
     # Create the move-base controller.
-    controllers = ground_create_lifted_controllers(env.action_space)
+    controllers = shelf_create_lifted_controllers(env.action_space)
 
     # create the pick ground controller.
     lifted_controller = controllers["pick_ground"]
