@@ -15,7 +15,9 @@ def test_tidybot3d_sweep_bilevel_planning():
     """Tests for bilevel planning in the Sweep3D environment."""
 
     num_objects = 5
-    env = kinder.make(f"kinder/SweepIntoDrawer3D-o{num_objects}-v0", render_mode="rgb_array")
+    env = kinder.make(
+        f"kinder/SweepIntoDrawer3D-o{num_objects}-v0", render_mode="rgb_array"
+    )
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos", name_prefix="TidyBot3D-sweep3d")

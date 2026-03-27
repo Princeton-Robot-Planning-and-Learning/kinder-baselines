@@ -1,32 +1,34 @@
 """Bilevel planning models for the TidyBot3D sweep3D environment."""
 
-import numpy as np
+from pathlib import Path
+
 import kinder
+import numpy as np
 from bilevel_planning.structs import (
     LiftedSkill,
     SesameModels,
 )
 from gymnasium.spaces import Space
 from kinder.envs.dynamic3d.object_types import (
+    MujocoDrawerObjectType,
     MujocoFixtureObjectType,
     MujocoMovableObjectType,
-    MujocoDrawerObjectType,
     MujocoObjectType,
     MujocoTidyBotRobotObjectType,
 )
 from kinder.envs.dynamic3d.robots.tidybot_robot_env import TidyBot3DRobotActionSpace
 from kinder.envs.dynamic3d.tidybot3d import ObjectCentricTidyBot3DEnv
-from kinder_models.dynamic3d.sweep3D.state_abstractions import (
-    Sweep3DStateAbstractor,
-    HandEmpty,
-    Holding,
-    OnTable,
-    InDrawer,
-    DrawerOpen,
-    DrawerClosed,
-)
 from kinder_models.dynamic3d.sweep3D.parameterized_skills import (
     create_lifted_controllers,
+)
+from kinder_models.dynamic3d.sweep3D.state_abstractions import (
+    DrawerClosed,
+    DrawerOpen,
+    HandEmpty,
+    Holding,
+    InDrawer,
+    OnTable,
+    Sweep3DStateAbstractor,
 )
 from kinder_models.dynamic3d.utils import PyBulletSim
 from numpy.typing import NDArray
@@ -53,7 +55,7 @@ def create_bilevel_planning_models(
     #     f"kinder/SweepIntoDrawer3D-o{num_objects}-v0", render_mode="rgb_array"
     # )
     # sim = env.unwrapped._object_centric_env # pylint: disable=protected-access
-    from pathlib import Path
+
     task_config_path = str(
         Path(kinder.__file__).parent
         / "envs/dynamic3d/tasks/SweepIntoDrawer3D"
@@ -62,7 +64,7 @@ def create_bilevel_planning_models(
     sim = ObjectCentricTidyBot3DEnv(
         task_config_path=task_config_path,
         num_objects=num_objects,
-        allow_state_access=True
+        allow_state_access=True,
     )
 
     # State and goal abstractors.
@@ -228,7 +230,7 @@ def create_bilevel_planning_models(
     skills = {
         LiftedSkill(OpenDrawerOperator, LiftedOpenDrawerController),
         LiftedSkill(PickWiperOperator, LiftedPickWiperController),
-        # LiftedSkill(SweepOperator, LiftedSweepController),
+        LiftedSkill(SweepOperator, LiftedSweepController),
     }
 
     # Finalize the models.

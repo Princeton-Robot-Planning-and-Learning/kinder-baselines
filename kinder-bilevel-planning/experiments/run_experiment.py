@@ -58,7 +58,7 @@ def _main(cfg: DictConfig) -> None:
         obs, _ = env.reset(seed=cfg.seed)
         for _ in range(5):
             obs, _, _, _, _ = env.step(np.zeros(11))
-        state = env.observation_space.devectorize(obs) # type: ignore
+        state = env.observation_space.devectorize(obs)  # type: ignore
         env_models = create_bilevel_planning_models(
             cfg.env.env_name,
             env.observation_space,
