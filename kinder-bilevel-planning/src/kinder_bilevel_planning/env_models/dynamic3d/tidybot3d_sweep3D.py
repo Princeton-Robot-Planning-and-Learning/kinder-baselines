@@ -26,9 +26,9 @@ from kinder_models.dynamic3d.sweep3D.state_abstractions import (
     DrawerClosed,
 )
 from kinder_models.dynamic3d.sweep3D.parameterized_skills import (
-    PyBulletSim,
     create_lifted_controllers,
 )
+from kinder_models.dynamic3d.utils import PyBulletSim
 from numpy.typing import NDArray
 from relational_structs import (
     LiftedAtom,
@@ -228,7 +228,7 @@ def create_bilevel_planning_models(
     skills = {
         LiftedSkill(OpenDrawerOperator, LiftedOpenDrawerController),
         LiftedSkill(PickWiperOperator, LiftedPickWiperController),
-        LiftedSkill(SweepOperator, LiftedSweepController),
+        # LiftedSkill(SweepOperator, LiftedSweepController),
     }
 
     # Finalize the models.

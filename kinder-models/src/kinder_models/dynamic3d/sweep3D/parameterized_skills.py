@@ -104,7 +104,7 @@ class OpenDrawerSweepController(
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         # distance = rng.uniform(*MOVE_TO_TARGET_DISTANCE_BOUNDS)  # type: ignore
         # rot = rng.uniform(*MOVE_TO_TARGET_ROT_BOUNDS)
-        return np.array([0.7, -np.pi])
+        return np.array([0.8, -np.pi])
 
     def reset(
         self,
@@ -116,6 +116,8 @@ class OpenDrawerSweepController(
         # Initialize the PyBullet interface if this is the first time ever.
         if self._pybullet_sim is None:
             self._pybullet_sim = PyBulletSim(x)
+        else:
+            self._pybullet_sim.set_state(x)
         # Update the current state and parameters.
         self._last_state = x
 
