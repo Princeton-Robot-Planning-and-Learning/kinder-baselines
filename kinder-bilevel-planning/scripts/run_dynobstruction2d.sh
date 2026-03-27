@@ -17,7 +17,7 @@ for seed in "${SEEDS[@]}"; do
     echo "  - Running seed ${seed}..."
     python experiments/run_experiment.py \
         env=dynobstruction2d-o1 \
-        make_videos=true \
+        make_videos=false \
         seed=${seed} \
         hydra.run.dir=./logs/dynobstruction2d-o1/seed_${seed}
 

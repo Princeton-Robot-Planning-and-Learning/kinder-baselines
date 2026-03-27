@@ -8,3 +8,11 @@ make_kwargs:
 # Passed into create_bilevel_planning_models() to create the env models.
 env_model_kwargs:
   num_obstructions: 1
+
+# Approach.
+max_eval_steps: 200
+max_abstract_plans: 20
+samples_per_step: 10
+max_skill_horizon: 100
+heuristic_name: "hff"
+planning_timeout: 60  # seconds

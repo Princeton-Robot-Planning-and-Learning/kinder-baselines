@@ -10,5 +10,9 @@ env_model_kwargs:
   num_obstructions: 5
 
 # Override default approach parameters for this environment.
+max_eval_steps: 500
 samples_per_step: 20
 max_abstract_plans: 5
+max_skill_horizon: 100
+heuristic_name: "hff"
+planning_timeout: 60  # seconds
