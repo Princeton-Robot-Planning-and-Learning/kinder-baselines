@@ -54,7 +54,7 @@ def _main(cfg: DictConfig) -> None:
         env = RecordVideo(env, str(video_path), episode_trigger=lambda _: True)
 
     # Create the env models.
-    if cfg.env.env_name == "tidybot3d_cupboard_real":
+    if cfg.env.env_name == "tidybot3d_cupboard_real" or cfg.env.env_name == "tidybot3d_sweep3D":
         obs, _ = env.reset(seed=cfg.seed)
         for _ in range(5):
             obs, _, _, _, _ = env.step(np.zeros(11))
@@ -97,15 +97,26 @@ def _main(cfg: DictConfig) -> None:
     metrics: list[dict[str, float]] = []
     for eval_episode in range(cfg.num_eval_episodes):
         logging.info(f"Starting evaluation episode {eval_episode}")
-        episode_metrics = _run_single_episode_evaluation(
-            agent,
-            env,
-            rng,
-            max_eval_steps=cfg.max_eval_steps,
-            dynamic_env=dynamic_env,
-        )
-        episode_metrics["eval_episode"] = eval_episode
-        metrics.append(episode_metrics)
+        try:
+            episode_metrics = _run_single_episode_evaluation(
+                agent,
+                env,
+                rng,
+                max_eval_steps=cfg.max_eval_steps,
+                dynamic_env=dynamic_env,
+            )
+            episode_metrics["eval_episode"] = eval_episode
+            metrics.append(episode_metrics)
+        except Exception as e:
+            logging.error(f"Episode {eval_episode} failed with error: {e}", exc_info=True)
+            episode_metrics = {
+                "success": False,
+                "steps": 0,
+                "planning_time": 0.0,
+                "execution_time": 0.0,
+                "reward": 0.0,
+            }
+            metrics.append(episode_metrics)
 
     # Aggregate and save results.
     df = pd.DataFrame(metrics)
