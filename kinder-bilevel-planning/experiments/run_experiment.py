@@ -54,7 +54,7 @@ def _main(cfg: DictConfig) -> None:
         env = RecordVideo(env, str(video_path), episode_trigger=lambda _: True)
 
     # Create the env models.
-    if cfg.env.env_name in ["tidybot3d_cupboard_real", "tidybot3d_sweep3D"]:
+    if cfg.env.env_name in ["tidybot3d_shelf3D", "tidybot3d_sweep3D"]:
         obs, _ = env.reset(seed=cfg.seed)
         for _ in range(5):
             obs, _, _, _, _ = env.step(np.zeros(11))

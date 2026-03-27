@@ -8,11 +8,11 @@ from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
 from kinder.envs.dynamic3d.tidybot3d import ObjectCentricTidyBot3DEnv
 from relational_structs import ObjectCentricState
 
-from kinder_models.dynamic3d.cupboard_real.state_abstractions import (
-    CupboardRealStateAbstractor,
-)
 from kinder_models.dynamic3d.shelf.parameterized_skills import (
     create_lifted_controllers,
+)
+from kinder_models.dynamic3d.shelf.state_abstractions import (
+    CupboardRealStateAbstractor,
 )
 from kinder_models.dynamic3d.utils import PyBulletSim
 
@@ -24,7 +24,7 @@ def _get_robot_from_state(state: ObjectCentricState):
     return list(robots)[0]
 
 
-def test_cupboard_real_state_abstraction():
+def test_shelf_state_abstraction():
     """Tests for CupboardRealStateAbstractor()."""
     kinder.register_all_environments()
     num_objects = 1

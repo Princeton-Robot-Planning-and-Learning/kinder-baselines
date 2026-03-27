@@ -29,7 +29,7 @@ def test_tidybot3d_cupboard_bilevel_planning():
     state = env.observation_space.devectorize(obs)
 
     env_models = create_bilevel_planning_models(
-        "tidybot3d_cupboard_real",
+        "tidybot3d_shelf3D",
         env.observation_space,
         env.action_space,
         num_objects=num_objects,

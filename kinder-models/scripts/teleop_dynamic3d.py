@@ -95,7 +95,7 @@ def run_teleop(
     enable_web_server: bool = True,
     port: int = 5000,
     show_images: bool = False,
-    env_name: str = "TidyBot3D-cupboard_real-o2-v0",
+    env_name: str = "Shelf3D-o2-v0",
     teleop_device: str = "phone",
 ) -> None:
     """Run teleoperation in the kinder environment.

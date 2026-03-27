@@ -35,9 +35,7 @@ def collect_data(
 
     # Create the environment.
     num_cubes = 2
-    env = kinder.make(
-        f"kinder/TidyBot3D-cupboard_real-o{num_cubes}-v0", render_mode="rgb_array"
-    )
+    env = kinder.make(f"kinder/Shelf3D-o{num_cubes}-v0", render_mode="rgb_array")
 
     # Create episode writer if saving is enabled.
     writer = EpisodeWriter(output_dir) if save else None

@@ -1,5 +1,5 @@
 # Used to refer to the family of environments, e.g., with different numbers of objects.
-env_name: "tidybot3d_cupboard_real"
+env_name: "tidybot3d_shelf3D"
 
 # Passed into kinder.make() to create the environment.
 make_kwargs:

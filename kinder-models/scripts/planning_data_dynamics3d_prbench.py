@@ -79,7 +79,7 @@ def collect_data(
     save: bool = True,
     grasping_only: bool = False,
     show_images: bool = False,
-    env_name: str = "TidyBot3D-cupboard_real-o1-v0",
+    env_name: str = "Shelf3D-o1-v0",
 ):
     """Collect pick and place demonstration data in ground environment.
 
@@ -278,7 +278,7 @@ def main() -> None:
     parser.add_argument(
         "--env-name",
         type=str,
-        default="TidyBot3D-cupboard_real-o1-v0",
+        default="Shelf3D-o1-v0",
         help="Name of the environment",
     )
 

@@ -14,16 +14,16 @@ from kinder.envs.dynamic3d.object_types import (
 )
 from kinder.envs.dynamic3d.robots.tidybot_robot_env import TidyBot3DRobotActionSpace
 from kinder.envs.dynamic3d.tidybot3d import ObjectCentricTidyBot3DEnv
-from kinder_models.dynamic3d.cupboard_real.state_abstractions import (
+from kinder_models.dynamic3d.shelf.parameterized_skills import (
+    PyBulletSim,
+    create_lifted_controllers,
+)
+from kinder_models.dynamic3d.shelf.state_abstractions import (
     CupboardRealStateAbstractor,
     HandEmpty,
     Holding,
     OnFixture,
     OnGround,
-)
-from kinder_models.dynamic3d.shelf.parameterized_skills import (
-    PyBulletSim,
-    create_lifted_controllers,
 )
 from numpy.typing import NDArray
 from relational_structs import (

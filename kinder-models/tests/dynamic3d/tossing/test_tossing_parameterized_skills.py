@@ -588,7 +588,7 @@ def test_pick_place_shelf():
     # Create the environment.
     num_cubes = 1
     env = kinder.make(
-        f"kinder/TidyBot3D-cupboard_real-o{num_cubes}-v0",
+        f"kinder/Shelf3D-o{num_cubes}-v0",
         render_mode="rgb_array",
         allow_state_access=True,
     )
