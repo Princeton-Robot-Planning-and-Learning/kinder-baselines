@@ -1,6 +1,8 @@
 """Tests for dynobstruction2d.py."""
 
+import pickle
 import time
+from pathlib import Path
 
 import imageio.v2 as iio
 import kinder
@@ -213,3 +215,72 @@ def test_dynobstruction2d_skills():
     state2 = env_models.observation_to_state(obs2)
     abstract_state2 = env_models.state_abstractor(state2)
     assert predicate_name_to_pred["OnTarget"]([target_block]) in abstract_state2.atoms
+
+
+def test_dynobstruction2d_replay_demo_controllers():
+    """Load a saved demo and replay its ground controllers in the environment.
+
+    1. Load the demo pickle (observations, actions, skill_info).
+    2. Reset the environment with the demo's seed.
+    3. Replay each skill's controller using recorded parameters.
+    4. Verify the environment reaches the goal.
+    """
+    demo_path = (
+        Path(__file__).resolve().parents[3]
+        / "skill_demos"
+        / "DynObstruction2D-o1-v0_seed1687664015.pkl"
+    )
+    with open(demo_path, "rb") as f:
+        demo = pickle.load(f)
+
+    env_id = demo["env_id"]
+    seed = demo["seed"]
+    skill_info = demo["skill_info"]
+
+    assert env_id == "kinder/DynObstruction2D-o1-v0"
+    assert demo["terminated"] is True
+
+    env = kinder.make(env_id)
+    env_models = create_bilevel_planning_models(
+        "dynobstruction2d",
+        env.observation_space,
+        env.action_space,
+        num_obstructions=1,
+    )
+
+    # Reset with demo seed
+    obs, _ = env.reset(seed=seed)
+    state = env_models.observation_to_state(obs)
+    goal = env_models.goal_deriver(state)
+
+    # Build lookup maps
+    skill_name_to_skill = {s.operator.name: s for s in env_models.skills}
+
+    for info in skill_info:
+        # Resolve objects from current abstract state
+        abstract_state = env_models.state_abstractor(state)
+        obj_name_to_obj = {o.name: o for o in abstract_state.objects}
+        operator_objects = tuple(
+            obj_name_to_obj[name] for name, _ in info["operator_objects"]
+        )
+
+        # Ground the controller
+        lifted_skill = skill_name_to_skill[info["operator_name"]]
+        ground_controller = lifted_skill.controller.ground(operator_objects)
+        ground_controller.reset(state, info["params"])
+
+        for _ in range(info["num_actions"]):
+            if ground_controller.terminated():
+                break
+            action = ground_controller.step()
+            obs, _, _, _, _ = env.step(action)
+            state = env_models.observation_to_state(obs)
+            ground_controller.observe(state)
+
+    # Verify goal reached
+    abstract_state = env_models.state_abstractor(state)
+    assert goal.atoms.issubset(abstract_state.atoms), (
+        f"Goal not reached. Expected {goal.atoms} ⊆ {abstract_state.atoms}"
+    )
+
+    env.close()
