@@ -94,7 +94,7 @@ def _import_lifted_controllers(
                 )
 
             sim_class = getattr(env_module, sim_class_name)
-            sim = sim_class()
+            sim = sim_class(**(make_kwargs or {}))
 
             # Call with (action_space, sim) for kinematic3d
             lifted_controllers = create_lifted_controllers(action_space, sim)
