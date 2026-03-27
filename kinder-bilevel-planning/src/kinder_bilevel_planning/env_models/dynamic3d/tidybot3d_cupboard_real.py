@@ -140,13 +140,13 @@ def create_bilevel_planning_models(
     )
 
     # Controllers.
-    LiftedPickGroundController = controllers["pick_shelf"]
-    LiftedPlaceGroundController = controllers["place_shelf"]
+    LiftedPickShelfController = controllers["pick_shelf"]
+    LiftedPlaceShelfController = controllers["place_shelf"]
 
     # Finalize the skills.
     skills = {
-        LiftedSkill(PickTargetOperator, LiftedPickGroundController),
-        LiftedSkill(PlaceTargetOperator, LiftedPlaceGroundController),
+        LiftedSkill(PickTargetOperator, LiftedPickShelfController),
+        LiftedSkill(PlaceTargetOperator, LiftedPlaceShelfController),
     }
 
     # Finalize the models.
