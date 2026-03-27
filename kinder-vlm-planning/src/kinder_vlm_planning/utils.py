@@ -168,14 +168,19 @@ def parse_model_output_into_option_plan(
                     malformed = True
                     break
                 continuous_params_list.append(curr_cont_param)
-            if option.params_space is None:
+            # Only check params_space if there are actual continuous parameters
+            if len(continuous_params_list) > 0 and option.params_space is None:
                 logging.info(
                     f"Line {option_str} output by model has "
                     "continuous parameters but option has no params_space."
                 )
                 malformed = True
                 break
-            if len(continuous_params_list) != option.params_space.shape[0]:
+            if (
+                len(continuous_params_list) > 0
+                and option.params_space is not None
+                and len(continuous_params_list) != option.params_space.shape[0]
+            ):
                 logging.info(
                     f"Line {option_str} output by model has "
                     "invalid continouous parameter(s) that don't "
