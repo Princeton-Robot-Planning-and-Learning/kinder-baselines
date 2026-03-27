@@ -813,7 +813,7 @@ def test_pick_place_skill():
     object_parameters = (robot, cube)
     controller = lifted_controller.ground(object_parameters)
     params = controller.sample_parameters(state, np.random.default_rng(123))
-    # params = np.array([0.6, 0.0])
+    # params = np.array([0.55, 0.0])
 
     # Reset and execute the controller until it terminates.
     controller.reset(state, params)
@@ -836,6 +836,7 @@ def test_pick_place_skill():
     object_parameters = (robot, cube, cupboard)
     controller = lifted_controller.ground(object_parameters)
     params = controller.sample_parameters(state, np.random.default_rng(123))
+    # params = np.array([1.02, 0.0, -1.5707964])
 
     # Reset and execute the controller until it terminates.
     controller.reset(state, params)

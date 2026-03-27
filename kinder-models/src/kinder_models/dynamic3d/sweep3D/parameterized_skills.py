@@ -8,9 +8,9 @@ from bilevel_planning.structs import (
     LiftedParameterizedController,
 )
 from kinder.envs.dynamic3d.object_types import (
+    MujocoDrawerObjectType,
     MujocoMovableObjectType,
     MujocoTidyBotRobotObjectType,
-    MujocoDrawerObjectType,
 )
 from kinder.envs.dynamic3d.robots.tidybot_robot_env import (
     TidyBot3DRobotActionSpace,
