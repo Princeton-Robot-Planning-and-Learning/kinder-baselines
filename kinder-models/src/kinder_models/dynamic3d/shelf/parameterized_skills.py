@@ -7,6 +7,7 @@ from bilevel_planning.structs import (
     GroundParameterizedController,
     LiftedParameterizedController,
 )
+from gymnasium.spaces import Box
 from kinder.envs.dynamic3d.object_types import (
     MujocoFixtureObjectType,
     MujocoMovableObjectType,
@@ -761,10 +762,24 @@ def create_lifted_controllers(
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     target = Variable("?target", MujocoMovableObjectType)
 
+    # Parameter space: [distance, rotation]
+    pick_shelf_params_space = Box(
+        low=np.array(
+            [MOVE_TO_TARGET_DISTANCE_BOUNDS[0], MOVE_TO_TARGET_ROT_BOUNDS[0]],
+            dtype=np.float32,
+        ),
+        high=np.array(
+            [MOVE_TO_TARGET_DISTANCE_BOUNDS[1], MOVE_TO_TARGET_ROT_BOUNDS[1]],
+            dtype=np.float32,
+        ),
+        dtype=np.float32,
+    )
+
     LiftedPickShelfController: LiftedParameterizedController = (
         LiftedParameterizedController(
             [robot, target],
             PickController,
+            params_space=pick_shelf_params_space,
         )
     )
 
@@ -773,10 +788,32 @@ def create_lifted_controllers(
     target = Variable("?target", MujocoMovableObjectType)
     target_place = Variable("?target_place", MujocoFixtureObjectType)
 
+    # Parameter space: [distance, y_offset, rotation]
+    place_shelf_params_space = Box(
+        low=np.array(
+            [
+                BASE_DISTANCE_TO_CUPBOARD + PLACE_SAMPLER_X_OFFSET_BOUNDS[0],
+                PLACE_SAMPLER_Y_OFFSET_BOUNDS[0],
+                BASE_TO_CUPBOARD_ROTATION,
+            ],
+            dtype=np.float32,
+        ),
+        high=np.array(
+            [
+                BASE_DISTANCE_TO_CUPBOARD + PLACE_SAMPLER_X_OFFSET_BOUNDS[1],
+                PLACE_SAMPLER_Y_OFFSET_BOUNDS[1],
+                BASE_TO_CUPBOARD_ROTATION,
+            ],
+            dtype=np.float32,
+        ),
+        dtype=np.float32,
+    )
+
     LiftedPlaceShelfController: LiftedParameterizedController = (
         LiftedParameterizedController(
             [robot, target, target_place],
             PlaceController,
+            params_space=place_shelf_params_space,
         )
     )
 

@@ -7,6 +7,7 @@ from bilevel_planning.structs import (
     GroundParameterizedController,
     LiftedParameterizedController,
 )
+from gymnasium.spaces import Box
 from kinder.envs.dynamic3d.object_types import (
     MujocoDrawerObjectType,
     MujocoMovableObjectType,
