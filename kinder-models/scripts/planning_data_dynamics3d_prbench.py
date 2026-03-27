@@ -119,7 +119,7 @@ def collect_data(
 
     try:
         # Create the pick ground controller.
-        lifted_controller = controllers["pick_ground"]
+        lifted_controller = controllers["pick_shelf"]
         robot = state.get_object_from_name("robot")
         cube = state.get_object_from_name(target_object_key)
         object_parameters = (robot, cube)
@@ -179,7 +179,7 @@ def collect_data(
             return
         if not grasping_only:
             # Create the place ground controller.
-            lifted_controller = controllers["place_ground"]
+            lifted_controller = controllers["place_shelf"]
             robot = state.get_object_from_name("robot")
             cube = state.get_object_from_name(target_object_key)
             cupboard = state.get_object_from_name("cupboard_1")

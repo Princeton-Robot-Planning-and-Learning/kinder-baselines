@@ -59,7 +59,7 @@ from kinder_models.dynamic3d.utils import (
 )
 
 
-class PickGroundController(GroundParameterizedController[ObjectCentricState, Array]):
+class PickShelfController(GroundParameterizedController[ObjectCentricState, Array]):
     """Controller for motion planning to pick up a target.
 
     The object parameters are:
@@ -401,7 +401,7 @@ class PickGroundController(GroundParameterizedController[ObjectCentricState, Arr
         )
 
 
-class PlaceGroundController(GroundParameterizedController[ObjectCentricState, Array]):
+class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Array]):
     """Controller for motion planning to place a target.
 
     The object parameters are:
@@ -745,23 +745,23 @@ def create_lifted_controllers(
     del action_space, init_constant_state  # not used
 
     # Create wrapper class that captures pybullet_sim
-    class PickController(PickGroundController):
+    class PickController(PickShelfController):
         """Pick controller with pre-configured PyBullet sim."""
 
         def __init__(self, objects):
             super().__init__(pybullet_sim=pybullet_sim, objects=objects)
 
-    class PlaceController(PlaceGroundController):
+    class PlaceController(PlaceShelfController):
         """Place controller with pre-configured PyBullet sim."""
 
         def __init__(self, objects):
             super().__init__(pybullet_sim=pybullet_sim, objects=objects)
 
-    # Pick ground controller.
+    # Pick shelf controller.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     target = Variable("?target", MujocoMovableObjectType)
 
-    LiftedPickGroundController: LiftedParameterizedController = (
+    LiftedPickShelfController: LiftedParameterizedController = (
         LiftedParameterizedController(
             [robot, target],
             PickController,
@@ -773,7 +773,7 @@ def create_lifted_controllers(
     target = Variable("?target", MujocoMovableObjectType)
     target_place = Variable("?target_place", MujocoFixtureObjectType)
 
-    LiftedPlaceGroundController: LiftedParameterizedController = (
+    LiftedPlaceShelfController: LiftedParameterizedController = (
         LiftedParameterizedController(
             [robot, target, target_place],
             PlaceController,
@@ -781,6 +781,6 @@ def create_lifted_controllers(
     )
 
     return {
-        "pick_ground": LiftedPickGroundController,
-        "place_ground": LiftedPlaceGroundController,
+        "pick_shelf": LiftedPickShelfController,
+        "place_shelf": LiftedPlaceShelfController,
     }

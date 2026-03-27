@@ -99,7 +99,7 @@ def create_bilevel_planning_models(
     target = Variable("?target", MujocoMovableObjectType)
 
     PickTargetOperator = LiftedOperator(
-        "pick_ground",
+        "pick_shelf",
         [robot, target],
         preconditions={
             LiftedAtom(HandEmpty, [robot]),
@@ -140,8 +140,8 @@ def create_bilevel_planning_models(
     )
 
     # Controllers.
-    LiftedPickGroundController = controllers["pick_ground"]
-    LiftedPlaceGroundController = controllers["place_ground"]
+    LiftedPickGroundController = controllers["pick_shelf"]
+    LiftedPlaceGroundController = controllers["place_shelf"]
 
     # Finalize the skills.
     skills = {

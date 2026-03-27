@@ -59,7 +59,7 @@ def test_cupboard_real_state_abstraction():
     controllers = create_lifted_controllers(env.action_space, pybullet_sim=pybullet_sim)
 
     # Pick up the cube.
-    lifted_controller = controllers["pick_ground"]
+    lifted_controller = controllers["pick_shelf"]
     robot = _get_robot_from_state(state)
     cube = state.get_object_from_name("cube1")
     object_parameters = (robot, cube)
@@ -87,7 +87,7 @@ def test_cupboard_real_state_abstraction():
     assert str(sorted(abstract_state.atoms)) == f"[(Holding {robot.name} cube1)]"
 
     # Plce the cube.
-    lifted_controller = controllers["place_ground"]
+    lifted_controller = controllers["place_shelf"]
     robot = _get_robot_from_state(state)
     cube = state.get_object_from_name("cube1")
     cupboard = state.get_object_from_name("cupboard_1")

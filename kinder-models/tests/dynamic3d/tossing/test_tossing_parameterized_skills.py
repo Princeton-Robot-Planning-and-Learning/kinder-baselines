@@ -1105,7 +1105,7 @@ def test_pick_ground_toss():
     controllers = shelf_create_lifted_controllers(env.action_space)
 
     # create the pick ground controller.
-    lifted_controller = controllers["pick_ground"]
+    lifted_controller = controllers["pick_shelf"]
     robot = _get_robot_from_state(state)
     cube = state.get_object_from_name("cube_0")
     object_parameters = (robot, cube)

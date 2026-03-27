@@ -97,7 +97,7 @@ def test_pick_place_skill():
     controllers = create_lifted_controllers(env.action_space, pybullet_sim=pybullet_sim)
 
     # create the pick ground controller.
-    lifted_controller = controllers["pick_ground"]
+    lifted_controller = controllers["pick_shelf"]
     robot = _get_robot_from_state(state)
     cube = state.get_object_from_name("cube1")
     object_parameters = (robot, cube)
@@ -119,7 +119,7 @@ def test_pick_place_skill():
         assert False, "Controller did not terminate"
 
     # create the place ground controller.
-    lifted_controller = controllers["place_ground"]
+    lifted_controller = controllers["place_shelf"]
     robot = _get_robot_from_state(state)
     cube = state.get_object_from_name("cube1")
     cupboard = state.get_object_from_name("cupboard_1")
@@ -168,7 +168,7 @@ def test_pick_place_two_cubes_skill():
     # Create the move-base controller.
     controllers = create_lifted_controllers(env.action_space, pybullet_sim=pybullet_sim)
     # create the pick ground controller.
-    lifted_controller = controllers["pick_ground"]
+    lifted_controller = controllers["pick_shelf"]
     robot = _get_robot_from_state(state)
     cube = state.get_object_from_name("cube1")
     object_parameters = (robot, cube)
@@ -192,7 +192,7 @@ def test_pick_place_two_cubes_skill():
         assert False, "Controller did not terminate"
 
     # create the place ground controller.
-    lifted_controller = controllers["place_ground"]
+    lifted_controller = controllers["place_shelf"]
     robot = _get_robot_from_state(state)
     cube = state.get_object_from_name("cube1")
     cupboard = state.get_object_from_name("cupboard_1")
@@ -218,7 +218,7 @@ def test_pick_place_two_cubes_skill():
         assert False, "Controller did not terminate"
 
     # create the pick ground controller.
-    lifted_controller = controllers["pick_ground"]
+    lifted_controller = controllers["pick_shelf"]
     robot = _get_robot_from_state(state)
     cube = state.get_object_from_name("cube2")
     object_parameters = (robot, cube)
@@ -242,7 +242,7 @@ def test_pick_place_two_cubes_skill():
         assert False, "Controller did not terminate"
 
     # create the place ground controller.
-    lifted_controller = controllers["place_ground"]
+    lifted_controller = controllers["place_shelf"]
     robot = _get_robot_from_state(state)
     cube = state.get_object_from_name("cube2")
     cupboard = state.get_object_from_name("cupboard_1")
