@@ -55,6 +55,15 @@ WAYPOINT_TOL = 4 * 1e-2
 # Base navigation sampling bounds.
 MOVE_TO_TARGET_DISTANCE_BOUNDS = (0.5, 0.6)
 MOVE_TO_TARGET_ROT_BOUNDS = (-np.pi / 4, np.pi / 4)
+# 0.8, -np.pi
+OPEN_DRAWER_DISTANCE_BOUNDS = (0.8, 0.8)
+OPEN_DRAWER_ROT_BOUNDS = (-np.pi, -np.pi)
+# 0.7, -np.pi
+PICK_WIPER_DISTANCE_BOUNDS = (0.7, 0.7)
+PICK_WIPER_ROT_BOUNDS = (-np.pi, -np.pi)
+# 0.55, -np.pi
+SWEEP_DISTANCE_BOUNDS = (0.55, 0.55)
+SWEEP_ROT_BOUNDS = (-np.pi, -np.pi)
 WORLD_X_BOUNDS = (-2.5, 2.5)
 WORLD_Y_BOUNDS = (-2.5, 2.5)
 
