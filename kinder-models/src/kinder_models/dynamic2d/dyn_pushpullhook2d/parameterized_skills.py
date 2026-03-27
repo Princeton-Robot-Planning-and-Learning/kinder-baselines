@@ -55,10 +55,10 @@ class GroundGraspHookController(Dynamic2dRobotController):
 
     def sample_parameters(
         self, x: ObjectCentricState, rng: np.random.Generator
-    ) -> float:
+    ) -> tuple[float]:
         """Sample arm length parameter for the grasp."""
         norm_arm_length = rng.uniform(0.0, 1.0)
-        return float(norm_arm_length)
+        return (float(norm_arm_length),)
 
     def _requires_multi_phase_gripper(self) -> bool:
         """Grasp uses two phases: move to hook, then close gripper."""

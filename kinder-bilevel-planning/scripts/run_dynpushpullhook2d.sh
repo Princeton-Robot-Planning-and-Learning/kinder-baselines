@@ -11,22 +11,22 @@ echo "Starting bilevel planning DynPushPullHook2D experiments..."
 echo "=============================================="
 
 # Run experiments for 0 obstructions
-echo ""
-echo "Running experiments for 0 obstructions (o0)..."
-for seed in "${SEEDS[@]}"; do
-    echo "  - Running seed ${seed}..."
-    python experiments/run_experiment.py \
-        env=dynpushpullhook2d-o0 \
-        make_videos=true \
-        seed=${seed} \
-        hydra.run.dir=./logs/dynpushpullhook2d-o0/seed_${seed}
+# echo ""
+# echo "Running experiments for 0 obstructions (o0)..."
+# for seed in "${SEEDS[@]}"; do
+#     echo "  - Running seed ${seed}..."
+#     python experiments/run_experiment.py \
+#         env=dynpushpullhook2d-o0 \
+#         make_videos=true \
+#         seed=${seed} \
+#         hydra.run.dir=./logs/dynpushpullhook2d-o0/seed_${seed}
 
-    if [ $? -eq 0 ]; then
-        echo "    ✓ Seed ${seed} completed successfully"
-    else
-        echo "    ✗ Seed ${seed} failed"
-    fi
-done
+#     if [ $? -eq 0 ]; then
+#         echo "    ✓ Seed ${seed} completed successfully"
+#     else
+#         echo "    ✗ Seed ${seed} failed"
+#     fi
+# done
 
 # Run experiments for 1 obstruction
 # echo ""
@@ -47,21 +47,21 @@ done
 # done
 
 # Run experiments for 5 obstructions
-# echo ""
-# echo "Running experiments for 5 obstructions (o5)..."
-# for seed in "${SEEDS[@]}"; do
-#     echo "  - Running seed ${seed}..."
-#     python experiments/run_experiment.py \
-#         env=dynpushpullhook2d-o5 \
-#         seed=${seed} \
-#         hydra.run.dir=./logs/dynpushpullhook2d-o5/seed_${seed}
-#
-#     if [ $? -eq 0 ]; then
-#         echo "    ✓ Seed ${seed} completed successfully"
-#     else
-#         echo "    ✗ Seed ${seed} failed"
-#     fi
-# done
+echo ""
+echo "Running experiments for 5 obstructions (o5)..."
+for seed in "${SEEDS[@]}"; do
+    echo "  - Running seed ${seed}..."
+    python experiments/run_experiment.py \
+        env=dynpushpullhook2d-o5 \
+        seed=${seed} \
+        hydra.run.dir=./logs/dynpushpullhook2d-o5/seed_${seed}
+
+    if [ $? -eq 0 ]; then
+        echo "    ✓ Seed ${seed} completed successfully"
+    else
+        echo "    ✗ Seed ${seed} failed"
+    fi
+done
 
 echo ""
 echo "=============================================="
