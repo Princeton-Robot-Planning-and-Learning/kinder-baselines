@@ -43,6 +43,12 @@ def _main(cfg: DictConfig) -> None:
     kinder.register_all_environments()
     env = kinder.make(**cfg.env.make_kwargs, render_mode="rgb_array")
 
+    # Apply noisy wrappers.
+    if cfg.obs_noise_std > 0:
+        env = kinder.NoisyObservation(env, noise_std=cfg.obs_noise_std)
+    if cfg.action_noise_std > 0:
+        env = kinder.NoisyAction(env, noise_std=cfg.action_noise_std)
+
     # Record videos.
     if cfg.make_videos:
         video_path = Path(cfg.video_folder)
@@ -120,8 +126,8 @@ def _run_single_episode_evaluation(
     with timer() as result:
         try:
             agent.reset(obs, info)
-        except AgentFailure:
-            logging.info("Agent failed during reset().")
+        except (Exception, AgentFailure) as e:  # pylint: disable=broad-except
+            logging.info(f"Agent failed during reset(): {e}")
             planning_failed = True
     planning_time += result["time"]
     if planning_failed:
@@ -137,8 +143,8 @@ def _run_single_episode_evaluation(
         with timer() as result:
             try:
                 action = agent.step()
-            except AgentFailure:
-                logging.info("Agent failed during step().")
+            except (Exception, AgentFailure) as e:  # pylint: disable=broad-except
+                logging.info(f"Agent failed during step(): {e}")
                 step_failed = True
         execution_time += result["time"]
         if step_failed:
@@ -154,7 +160,11 @@ def _run_single_episode_evaluation(
         total_reward += reward
         assert not truncated
         with timer() as result:
-            agent.update(obs, reward, done, info)
+            try:
+                agent.update(obs, reward, done, info)
+            except (Exception, AgentFailure) as e:  # pylint: disable=broad-except
+                logging.info(f"Agent failed during update(): {e}")
+                break
         execution_time += result["time"]
         if done:
             success = True
