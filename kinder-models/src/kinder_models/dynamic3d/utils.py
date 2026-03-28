@@ -64,6 +64,13 @@ PICK_WIPER_ROT_BOUNDS = (-np.pi, -np.pi)
 # 0.55, -np.pi
 SWEEP_DISTANCE_BOUNDS = (0.55, 0.55)
 SWEEP_ROT_BOUNDS = (-np.pi, -np.pi)
+# ablation study
+# OPEN_DRAWER_DISTANCE_BOUNDS = (0.75, 0.85)
+# OPEN_DRAWER_ROT_BOUNDS = (-np.pi-np.pi/4, -np.pi+np.pi/4)
+# PICK_WIPER_DISTANCE_BOUNDS = (0.65, 0.75)
+# PICK_WIPER_ROT_BOUNDS = (-np.pi-np.pi/4, -np.pi+np.pi/4)
+# SWEEP_DISTANCE_BOUNDS = (0.5, 0.6)
+# SWEEP_ROT_BOUNDS = (-np.pi-np.pi/4, -np.pi+np.pi/4)
 WORLD_X_BOUNDS = (-2.5, 2.5)
 WORLD_Y_BOUNDS = (-2.5, 2.5)
 
