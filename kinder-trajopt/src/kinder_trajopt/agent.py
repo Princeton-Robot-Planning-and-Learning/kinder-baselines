@@ -3,6 +3,7 @@
 from typing import Any
 
 import numpy as np
+from kinder_mbrl.planning import load_world_model
 from numpy.typing import NDArray
 from prpl_utils.gym_agent import Agent
 from prpl_utils.trajopt.mpc_wrapper import MPCWrapper
@@ -11,7 +12,6 @@ from prpl_utils.trajopt.predictive_sampling import (
     PredictiveSamplingSolver,
 )
 
-from kinder_mbrl.planning import load_world_model
 from kinder_trajopt.trajopt_problem import KinderTrajOptProblem
 
 

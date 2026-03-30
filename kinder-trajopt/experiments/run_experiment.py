@@ -74,7 +74,9 @@ def _main(cfg: DictConfig) -> None:
                 max_eval_steps=cfg.env.max_eval_steps,
             )
         except Exception as e:
-            logging.error(f"Episode {eval_episode} failed with error: {e}", exc_info=True)
+            logging.error(
+                f"Episode {eval_episode} failed with error: {e}", exc_info=True
+            )
             episode_metrics = {
                 "success": False,
                 "steps": 0,
