@@ -42,7 +42,7 @@ class TrajOptAgent(Agent[NDArray[np.float32], NDArray[np.float32]]):
         if checkpoint is not None:
             self._wm_model, self._wm_norms = load_world_model(checkpoint)
         else:
-            self._wm_model, self._wm_norms = None, None
+            self._wm_model, self._wm_norms = None, None  # type: ignore
         self._preserved_indices = preserved_indices
         self._problem: KinderTrajOptProblem | None = None
         action_range = env.action_space.high - env.action_space.low

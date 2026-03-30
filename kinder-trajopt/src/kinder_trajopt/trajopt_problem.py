@@ -70,7 +70,7 @@ class KinderTrajOptProblem(TrajOptProblem):
     ) -> TrajOptState:
         if self._wm_model is not None:
             next_state = wm_get_next_state(
-                state, action, self._wm_model, self._wm_norms
+                state, action, self._wm_model, self._wm_norms  # type: ignore
             )
             if self._preserved_indices is not None:
                 next_state[self._preserved_indices] = state[self._preserved_indices]
