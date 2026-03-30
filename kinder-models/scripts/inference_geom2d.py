@@ -123,7 +123,6 @@ def run_inference(
     show_images: bool = False,
     use_env_state: bool = False,
     save_videos: bool = False,
-    remove_velocity: bool = False,
     save_trajectories: bool = False,
 ):
     """Run policy inference in the kinder environment.
@@ -141,7 +140,6 @@ def run_inference(
         show_images: Whether to show images in a window.
         use_env_state: Whether to use env state for the policy.
         save_videos: Whether to save videos for evaluation.
-        remove_velocity: Whether to remove velocity from the policy.
         save_trajectories: Whether to save trajectory pickle files.
     """
 
@@ -164,7 +162,7 @@ def run_inference(
         render_mode = "rgb_array" if render or save_videos else None
         print(f"env_name: {env_name}")
         final_env_name = f"kinder/{env_name.strip()}"
-        if "Sweep" in env_name:
+        if "Sweep" in env_name or "Shelf3D" in env_name:
             env = kinder.make(
                 final_env_name,
                 render_mode=render_mode,
@@ -223,6 +221,7 @@ def run_inference(
                 or "TidyBot" in env_name
                 or "Transport3D" in env_name
                 or "Sweep" in env_name
+                or "Shelf3D" in env_name
             ):
                 target_object_key = "target"
             elif "Motion3D" in env_name:
@@ -254,10 +253,7 @@ def run_inference(
                     time.sleep(0.0001)
 
                 # Get robot state
-                if "TidyBot" in env_name or "Sweep" in env_name:
-                    robot = state.get_object_from_name("robot_0")
-                else:
-                    robot = state.get_object_from_name("robot")
+                robot = state.get_object_from_name("robot")
                 if "Transport3D" in env_name:
                     gripper_state = state.get(robot, "finger_state")
                     if gripper_state > 0.1:
@@ -276,7 +272,11 @@ def run_inference(
                         _visualize_image_in_window(overview_image, "overview")
                         _visualize_image_in_window(base_image, "base")
                         _visualize_image_in_window(wrist_image, "wrist")
-                elif "TidyBot" in env_name or "Sweep" in env_name:
+                elif (
+                    "TidyBot" in env_name
+                    or "Sweep" in env_name
+                    or "Shelf3D" in env_name
+                ):
                     robot_name = env.unwrapped._object_centric_env.robot_name  # type: ignore # pylint: disable=protected-access
                     env.unwrapped._object_centric_env.set_render_camera("agentview_1")  # type: ignore # pylint: disable=protected-access
                     overview_image = env.unwrapped._object_centric_env.render()  # type: ignore # pylint: disable=protected-access
@@ -309,40 +309,28 @@ def run_inference(
                         "TidyBot" in env_name
                         or "BaseMotion3D" in env_name
                         or "Transport3D" in env_name
+                        or "Sweep" in env_name
+                        or "Shelf3D" in env_name
                     ):
-                        if remove_velocity and "TidyBot" in env_name:
-                            obs_dict = {
-                                "robot_state": env.observation_space.get_object_subvector(  # pylint: disable=line-too-long
-                                    obs, "robot_0"
-                                )[
-                                    :11
-                                ],
-                                "env_state": env.observation_space.get_vector_excluding_object(  # pylint: disable=line-too-long
-                                    obs, "robot_0"
-                                ),
-                                "overview_image": overview_image,
-                                "base_image": base_image,
-                                "wrist_image": wrist_image,
-                            }
-                        else:
-                            obs_dict = {
-                                "robot_state": env.observation_space.get_object_subvector(  # pylint: disable=line-too-long
-                                    obs, "robot_0"
-                                ),
-                                "env_state": env.observation_space.get_vector_excluding_object(  # pylint: disable=line-too-long
-                                    obs, "robot_0"
-                                ),
-                                "overview_image": overview_image,
-                                "base_image": base_image,
-                                "wrist_image": wrist_image,
-                            }
+                        obs_dict = {
+                            "robot_state": env.observation_space.get_object_subvector(  # pylint: disable=line-too-long
+                                obs, "robot"
+                            ),
+                            "env_state": env.observation_space.get_vector_excluding_object(  # pylint: disable=line-too-long
+                                obs, "robot"
+                            ),
+                            "overview_image": overview_image,
+                            "base_image": base_image,
+                            "wrist_image": wrist_image,
+                        }
+
                     else:
                         obs_dict = {
                             "robot_state": env.observation_space.get_object_subvector(
-                                obs, "robot_0"
+                                obs, "robot"
                             ),
                             "env_state": env.observation_space.get_vector_excluding_object(  # pylint: disable=line-too-long
-                                obs, "robot_0"
+                                obs, "robot"
                             ),
                             "image": image,
                         }
@@ -352,29 +340,16 @@ def run_inference(
                         or "BaseMotion3D" in env_name
                         or "Transport3D" in env_name
                         or "Sweep" in env_name
+                        or "Shelf3D" in env_name
                     ):
-                        if remove_velocity and (
-                            "TidyBot" in env_name or "Sweep" in env_name
-                        ):
-                            obs_dict = {
-                                "robot_state": env.observation_space.get_object_subvector(  # pylint: disable=line-too-long
-                                    obs, "robot_0"
-                                )[
-                                    :11
-                                ],
-                                "overview_image": overview_image,
-                                "base_image": base_image,
-                                "wrist_image": wrist_image,
-                            }
-                        else:
-                            obs_dict = {
-                                "robot_state": env.observation_space.get_object_subvector(  # pylint: disable=line-too-long
-                                    obs, "robot"
-                                ),
-                                "overview_image": overview_image,
-                                "base_image": base_image,
-                                "wrist_image": wrist_image,
-                            }
+                        obs_dict = {
+                            "robot_state": env.observation_space.get_object_subvector(  # pylint: disable=line-too-long
+                                obs, "robot"
+                            ),
+                            "overview_image": overview_image,
+                            "base_image": base_image,
+                            "wrist_image": wrist_image,
+                        }
                     else:
                         obs_dict = {
                             "robot_state": env.observation_space.get_object_subvector(
@@ -383,11 +358,12 @@ def run_inference(
                             "image": image,
                         }
 
-                if "TidyBot" in env_name:
-                    if remove_velocity:
-                        assert obs_dict["robot_state"].shape == obs[-22:-11].shape
-                    else:
-                        assert obs_dict["robot_state"].shape == obs[-22:].shape
+                if (
+                    "TidyBot" in env_name
+                    or "Sweep" in env_name
+                    or "Shelf3D" in env_name
+                ):
+                    assert obs_dict["robot_state"].shape == obs[-22:].shape
                     if "env_state" in obs_dict:
                         assert obs_dict["env_state"].shape == obs[:-22].shape
                 elif "BaseMotion3D" in env_name or "Transport3D" in env_name:
@@ -979,12 +955,6 @@ def main() -> None:
         help="Use env state for the policy",
     )
     parser.add_argument(
-        "--remove_velocity",
-        action="store_true",
-        default=False,
-        help="remove velocity from the policy",
-    )
-    parser.add_argument(
         "--summary_only",
         action="store_true",
         default=False,
@@ -1023,7 +993,6 @@ def main() -> None:
                 use_env_state=args.use_env_state,
                 save_videos=args.save_videos,
                 save_trajectories=args.save_trajectories,
-                remove_velocity=args.remove_velocity,
             )
 
     run_summary(output_dir=video_parent_dir)

@@ -100,7 +100,9 @@ def check_constant_indices(demo_dir: Path, tol: float = 1e-8) -> None:
     # Count is always >= globally_constant since globally constant => within-ep unchanged.
     max_within_range = np.stack(
         [ep.max(axis=0) - ep.min(axis=0) for ep in episodes], axis=0
-    ).max(axis=0)  # (state_dim,)  worst-case within-ep range per index
+    ).max(
+        axis=0
+    )  # (state_dim,)  worst-case within-ep range per index
     within_ep_unchanged = np.where(max_within_range <= tol)[0]
 
     # Split into sub-categories for clarity.
