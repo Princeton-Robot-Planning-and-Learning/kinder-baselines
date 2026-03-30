@@ -97,7 +97,7 @@ def check_constant_indices(demo_dir: Path, tol: float = 1e-8) -> None:
     # For each index, compute the range (max - min) across timesteps within every
     # episode. Take the worst-case (max) range across all episodes. If this is
     # <= tol, the index literally never moved during any episode.
-    # Count is always >= globally_constant since globally constant => within-ep unchanged.
+    # Count is always >= globally_constant since globally constant=>within-ep unchanged.
     max_within_range = np.stack(
         [ep.max(axis=0) - ep.min(axis=0) for ep in episodes], axis=0
     ).max(
@@ -164,6 +164,7 @@ def check_constant_indices(demo_dir: Path, tol: float = 1e-8) -> None:
 
 
 def main() -> None:
+    """Main function to check the constant indices."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--demo_dir",
