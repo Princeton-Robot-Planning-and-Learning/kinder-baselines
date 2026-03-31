@@ -1,4 +1,4 @@
-"""Run trajopt experiments across all environments, 3 seeds each.
+"""Run trajopt experiments across all environments, 5 seeds each.
 
 Usage:
     python scripts/run_all_envs.py

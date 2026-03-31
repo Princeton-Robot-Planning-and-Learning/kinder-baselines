@@ -83,8 +83,6 @@ def _main(cfg: DictConfig) -> None:
                 "planning_time": 0.0,
                 "execution_time": 0.0,
                 "reward": 0.0,
-                "eval_episode": eval_episode,
-                "error": str(e),  # type: ignore
             }
             metrics.append(episode_metrics)
             continue
