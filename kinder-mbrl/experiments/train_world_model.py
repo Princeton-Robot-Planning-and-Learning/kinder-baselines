@@ -173,7 +173,10 @@ def eval_rollout(hdf5_path: str, checkpoint: str, num_episodes: int = 5) -> None
 def main() -> None:
     """Parse arguments and dispatch to train() or eval_rollout()."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--hdf5_path", default="../../../prpl-mono/prbench-models/datasets/motion2d_p0.hdf5")
+    parser.add_argument(
+        "--hdf5_path",
+        default="../../../prpl-mono/prbench-models/datasets/motion2d_p0.hdf5",
+    )
     parser.add_argument("--mode", choices=["train", "eval"], default="train")
     parser.add_argument("--output_dir", default="output")
     parser.add_argument("--checkpoint", default="output/wm.pt")

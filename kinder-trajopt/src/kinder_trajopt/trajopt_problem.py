@@ -68,7 +68,7 @@ class KinderTrajOptProblem(TrajOptProblem):
     def get_next_state(
         self, state: TrajOptState, action: TrajOptAction
     ) -> TrajOptState:
-        if self._wm_model is not None:
+        if self._wm_model is not None and self._wm_norms is not None:
             next_state = wm_get_next_state(
                 state, action, self._wm_model, self._wm_norms  # type: ignore
             )
