@@ -15,7 +15,7 @@ dependencies = [
    "pandas-stubs",
    "hydra-core",
    "omegaconf",
-   "kindergarden>=0.0.7",
+   "kindergarden>=0.0.8",
    "prpl_utils>=0.0.1",
    "relational_structs>=0.0.1",
    "pybullet_helpers>=0.0.1",
