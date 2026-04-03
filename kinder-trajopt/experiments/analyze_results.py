@@ -81,14 +81,20 @@ def analyze_results(log_dir: Path) -> pd.DataFrame:
             }
             if "reward" in row:
                 row_data["reward"] = row["reward"]
-            if row["planning_time"] != 0.0:
-                all_data.append(row_data)
+            all_data.append(row_data)
 
     if not all_data:
         print("No data loaded from runs")
         return pd.DataFrame()
 
     df = pd.DataFrame(all_data)
+
+    # Exclude trivial episodes (planning_time == 0) from all metrics except success
+    zero_plan_mask = df["planning_time"] == 0
+    for col in ["planning_time", "execution_time", "steps"] + (
+        ["reward"] if "reward" in df.columns else []
+    ):
+        df.loc[zero_plan_mask, col] = float("nan")
 
     group_cols = ["env_name"]
     for col in [
@@ -102,23 +108,36 @@ def analyze_results(log_dir: Path) -> pd.DataFrame:
         if df[col].nunique() > 1:
             group_cols.append(col)
 
-    agg_dict = {
+    has_reward = "reward" in df.columns
+
+    # Stage 1: compute per-seed means (collapses episodes within each seed)
+    seed_agg: dict = {
+        "success": "mean",
+        "planning_time": "mean",
+        "execution_time": "mean",
+        "steps": "mean",
+    }
+    if has_reward:
+        seed_agg["reward"] = "mean"
+
+    per_seed = df.groupby(group_cols + ["seed"]).agg(seed_agg).reset_index()
+
+    # Stage 2: mean and std across seeds
+    final_agg: dict = {
         "success": ["mean", "std", "count"],
         "planning_time": ["mean", "std"],
         "execution_time": ["mean", "std"],
         "steps": "mean",
     }
-
-    has_reward = "reward" in df.columns
     if has_reward:
-        agg_dict["reward"] = ["mean", "std"]
+        final_agg["reward"] = ["mean", "std"]
 
-    grouped = df.groupby(group_cols).agg(agg_dict)
+    grouped = per_seed.groupby(group_cols).agg(final_agg)
 
     col_names = [
         "solve_rate",
         "solve_rate_std",
-        "num_runs",
+        "num_seeds",
         "avg_planning_time",
         "planning_time_std",
         "avg_execution_time",
@@ -134,6 +153,9 @@ def analyze_results(log_dir: Path) -> pd.DataFrame:
     if has_reward:
         successful_reward = (
             df[df["success"] == True]  # pylint: disable=singleton-comparison
+            .groupby(group_cols + ["seed"])["reward"]
+            .mean()
+            .reset_index()
             .groupby(group_cols)["reward"]
             .agg(["mean", "std"])
             .reset_index()
@@ -218,7 +240,7 @@ def format_table(df: pd.DataFrame) -> str:
         if has_reward:
             parts.append(f"{row['avg_reward']:.3f} ± {row['avg_reward_std']:.3f}")
             avg_reward_successful = (
-                f"{row['avg_reward_successful']:.3f} ± {row['reward_successful_std']:.3f}" # pylint: disable=line-too-long
+                f"{row['avg_reward_successful']:.3f} ± {row['reward_successful_std']:.3f}"  # pylint: disable=line-too-long
                 if pd.notna(row["avg_reward_successful"])
                 else "N/A"
             )
@@ -231,7 +253,7 @@ def format_table(df: pd.DataFrame) -> str:
 
     lines.append("=" * header_line_length)
     lines.append(f"\nTotal configurations: {len(df)}")
-    lines.append(f"Runs per configuration: {int(df['num_runs'].iloc[0])}")
+    lines.append(f"Seeds per configuration: {int(df['num_seeds'].iloc[0])}")
     return "\n".join(lines)
 
 
