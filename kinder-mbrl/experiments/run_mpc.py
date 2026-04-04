@@ -70,7 +70,7 @@ def main() -> None:
     print("Observation shape:", env.observation_space.shape)
     print("Action shape:     ", env.action_space.shape)
 
-    rng = np.random.default_rng(0)
+    rng = np.random.default_rng(args.seed)
 
     obs, _ = env.reset(seed=args.seed)
     frames = [env.render()]  # type: ignore

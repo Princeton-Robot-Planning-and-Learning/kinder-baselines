@@ -39,8 +39,7 @@ def load_world_model(checkpoint: str) -> Tuple[MLPDynamics, dict]:
     Returns:
         A tuple (model, norms) where model is the two-head MLPDynamics instance
         in eval mode and norms is a dict containing the mean/std arrays for
-        states, actions, robot deltas, and env deltas, plus robot_dim for
-        slicing the concatenated delta.
+        states, actions, robot deltas, and env deltas.
     """
     ckpt = torch.load(checkpoint, weights_only=False)
     model = MLPDynamics(
