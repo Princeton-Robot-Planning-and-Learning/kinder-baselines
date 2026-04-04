@@ -1,5 +1,9 @@
 """Check which state-vector indices are constant across all demo pickle files.
 
+This script is used to check which state-vector indices are
+constant across all demo pickle files.
+It is used to determine the preserve_indices for the world model.
+
 Scans a directory of teleoperated demonstrations (each episode is a numbered
 subdirectory containing a single .p pickle file) and reports:
   - Indices that never change across ALL timesteps and ALL episodes (globally
