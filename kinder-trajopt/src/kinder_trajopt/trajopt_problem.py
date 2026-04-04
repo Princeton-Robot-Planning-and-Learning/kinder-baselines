@@ -3,7 +3,9 @@
 import logging
 from typing import Any
 
+import numpy as np
 from gymnasium.spaces import Box
+from kinder_mbrl.planning import wm_get_next_state
 from prpl_utils.structs import Image
 from prpl_utils.trajopt.trajopt_problem import (
     TrajOptAction,
@@ -26,10 +28,16 @@ class KinderTrajOptProblem(TrajOptProblem):
         env: Any,
         initial_state: TrajOptState,
         horizon: int,
+        wm_model: Any = None,
+        wm_norms: dict | None = None,
+        preserved_indices: list[int] | None = None,
     ) -> None:
         self._env = env
         self._initial_state = initial_state
         self._horizon = horizon
+        self._wm_model = wm_model
+        self._wm_norms = wm_norms
+        self._preserved_indices = preserved_indices
         self._cached_rewards: dict[int, float] = {}
         self._cached_terminated: dict[int, bool] = {}
         self._cache_step = 0
@@ -60,9 +68,21 @@ class KinderTrajOptProblem(TrajOptProblem):
     def get_next_state(
         self, state: TrajOptState, action: TrajOptAction
     ) -> TrajOptState:
-        next_state, reward, terminated = self._env.unwrapped.get_transition(
-            state, action
-        )
+        if self._wm_model is not None and self._wm_norms is not None:
+            next_state = wm_get_next_state(
+                state, action, self._wm_model, self._wm_norms  # type: ignore
+            )
+            if self._preserved_indices is not None:
+                next_state[self._preserved_indices] = state[self._preserved_indices]
+            if "StickButton2D" in self._env.unwrapped.spec.id:
+                next_state[2] = (next_state[2] + np.pi) % (2 * np.pi) - np.pi
+                next_state[11] = (next_state[11] + np.pi) % (2 * np.pi) - np.pi
+            reward, terminated = self._env.unwrapped.get_reward_and_done(state, action)
+        else:
+            next_state, reward, terminated = self._env.unwrapped.get_transition(
+                state, action
+            )
+
         step = self._cache_step
         self._cached_rewards[step] = float(reward)
         self._cached_terminated[step] = terminated
