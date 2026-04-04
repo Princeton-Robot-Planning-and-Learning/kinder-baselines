@@ -1,2 +1,5 @@
 env_id: "kinder/DynPushPullHook2D-o5-v0"
 max_eval_steps: 500
+replan_interval: 50
+
+use_checkpoint: False

@@ -3,6 +3,7 @@
 from typing import Any
 
 import numpy as np
+from kinder_mbrl.planning import load_world_model
 from numpy.typing import NDArray
 from prpl_utils.gym_agent import Agent
 from prpl_utils.trajopt.mpc_wrapper import MPCWrapper
@@ -32,10 +33,17 @@ class TrajOptAgent(Agent[NDArray[np.float32], NDArray[np.float32]]):
         num_control_points: int = 10,
         warm_start: bool = True,
         replan_interval: int = 1,
+        checkpoint: str | None = None,
+        preserved_indices: list[int] | None = None,
     ) -> None:
         super().__init__(seed)
         self._env = env
         self._horizon = horizon
+        if checkpoint is not None:
+            self._wm_model, self._wm_norms = load_world_model(checkpoint)
+        else:
+            self._wm_model, self._wm_norms = None, None  # type: ignore
+        self._preserved_indices = preserved_indices
         self._problem: KinderTrajOptProblem | None = None
         action_range = env.action_space.high - env.action_space.low
         noise_scale = action_range * noise_fraction
@@ -57,6 +65,9 @@ class TrajOptAgent(Agent[NDArray[np.float32], NDArray[np.float32]]):
             env=self._env,
             initial_state=obs,
             horizon=self._horizon,
+            wm_model=self._wm_model,
+            wm_norms=self._wm_norms,
+            preserved_indices=self._preserved_indices,
         )
         self._mpc.reset(self._problem)
 
