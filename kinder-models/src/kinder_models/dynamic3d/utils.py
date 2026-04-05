@@ -312,7 +312,7 @@ def run_base_motion_planning(
     )
 
     initial_pose = get_overhead_robot_se2_pose(state, robot)
-    path, _ = birrt.query(initial_pose, target_base_pose)
+    path = birrt.query(initial_pose, target_base_pose)
     return path
 
 
