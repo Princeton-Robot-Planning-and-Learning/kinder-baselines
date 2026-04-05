@@ -177,7 +177,7 @@ class PickShelfController(GroundParameterizedController[ObjectCentricState, Arra
 
         target_object = self.objects[1]
 
-        target_grap_pose_world = Pose(
+        target_grasp_pose_world = Pose(
             (
                 plan_x.get(target_object, "x"),
                 plan_x.get(target_object, "y"),
@@ -192,13 +192,13 @@ class PickShelfController(GroundParameterizedController[ObjectCentricState, Arra
         )
 
         target_end_effector_pose = multiply_poses(
-            target_grap_pose_world,
+            target_grasp_pose_world,
             GRASP_TRANSFORM_TO_OBJECT,
         )
 
         self._pybullet_sim.base_link_to_held_obj = multiply_poses(
             target_end_effector_pose.invert(),
-            target_grap_pose_world,
+            target_grasp_pose_world,
         )
 
         target_joints = inverse_kinematics(
@@ -376,7 +376,6 @@ class PickShelfController(GroundParameterizedController[ObjectCentricState, Arra
         x = self._last_state
         assert x is not None
         robot_obj = self.objects[0]  # Robot is first parameter
-        # return x.get(robot_obj, "pos_gripper")
         if x.get(robot_obj, "pos_gripper") > 0.2:
             return GRASP_CLOSE_THRESHOLD
         return 0.0
@@ -710,7 +709,6 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
         x = self._last_state
         assert x is not None
         robot_obj = self.objects[0]  # Robot is first parameter
-        # return x.get(robot_obj, "pos_gripper")
         if x.get(robot_obj, "pos_gripper") > 0.2:
             return GRASP_CLOSE_THRESHOLD
         return 0.0

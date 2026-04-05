@@ -229,18 +229,16 @@ def run_base_motion_planning(
 
     rng = np.random.default_rng(seed)
 
-    disable_collision = True
     # Construct geoms.
     (robot,) = state.get_objects(MujocoTidyBotRobotObjectType)
     robot_width, robot_height, _ = get_bounding_box(state, robot)
     obstacles = state.get_objects(MujocoObjectType)
     if disable_collision_objects is not None:
         obstacles = [o for o in obstacles if o.name not in disable_collision_objects]
-    if disable_collision:
-        obstacle_geoms = set()
-    else:
-        geoms = get_overhead_kinematic2ds(state)
-        obstacle_geoms = {geoms[o.name] for o in obstacles}
+    obstacle_geoms: set[Geom2D] = set()
+    # uncomment to fully consider the collisions.
+    # geoms = get_overhead_kinematic2ds(state)
+    # obstacle_geoms = {geoms[o.name] for o in obstacles}
 
     # Set up the RRT methods.
     def sample_fn(_: SE2) -> SE2:

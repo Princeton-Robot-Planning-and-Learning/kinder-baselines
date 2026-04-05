@@ -60,8 +60,7 @@ def test_open_drawer():
     cube4 = state.get_object_from_name("cube_4")
     object_parameters = (robot, wiper, drawer, cube0, cube1, cube2, cube3, cube4)
     controller = lifted_controller.ground(object_parameters)
-    # params = controller.sample_parameters(state, np.random.default_rng(123))
-    params = np.array([0.7, -np.pi])
+    params = controller.sample_parameters(state, np.random.default_rng(123))
 
     # Reset and execute the controller until it terminates.
     controller.reset(state, params)
@@ -116,8 +115,7 @@ def test_pick_wiper():
     cube4 = state.get_object_from_name("cube_4")
     object_parameters = (robot, wiper, drawer, cube0, cube1, cube2, cube3, cube4)
     controller = lifted_controller.ground(object_parameters)
-    # params = controller.sample_parameters(state, np.random.default_rng(123))
-    params = np.array([0.7, -np.pi])
+    params = controller.sample_parameters(state, np.random.default_rng(123))
 
     # Reset and execute the controller until it terminates.
     controller.reset(state, params)
@@ -173,7 +171,6 @@ def test_open_drawer_pick_sweep_wiper():
     object_parameters = (robot, wiper, drawer, cube0, cube1, cube2, cube3, cube4)
     controller = lifted_controller.ground(object_parameters)
     params = controller.sample_parameters(state, np.random.default_rng(123))
-    # params = np.array([0.7, -np.pi])
 
     # Reset and execute the controller until it terminates.
     controller.reset(state, params)
@@ -201,7 +198,6 @@ def test_open_drawer_pick_sweep_wiper():
     object_parameters = (robot, wiper, drawer, cube0, cube1, cube2, cube3, cube4)
     controller = lifted_controller.ground(object_parameters)
     params = controller.sample_parameters(state, np.random.default_rng(123))
-    # params = np.array([0.7, -np.pi])
 
     # Reset and execute the controller until it terminates.
     controller.reset(state, params)

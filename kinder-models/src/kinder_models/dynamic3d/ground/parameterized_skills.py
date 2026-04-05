@@ -1150,7 +1150,7 @@ class PickGroundController(GroundParameterizedController[ObjectCentricState, Arr
 
         target_object = self.objects[1]
 
-        target_grap_pose_world = Pose(
+        target_grasp_pose_world = Pose(
             (
                 plan_x.get(target_object, "x"),
                 plan_x.get(target_object, "y"),
@@ -1165,13 +1165,13 @@ class PickGroundController(GroundParameterizedController[ObjectCentricState, Arr
         )
 
         target_end_effector_pose = multiply_poses(
-            target_grap_pose_world,
+            target_grasp_pose_world,
             GRASP_TRANSFORM_TO_OBJECT,
         )
 
         self._pybullet_sim.base_link_to_held_obj = multiply_poses(
             target_end_effector_pose.invert(),
-            target_grap_pose_world,
+            target_grasp_pose_world,
         )
 
         target_joints = inverse_kinematics(
@@ -1277,7 +1277,7 @@ class PickGroundController(GroundParameterizedController[ObjectCentricState, Arr
             gripper_pose = self._get_current_robot_gripper_pose()
             next_conf = self._current_arm_joint_plan[0]
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
+            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore # pylint: disable=line-too-long
             free_joints_infos = [
                 joint_info for joint_info in joint_infos if joint_info.qIndex > -1
             ]
@@ -1311,7 +1311,7 @@ class PickGroundController(GroundParameterizedController[ObjectCentricState, Arr
             gripper_pose = self._get_current_robot_gripper_pose()
             next_conf = self._current_retract_plan[0]  # type: ignore
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
+            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore # pylint: disable=line-too-long
             free_joints_infos = [
                 joint_info for joint_info in joint_infos if joint_info.qIndex > -1
             ]
@@ -1359,7 +1359,6 @@ class PickGroundController(GroundParameterizedController[ObjectCentricState, Arr
         x = self._last_state
         assert x is not None
         robot_obj = self.objects[0]  # Robot is first parameter
-        # return x.get(robot_obj, "pos_gripper")
         if x.get(robot_obj, "pos_gripper") > 0.2:
             return GRASP_CLOSE_THRESHOLD
         return 0.0
@@ -1612,7 +1611,7 @@ class PlaceGroundController(GroundParameterizedController[ObjectCentricState, Ar
             gripper_pose = self._get_current_robot_gripper_pose()
             next_conf = self._current_arm_joint_plan[0]
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
+            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore # pylint: disable=line-too-long
             free_joints_infos = [
                 joint_info for joint_info in joint_infos if joint_info.qIndex > -1
             ]
@@ -1642,7 +1641,7 @@ class PlaceGroundController(GroundParameterizedController[ObjectCentricState, Ar
             gripper_pose = self._get_current_robot_gripper_pose()
             next_conf = self._current_retract_plan[0]  # type: ignore
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
+            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore # pylint: disable=line-too-long
             free_joints_infos = [
                 joint_info for joint_info in joint_infos if joint_info.qIndex > -1
             ]
@@ -1690,7 +1689,6 @@ class PlaceGroundController(GroundParameterizedController[ObjectCentricState, Ar
         x = self._last_state
         assert x is not None
         robot_obj = self.objects[0]  # Robot is first parameter
-        # return x.get(robot_obj, "pos_gripper")
         if x.get(robot_obj, "pos_gripper") > 0.2:
             return GRASP_CLOSE_THRESHOLD
         return 0.0
@@ -1834,7 +1832,7 @@ class OpenDrawerSweepController(
 
         target_object = self.objects[1]
 
-        target_grap_pose_world = Pose(
+        target_grasp_pose_world = Pose(
             (
                 plan_x.get(target_object, "x"),
                 plan_x.get(target_object, "y"),
@@ -1849,18 +1847,18 @@ class OpenDrawerSweepController(
         )
 
         target_end_effector_pose = multiply_poses(
-            target_grap_pose_world,
+            target_grasp_pose_world,
             DRAWER_TRANSFORM_TO_OBJECT,
         )
 
         target_end_effector_pose_end = multiply_poses(
-            target_grap_pose_world,
+            target_grasp_pose_world,
             DRAWER_TRANSFORM_TO_OBJECT_END,
         )
 
         self._pybullet_sim.base_link_to_held_obj = multiply_poses(
             target_end_effector_pose.invert(),
-            target_grap_pose_world,
+            target_grasp_pose_world,
         )
 
         target_joints = inverse_kinematics(
@@ -1983,7 +1981,7 @@ class OpenDrawerSweepController(
             gripper_pose = self._get_current_robot_gripper_pose()
             next_conf = self._current_arm_joint_plan[0]
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
+            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore # pylint: disable=line-too-long
             free_joints_infos = [
                 joint_info for joint_info in joint_infos if joint_info.qIndex > -1
             ]
@@ -2017,7 +2015,7 @@ class OpenDrawerSweepController(
             gripper_pose = self._get_current_robot_gripper_pose()
             next_conf = self._current_open_plan[0]  # type: ignore
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
+            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore # pylint: disable=line-too-long
             free_joints_infos = [
                 joint_info for joint_info in joint_infos if joint_info.qIndex > -1
             ]
@@ -2047,7 +2045,7 @@ class OpenDrawerSweepController(
             gripper_pose = self._get_current_robot_gripper_pose()
             next_conf = self._current_retract_plan[0]  # type: ignore
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
+            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore # pylint: disable=line-too-long
             free_joints_infos = [
                 joint_info for joint_info in joint_infos if joint_info.qIndex > -1
             ]
@@ -2095,7 +2093,6 @@ class OpenDrawerSweepController(
         x = self._last_state
         assert x is not None
         robot_obj = self.objects[0]  # Robot is first parameter
-        # return x.get(robot_obj, "pos_gripper")
         if x.get(robot_obj, "pos_gripper") > 0.2:
             return GRASP_CLOSE_THRESHOLD
         return 0.0
@@ -2229,7 +2226,7 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
 
         target_object = self.objects[1]
 
-        target_grap_pose_world = Pose(
+        target_grasp_pose_world = Pose(
             (
                 plan_x.get(target_object, "x"),
                 plan_x.get(target_object, "y"),
@@ -2244,13 +2241,13 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
         )
 
         target_end_effector_pose = multiply_poses(
-            target_grap_pose_world,
+            target_grasp_pose_world,
             WIPER_TRANSFORM_TO_OBJECT,
         )
 
         self._pybullet_sim.base_link_to_held_obj = multiply_poses(
             target_end_effector_pose.invert(),
-            target_grap_pose_world,
+            target_grasp_pose_world,
         )
 
         target_joints = inverse_kinematics(
@@ -2273,7 +2270,7 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
             self._pybullet_sim.robot,
             target_joints,
             self.home_joints.tolist(),
-            collision_bodies=self._pybullet_sim.get_collision_bodies(),  # pylint: disable=protected-access
+            collision_bodies=self._pybullet_sim.get_collision_bodies(),
             base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,  # pylint: disable=protected-access
             seed=0,  # use a constant seed to make this effectively deterministic
             physics_client_id=self._pybullet_sim.physics_client_id,
@@ -2349,7 +2346,7 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
             gripper_pose = self._get_current_robot_gripper_pose()
             next_conf = self._current_arm_joint_plan[0]
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
+            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore # pylint: disable=line-too-long
             free_joints_infos = [
                 joint_info for joint_info in joint_infos if joint_info.qIndex > -1
             ]
@@ -2383,7 +2380,7 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
             gripper_pose = self._get_current_robot_gripper_pose()
             next_conf = self._current_retract_plan[0]  # type: ignore
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
+            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore # pylint: disable=line-too-long
             free_joints_infos = [
                 joint_info for joint_info in joint_infos if joint_info.qIndex > -1
             ]
@@ -2431,7 +2428,6 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
         x = self._last_state
         assert x is not None
         robot_obj = self.objects[0]  # Robot is first parameter
-        # return x.get(robot_obj, "pos_gripper")
         if x.get(robot_obj, "pos_gripper") > 0.2:
             return GRASP_CLOSE_THRESHOLD
         return 0.0
@@ -2697,7 +2693,7 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             gripper_pose = self._get_current_robot_gripper_pose()
             next_conf = self._current_arm_joint_plan[0]
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
+            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore # pylint: disable=line-too-long
             free_joints_infos = [
                 joint_info for joint_info in joint_infos if joint_info.qIndex > -1
             ]
@@ -2720,7 +2716,7 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             gripper_pose = self._get_current_robot_gripper_pose()
             next_conf = self._current_retract_plan[0]  # type: ignore
             action = np.zeros(11, dtype=np.float32)
-            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore  # pylint: disable=protected-access
+            joint_infos = self._pybullet_sim.robot.get_arm_joint_infos()[:7]  # type: ignore # pylint: disable=line-too-long
             free_joints_infos = [
                 joint_info for joint_info in joint_infos if joint_info.qIndex > -1
             ]
@@ -2768,7 +2764,6 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         x = self._last_state
         assert x is not None
         robot_obj = self.objects[0]  # Robot is first parameter
-        # return x.get(robot_obj, "pos_gripper")
         if x.get(robot_obj, "pos_gripper") > 0.2:
             return GRASP_CLOSE_THRESHOLD
         return 0.0
