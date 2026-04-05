@@ -22,8 +22,7 @@ video_folder: ${hydra:runtime.output_dir}/videos
 
 # Predictive sampling hyperparameters.
 horizon: 100
-num_rollouts: 50
+num_rollouts: 10
 noise_fraction: 1.0  # noise std = noise_fraction * action_range, per dimension
 num_control_points: 10
 warm_start: true
-replan_interval: 1

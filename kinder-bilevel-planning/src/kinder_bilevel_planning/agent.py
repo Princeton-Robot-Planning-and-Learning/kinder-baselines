@@ -100,7 +100,8 @@ class BilevelPlanningAgent(Agent[_O, _U]):
 
         # Create the abstract successor function (not really used).
         abstract_successor_fn = RelationalAbstractSuccessorGenerator(
-            self._env_models.operators
+            self._env_models.operators,
+            precomputed_ground_operators=self._env_models.ground_operators,
         )
 
         # Finish the planner.
