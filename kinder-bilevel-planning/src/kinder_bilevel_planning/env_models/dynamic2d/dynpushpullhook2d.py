@@ -183,9 +183,8 @@ def create_bilevel_planning_models(
     # operator, but the ground controller only uses the robot.  Create a
     # lifted wrapper with the wider variable list.
     class _HookDownControllerWrapper(GroundHookDownController):
-        """
-        Lifted wrapper for the ground HookDown controller.
-        """
+        """Lifted wrapper for the ground HookDown controller."""
+
         def __init__(self, objects: Sequence[Object]) -> None:
             # Pass all objects so self.objects matches the operator parameters.
             # Only objects[0] (the robot) is used by the controller.
