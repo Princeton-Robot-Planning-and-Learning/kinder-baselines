@@ -1126,6 +1126,7 @@ def test_pick_ground_toss():
     else:
         assert False, "Controller did not terminate"
 
+<<<<<<< HEAD:kinder-models/tests/dynamic3d/tossing/test_tossing_parameterized_skills.py
     # Create the move-base controller.
     controllers = create_lifted_controllers(env.action_space)
     lifted_controller = controllers["move_to_target"]
@@ -1210,4 +1211,6 @@ def test_pick_ground_toss():
     print("robot base position", robot_base_position)
     print("distance", distance)
 
+=======
+>>>>>>> c82e8c50ca20c0bed3d345b860a1a32e92c017a8:kinder-models/tests/dynamic3d/ground/test_parameterized_skills.py
     env.close()
