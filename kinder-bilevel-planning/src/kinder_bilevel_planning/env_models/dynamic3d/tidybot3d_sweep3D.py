@@ -33,8 +33,10 @@ from kinder_models.dynamic3d.sweep3D.state_abstractions import (
 from kinder_models.dynamic3d.utils import PyBulletSim
 from numpy.typing import NDArray
 from relational_structs import (
+    GroundOperator,
     LiftedAtom,
     LiftedOperator,
+    Object,
     ObjectCentricState,
     Variable,
 )
@@ -233,6 +235,12 @@ def create_bilevel_planning_models(
         LiftedSkill(SweepOperator, LiftedSweepController),
     }
 
+    # Pre-compute ground operators with the known object bindings to avoid
+    # combinatorial explosion from exhaustive grounding.
+    ground_operators = _create_ground_operators(
+        initial_state, [OpenDrawerOperator, PickWiperOperator, SweepOperator]
+    )
+
     # Finalize the models.
     return SesameModels(
         observation_space,
@@ -245,4 +253,33 @@ def create_bilevel_planning_models(
         state_abstractor,
         goal_deriver,
         skills,
+        ground_operators=ground_operators,
     )
+
+
+def _create_ground_operators(
+    initial_state: ObjectCentricState,
+    operators: list[LiftedOperator],
+) -> set[GroundOperator]:
+    """Ground operators using known object bindings for this environment."""
+    name_to_obj: dict[str, Object] = {
+        obj.name: obj for obj in initial_state
+    }
+    param_to_object_name = {
+        "?robot": "robot",
+        "?drawer": "kitchen_island_drawer_s1c1",
+        "?wiper": "wiper_0",
+        "?cube0": "cube_0",
+        "?cube1": "cube_1",
+        "?cube2": "cube_2",
+        "?cube3": "cube_3",
+        "?cube4": "cube_4",
+    }
+    ground_ops: set[GroundOperator] = set()
+    for operator in operators:
+        objects = tuple(
+            name_to_obj[param_to_object_name[param.name]]
+            for param in operator.parameters
+        )
+        ground_ops.add(operator.ground(objects))
+    return ground_ops

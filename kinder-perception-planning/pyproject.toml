@@ -21,7 +21,7 @@ dependencies = [
    "relational_structs>=0.0.1",
    "tomsgeoms2d>=0.0.1",
    "pybullet_helpers>=0.0.1",
-   "bilevel_planning>=0.1.1",
+   "bilevel_planning>=0.1.2",
    "prpl_llm_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git#subdirectory=prpl-llm-utils",
 ]
 

@@ -95,6 +95,7 @@ class BilevelPlanningAgent(Agent[_O, _U]):
                 self._env_models.operators,
                 self._heuristic_name,
                 seed=self._seed,
+                precomputed_ground_operators=self._env_models.ground_operators,
             )
         )
 
