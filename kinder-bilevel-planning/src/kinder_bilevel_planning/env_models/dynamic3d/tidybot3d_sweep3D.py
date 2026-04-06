@@ -262,9 +262,7 @@ def _create_ground_operators(
     operators: list[LiftedOperator],
 ) -> set[GroundOperator]:
     """Ground operators using known object bindings for this environment."""
-    name_to_obj: dict[str, Object] = {
-        obj.name: obj for obj in initial_state
-    }
+    name_to_obj: dict[str, Object] = {obj.name: obj for obj in initial_state}
     param_to_object_name = {
         "?robot": "robot",
         "?drawer": "kitchen_island_drawer_s1c1",
