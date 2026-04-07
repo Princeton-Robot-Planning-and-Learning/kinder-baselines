@@ -653,7 +653,7 @@ class CloseGripperController(GroundParameterizedController[ObjectCentricState, A
     def observe(self, x: ObjectCentricState) -> None:
         self._last_state = x
 
-    def _get_current_gripper_pose(self) -> SE2:
+    def _get_current_gripper_pose(self) -> float:
         assert self._last_state is not None
         state = self._last_state
         robot = self.objects[0]
@@ -699,7 +699,7 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
     def observe(self, x: ObjectCentricState) -> None:
         self._last_state = x
 
-    def _get_current_gripper_pose(self) -> SE2:
+    def _get_current_gripper_pose(self) -> float:
         assert self._last_state is not None
         state = self._last_state
         robot = self.objects[0]
