@@ -84,7 +84,7 @@ def sanitize_env_id(env_id: str) -> str:
     Returns:
         Sanitized environment ID.
     """
-    # Fix double -v0 suffix (e.g., "kinder/Shelf3D-o1-v0")
+    # Fix double -v0 suffix (e.g., "kinder/Shelf3D-o1-v0-v0")
     if env_id.endswith("-v0-v0"):
         env_id = env_id[:-3]  # Remove trailing "-v0"
     return env_id
