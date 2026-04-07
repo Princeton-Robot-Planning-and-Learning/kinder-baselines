@@ -661,8 +661,9 @@ class CloseGripperController(GroundParameterizedController[ObjectCentricState, A
 
     def _robot_gripper_is_closed(self, atol: float = GRIPPER_CLOSED_THRESHOLD) -> bool:
         current_gripper_pose = self._get_current_gripper_pose()
-        return current_gripper_pose > 0.2 and np.isclose(
-            current_gripper_pose, self.last_gripper_state, atol=atol
+        return bool(
+            current_gripper_pose > 0.2
+            and np.isclose(current_gripper_pose, self.last_gripper_state, atol=atol)
         )
 
 
