@@ -77,6 +77,7 @@ def _main(cfg: DictConfig) -> None:
         max_planning_horizon=cfg.max_eval_steps,
         seed=cfg.seed,
         rgb_observation=cfg.get("rgb_observation", False),
+        prompt_type=cfg.get("prompt_type", "basic"),
     )
 
     # Evaluate.
@@ -148,6 +149,7 @@ def _run_single_episode_evaluation(
         env.metadata["description"] is not None
     ), "Environment must have a description."
     info.update({"description": env.metadata["description"]})
+    info.update({"in_context_examples": env.metadata.get("in_context_examples", "")})
     planning_time = 0.0  # time spent generating plans (VLM queries)
     execution_time = 0.0  # time spent executing the policy (getting actions)
     planning_failed = False

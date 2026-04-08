@@ -47,6 +47,7 @@ class VLMPlanningAgent(Agent[_O, _U]):
         max_planning_horizon: int = 50,
         seed: int = 0,
         rgb_observation: bool = True,
+        prompt_type: str = "basic",
     ) -> None:
         """Initialize the VLM planning agent.
 
@@ -58,6 +59,7 @@ class VLMPlanningAgent(Agent[_O, _U]):
             seed: Random seed
             env_models: Optional environment models from kinder_models
             rgb_observation: Whether to use image observations
+            prompt_type: Type of prompt to use ("basic" or "llmplanner")
         """
         super().__init__(seed)
 
@@ -69,6 +71,7 @@ class VLMPlanningAgent(Agent[_O, _U]):
         self._max_planning_horizon = max_planning_horizon
         self._controllers = env_controllers
         self._rgb_observation = rgb_observation
+        self._prompt_type = prompt_type
 
         # Current plan state
         self._current_policy: Optional[Callable[[_O], _U]] = None
@@ -88,11 +91,16 @@ class VLMPlanningAgent(Agent[_O, _U]):
         """Load the base planning prompt from file."""
         # Get the path to the prompt file
         current_dir = Path(__file__).parent
-        prompt_file = (
-            "vlm_planning_prompt.txt"
-            if self._rgb_observation
-            else "llm_planning_prompt.txt"
-        )
+        if self._prompt_type == "basic":
+            prompt_file = (
+                "vlm_planning_prompt.txt"
+                if self._rgb_observation
+                else "llm_planning_prompt.txt"
+            )
+        elif self._prompt_type == "llmplanner":
+            prompt_file = "llmplanner_planning_prompt.txt"
+        else:
+            raise ValueError(f"Unknown prompt_type: {self._prompt_type}")
         prompt_path = current_dir / "prompts" / prompt_file
 
         with open(prompt_path, "r", encoding="utf-8") as f:
@@ -190,12 +198,13 @@ class VLMPlanningAgent(Agent[_O, _U]):
         controller_str = self._get_controllers_str()
         goal_str = self._get_goal_str(info)
 
-        prompt = self._base_prompt.format(
+        prompt = self._populate_prompt(
             controllers=controller_str,
             typed_objects=set(state.data),
             type_hierarchy=self.create_types_str(set(state.type_features)),
             init_state_str=state.pretty_str(),
             goal_str=goal_str,
+            in_context_examples=info.get("in_context_examples", ""),
         )
 
         # Query VLM
@@ -277,6 +286,29 @@ class VLMPlanningAgent(Agent[_O, _U]):
         goal_description = info.get("description")
         assert isinstance(goal_description, str)
         return goal_description
+
+    def _populate_prompt(self, **kwargs) -> str:
+        """Populate the base prompt with the given arguments.
+
+        Args:
+            **kwargs: Keyword arguments to format the prompt with.
+                For llmplanner type, expects: controllers, typed_objects,
+                type_hierarchy, init_state_str, goal_str, in_context_examples.
+                For basic type, expects: controllers, typed_objects,
+                type_hierarchy, init_state_str, goal_str.
+
+        Returns:
+            The formatted prompt string.
+        """
+        if self._prompt_type == "llmplanner":
+            # Include all arguments including in_context_examples
+            return self._base_prompt.format(**kwargs)
+        elif self._prompt_type == "basic":
+            # Exclude in_context_examples for basic prompt
+            prompt_kwargs = {k: v for k, v in kwargs.items() if k != "in_context_examples"}
+            return self._base_prompt.format(**prompt_kwargs)
+        else:
+            raise ValueError(f"Unknown prompt_type: {self._prompt_type}")
 
     def create_types_str(self, types: Collection[Type]) -> str:
         """Create a PDDL-style types string that handles hierarchy correctly."""
