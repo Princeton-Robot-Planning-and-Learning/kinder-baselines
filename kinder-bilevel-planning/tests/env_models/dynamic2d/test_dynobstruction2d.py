@@ -211,7 +211,7 @@ def test_dynobstruction2d_skills():
 
     # Test placing the target block on the target surface.
     place_target = PlaceOnTarget.ground((robot, target_block, target_surface))
-    obs2 = _skill_test_helper(place_target, env_models, env, obs1, params=0.25)
+    obs2 = _skill_test_helper(place_target, env_models, env, obs1, params=(0.25,))
     state2 = env_models.observation_to_state(obs2)
     abstract_state2 = env_models.state_abstractor(state2)
     assert predicate_name_to_pred["OnTarget"]([target_block]) in abstract_state2.atoms

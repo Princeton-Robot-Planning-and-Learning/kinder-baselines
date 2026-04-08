@@ -291,9 +291,9 @@ class GroundPlaceTgtSurfaceController(Dynamic2dRobotController):
 
     def sample_parameters(
         self, x: ObjectCentricState, rng: np.random.Generator
-    ) -> float:
+    ) -> tuple[float]:
         # Always return 0.25
-        return 0.25
+        return (0.25,)
 
     def _get_gripper_actions(self, state: ObjectCentricState) -> tuple[float, float]:
         """Get gripper actions for move-to: keep current gap during movement,
@@ -326,7 +326,11 @@ class GroundPlaceTgtSurfaceController(Dynamic2dRobotController):
         )
 
         # Calculate target position from parameters
-        params = cast(float, self._current_params[0])
+        # Handle both tuple and float params (for compatibility with saved demos)
+        if isinstance(self._current_params, (tuple, list)):
+            params = cast(float, self._current_params[0])
+        else:
+            params = cast(float, self._current_params)
         target_theta = wrap_angle(params * 2 * np.pi - np.pi)
         tgt_pose_center = SE2Pose(
             target_region_pose.x - tgt_width / 2,
