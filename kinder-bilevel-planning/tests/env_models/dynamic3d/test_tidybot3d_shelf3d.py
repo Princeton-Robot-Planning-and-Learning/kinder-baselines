@@ -1,7 +1,6 @@
 """Tests for tidybot3d_shelf3D.py."""
 
 import kinder
-import numpy as np
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 
@@ -22,8 +21,6 @@ def test_tidybot3d_cupboard_bilevel_planning():
 
     seed = 123
     obs, info = env.reset(seed=seed)
-    for _ in range(5):
-        obs, _, _, _, _ = env.step(np.zeros(11))
     total_reward = 0
     state = env.observation_space.devectorize(obs)
 

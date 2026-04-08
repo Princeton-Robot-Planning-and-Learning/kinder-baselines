@@ -38,8 +38,6 @@ def test_open_drawer():
 
     # Reset the environment and get the initial state.
     obs, _ = env.reset(seed=123)
-    for _ in range(5):
-        obs, _, _, _, _ = env.step(np.zeros(11))
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
 
@@ -93,8 +91,6 @@ def test_pick_wiper():
 
     # Reset the environment and get the initial state.
     obs, _ = env.reset(seed=123)
-    for _ in range(5):
-        obs, _, _, _, _ = env.step(np.zeros(11))
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
 
@@ -148,8 +144,6 @@ def test_open_drawer_pick_sweep_wiper():
 
     # Reset the environment and get the initial state.
     obs, _ = env.reset(seed=123)
-    for _ in range(5):
-        obs, _, _, _, _ = env.step(np.zeros(11))
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
 

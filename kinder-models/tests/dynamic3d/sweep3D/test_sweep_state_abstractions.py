@@ -53,8 +53,6 @@ def test_sweep3D_state_abstraction():
     # Check state abstraction in the initial state. The robot's hand should be empty
     # and the object should be on the ground.
     obs, _ = env.reset(seed=123)
-    for _ in range(5):
-        obs, _, _, _, _ = env.step(np.zeros(11))
     state = env.observation_space.devectorize(obs)
     assert isinstance(state, ObjectCentricState)
     abstract_state = abstractor.state_abstractor(state)

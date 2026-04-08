@@ -97,8 +97,6 @@ def collect_data(
 
     # Reset the environment and get the initial state.
     obs, _ = env.reset(seed=seed)  # type: ignore
-    for _ in range(5):
-        obs, _, _, _, _ = env.step(np.zeros(11))
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
 

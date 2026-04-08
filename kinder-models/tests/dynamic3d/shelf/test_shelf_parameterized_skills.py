@@ -86,8 +86,6 @@ def test_pick_place_skill():
 
     # Reset the environment and get the initial state.
     obs, _ = env.reset(seed=123)
-    for _ in range(5):
-        obs, _, _, _, _ = env.step(np.zeros(11))
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
 
@@ -157,8 +155,6 @@ def test_pick_place_two_cubes_skill():
 
     # Reset the environment and get the initial state.
     obs, _ = env.reset(seed=123)
-    for _ in range(5):
-        obs, _, _, _, _ = env.step(np.zeros(11))
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
 
