@@ -53,11 +53,6 @@ def create_bilevel_planning_models(
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, TidyBot3DRobotActionSpace)
 
-    # env = kinder.make(
-    #     f"kinder/SweepIntoDrawer3D-o{num_objects}-v0", render_mode="rgb_array"
-    # )
-    # sim = env.unwrapped._object_centric_env # pylint: disable=protected-access
-
     task_config_path = str(
         Path(kinder.__file__).parent
         / "envs/dynamic3d/tasks/SweepIntoDrawer3D"
@@ -100,7 +95,7 @@ def create_bilevel_planning_models(
         MujocoDrawerObjectType,
         MujocoFixtureObjectType,
         MujocoMovableObjectType,
-    }  # pylint: disable=line-too-long
+    }
 
     # Create the state space.
     state_space = ObjectCentricStateSpace(types)
