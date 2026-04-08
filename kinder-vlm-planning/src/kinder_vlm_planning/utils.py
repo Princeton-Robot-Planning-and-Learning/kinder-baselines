@@ -275,7 +275,16 @@ def option_policy_to_policy(
                 raise Exception("Exceeded max controller steps.")
 
             # Get new controller from the option policy
+            _pybullet_sim = None
+            if cur_option is not None:
+                if hasattr(cur_option, "_pybullet_sim") and cur_option._pybullet_sim is not None:
+                    _pybullet_sim = cur_option._pybullet_sim  # pylint: disable=protected-access
+
             cur_option, params = option_policy(obs)
+
+            if _pybullet_sim is not None and hasattr(cur_option, "_pybullet_sim"):
+                cur_option._pybullet_sim = _pybullet_sim  # pylint: disable=protected-access
+
             logging.info(
                 f"[POLICY DEBUG] Received controller: {cur_option} with params {params}"
             )
