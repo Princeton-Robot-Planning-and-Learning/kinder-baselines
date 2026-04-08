@@ -24,14 +24,12 @@ def test_tidybot3d_sweep_bilevel_planning():
     seed = 123
     obs, info = env.reset(seed=seed)
     total_reward = 0
-    state = env.observation_space.devectorize(obs)
 
     env_models = create_bilevel_planning_models(
         "tidybot3d_sweep3D",
         env.observation_space,
         env.action_space,
         num_objects=num_objects,
-        initial_state=state,
     )
     agent = BilevelPlanningAgent(
         env_models,

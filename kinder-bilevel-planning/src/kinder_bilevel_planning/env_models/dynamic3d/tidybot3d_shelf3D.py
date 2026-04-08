@@ -39,7 +39,6 @@ def create_bilevel_planning_models(
     observation_space: Space,
     action_space: Space,
     num_objects: int = 1,
-    initial_state: ObjectCentricState | None = None,
 ) -> SesameModels:
     """Create the env models for TidyBot base motion."""
     assert isinstance(observation_space, ObjectCentricBoxSpace)
@@ -57,7 +56,7 @@ def create_bilevel_planning_models(
     goal_deriver = abstractor.goal_deriver_place_cupboard
 
     # Need to call reset to initialize the qpos, qvel.
-    sim.reset()
+    initial_state, _ = sim.reset()
 
     # Convert observations into states. The important thing is that states are hashable.
     def observation_to_state(o: NDArray[np.float32]) -> ObjectCentricState:
