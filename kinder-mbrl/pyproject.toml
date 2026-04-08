@@ -3,22 +3,18 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "kinder_vlm_planning"
+name = "kinder_mbrl"
 version = "0.1.0"
-description = "VLM planning baselines for kinder."
+description = "Model-based RL baselines for KinDER."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-   "matplotlib",
-   "numpy",
-   "pandas",
-   "pandas-stubs",
-   "hydra-core",
-   "hydra-joblib-launcher",
-   "omegaconf",
-   "kindergarden>=0.0.8",
-   "prpl_llm_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git#subdirectory=prpl-llm-utils",
-   "bilevel_planning>=0.1.1",
+    "torch>=2.0.0",
+    "numpy",
+    "h5py",
+    "gymnasium",
+    "pillow",
+    "kindergarden>=0.0.8",
 ]
 
 [project.optional-dependencies]
@@ -36,17 +32,17 @@ develop = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-kinder_vlm_planning = ["py.typed"]
+kinder_mbrl = ["py.typed"]
 
 [tool.black]
 line-length = 88
-target-version = ["py311"]
+target-version = ["py310"]
 
 [tool.isort]
-py_version = 311
+py_version = 310
 profile = "black"
 multi_line_output = 2
-skip_glob = ["venv/*", ".venv/*"]
+skip_glob = ["venv/*", ".venv/*", "third-party/*"]
 split_on_trailing_comma = true
 
 [tool.docformatter]
@@ -58,10 +54,19 @@ wrap-descriptions = 88
 strict_equality = true
 disallow_untyped_calls = true
 warn_unreachable = true
-exclude = ["venv/*", ".venv/*"]
+exclude = ["venv/*", ".venv/*", "third-party/*"]
 
 [[tool.mypy.overrides]]
 module = [
-    "matplotlib.*",
+    "h5py.*",
+    "torch.*",
+    "gymnasium.*",
+    "kinder.*",
+    "kinder_mbrl.*",
+    "PIL.*",
 ]
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--ignore=third-party"]

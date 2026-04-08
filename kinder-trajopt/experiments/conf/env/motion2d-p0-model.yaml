@@ -1,0 +1,8 @@
+env_id: "kinder/Motion2D-p0-v0"
+max_eval_steps: 200
+replan_interval: 3
+
+use_checkpoint: True
+checkpoint: "../kinder-mbrl/output/wm_motion2d_p0_ep1000_20260324_140122.pt"
+
+preserved_indices: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
