@@ -18,10 +18,11 @@ from relational_structs import (
     Predicate,
 )
 
-from kinder_models.dynamic3d.ground.parameterized_skills import PyBulletSim
+from kinder_models.dynamic3d.shelf.parameterized_skills import PyBulletSim
 
 # Predicates.
 DrawerOpen = Predicate("DrawerOpen", [MujocoDrawerObjectType])
+DrawerClosed = Predicate("DrawerClosed", [MujocoDrawerObjectType])
 InDrawer = Predicate("InDrawer", [MujocoMovableObjectType, MujocoDrawerObjectType])
 OnTable = Predicate("OnTable", [MujocoMovableObjectType])
 Holding = Predicate("Holding", [MujocoTidyBotRobotObjectType, MujocoMovableObjectType])
@@ -69,9 +70,12 @@ class Sweep3DStateAbstractor:
         # drawer open
         open_drawer = None
         for drawer in drawers:
-            if state.get(drawer, "pos") > 0.04:
-                atoms.add(GroundAtom(DrawerOpen, [drawer]))
-                open_drawer = drawer
+            if drawer.name == "kitchen_island_drawer_s1c1":
+                if state.get(drawer, "pos") > 0.04:
+                    atoms.add(GroundAtom(DrawerOpen, [drawer]))
+                    open_drawer = drawer
+                else:
+                    atoms.add(GroundAtom(DrawerClosed, [drawer]))
         # OnTable.
         GraspThreshold = 0.1
         for target in movables:
@@ -109,13 +113,20 @@ class Sweep3DStateAbstractor:
     def goal_deriver(self, state: ObjectCentricState) -> RelationalAbstractGoal:
         """The goal is to sweep the target into the drawer."""
         wiper = state.get_object_from_name("wiper_0")
-        cubes = state.get_objects(MujocoMovableObjectType)
+        cube0 = state.get_object_from_name("cube_0")
+        cube1 = state.get_object_from_name("cube_1")
+        cube2 = state.get_object_from_name("cube_2")
+        cube3 = state.get_object_from_name("cube_3")
+        cube4 = state.get_object_from_name("cube_4")
         drawer = state.get_object_from_name("kitchen_island_drawer_s1c1")
         robot = state.get_object_from_name(self._robot_name)
         atoms = {
             GroundAtom(Holding, [robot, wiper]),
             GroundAtom(DrawerOpen, [drawer]),
+            GroundAtom(InDrawer, [cube0, drawer]),
+            GroundAtom(InDrawer, [cube1, drawer]),
+            GroundAtom(InDrawer, [cube2, drawer]),
+            GroundAtom(InDrawer, [cube3, drawer]),
+            GroundAtom(InDrawer, [cube4, drawer]),
         }
-        for cube in cubes:
-            atoms.add(GroundAtom(InDrawer, [cube, drawer]))
         return RelationalAbstractGoal(atoms, self.state_abstractor)
