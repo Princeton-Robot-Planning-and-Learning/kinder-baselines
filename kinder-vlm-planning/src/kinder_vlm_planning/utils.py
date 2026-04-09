@@ -277,8 +277,12 @@ def option_policy_to_policy(
             # Get new controller from the option policy
             _pybullet_sim = None
             if cur_option is not None:
-                if hasattr(cur_option, "_pybullet_sim") and cur_option._pybullet_sim is not None:
-                    _pybullet_sim = cur_option._pybullet_sim  # pylint: disable=protected-access
+                # pylint: disable=protected-access
+                if (
+                    hasattr(cur_option, "_pybullet_sim")
+                    and cur_option._pybullet_sim is not None
+                ):
+                    _pybullet_sim = cur_option._pybullet_sim
 
             cur_option, params = option_policy(obs)
 

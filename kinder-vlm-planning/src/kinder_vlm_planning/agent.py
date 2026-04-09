@@ -303,12 +303,13 @@ class VLMPlanningAgent(Agent[_O, _U]):
         if self._prompt_type == "llmplanner":
             # Include all arguments including in_context_examples
             return self._base_prompt.format(**kwargs)
-        elif self._prompt_type == "basic":
+        if self._prompt_type == "basic":
             # Exclude in_context_examples for basic prompt
-            prompt_kwargs = {k: v for k, v in kwargs.items() if k != "in_context_examples"}
+            prompt_kwargs = {
+                k: v for k, v in kwargs.items() if k != "in_context_examples"
+            }
             return self._base_prompt.format(**prompt_kwargs)
-        else:
-            raise ValueError(f"Unknown prompt_type: {self._prompt_type}")
+        raise ValueError(f"Unknown prompt_type: {self._prompt_type}")
 
     def create_types_str(self, types: Collection[Type]) -> str:
         """Create a PDDL-style types string that handles hierarchy correctly."""
