@@ -417,7 +417,11 @@ class GroundMoveController(Dynamic2dRobotController):
         robot_theta = wrap_angle(state.get(self._robot, "theta"))
         robot_arm_joint = state.get(self._robot, "arm_joint")
         # Calculate place position
-        params = cast(float, self._current_params[0])
+        # Handle both tuple and float params (for compatibility)
+        if isinstance(self._current_params, (tuple, list)):
+            params = cast(float, self._current_params[0])
+        else:
+            params = cast(float, self._current_params)
         final_robot_x = (
             self.world_x_min + (self.world_x_max - self.world_x_min) * params
         )

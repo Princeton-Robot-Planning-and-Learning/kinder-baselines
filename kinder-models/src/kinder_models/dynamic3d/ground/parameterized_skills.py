@@ -64,6 +64,35 @@ from kinder_models.dynamic3d.utils import (
     run_base_motion_planning,
 )
 
+
+def get_jointwise_difference(
+    joint_infos: list,
+    target_conf: np.ndarray,
+    current_conf: np.ndarray,
+) -> np.ndarray:
+    """Compute the wrapped difference between target and current joint configurations.
+    
+    For revolute joints, this unwraps the angle difference to avoid large jumps.
+    
+    Args:
+        joint_infos: List of joint information (not currently used but kept for compatibility).
+        target_conf: Target joint configuration.
+        current_conf: Current joint configuration.
+        
+    Returns:
+        Array of joint differences with angles properly wrapped.
+    """
+    del joint_infos  # Not used, kept for compatibility with existing calls
+    # Convert to numpy arrays if needed
+    target = np.asarray(target_conf)
+    current = np.asarray(current_conf)
+    # Unwrap joint angles to avoid large jumps (same as arm_controller.py)
+    diff = target - current
+    # Wrap to [-pi, pi] range
+    diff = np.mod(diff + np.pi, 2 * np.pi) - np.pi
+    return diff
+
+
 # Constants.
 _CONTROL_DT = 0.1  # Control period in seconds (10 Hz).
 _ARM_MAX_VEL = np.deg2rad(np.array([80.0, 80.0, 80.0, 80.0, 70.0, 70.0, 70.0]))

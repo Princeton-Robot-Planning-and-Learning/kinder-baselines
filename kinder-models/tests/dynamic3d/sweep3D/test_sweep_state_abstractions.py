@@ -86,12 +86,11 @@ def test_sweep3D_state_abstraction():
     cube4 = state.get_object_from_name("cube_4")
     object_parameters = (robot, wiper, drawer, cube0, cube1, cube2, cube3, cube4)
     controller = lifted_controller.ground(object_parameters)
-    params = controller.sample_parameters(state, np.random.default_rng(123))
-    # params = np.array([0.7, -np.pi])
+    params = np.array([0.7, -np.pi])
 
     # Reset and execute the controller until it terminates.
     controller.reset(state, params)
-    for _ in range(300):
+    for _ in range(500):
         action = controller.step()
         obs, _, _, _, _ = env.step(action)
         next_state = env.observation_space.devectorize(obs)
@@ -128,12 +127,11 @@ def test_sweep3D_state_abstraction():
     cube4 = state.get_object_from_name("cube_4")
     object_parameters = (robot, wiper, drawer, cube0, cube1, cube2, cube3, cube4)
     controller = lifted_controller.ground(object_parameters)
-    params = controller.sample_parameters(state, np.random.default_rng(123))
-    # params = np.array([0.7, -np.pi])
+    params = np.array([0.7, -np.pi])
 
     # Reset and execute the controller until it terminates.
     controller.reset(state, params)
-    for _ in range(300):
+    for _ in range(500):
         action = controller.step()
         obs, _, _, _, _ = env.step(action)
         next_state = env.observation_space.devectorize(obs)
@@ -168,12 +166,11 @@ def test_sweep3D_state_abstraction():
     cube4 = state.get_object_from_name("cube_4")
     object_parameters = (robot, wiper, drawer, cube0, cube1, cube2, cube3, cube4)
     controller = lifted_controller.ground(object_parameters)
-    params = controller.sample_parameters(state, np.random.default_rng(123))
-    # params = np.array([0.55, -np.pi])
+    params = np.array([0.55, -np.pi])
 
     # Reset and execute the controller until it terminates.
     controller.reset(state, params)
-    for _ in range(200):
+    for _ in range(500):
         action = controller.step()
         obs, _, _, _, _ = env.step(action)
         next_state = env.observation_space.devectorize(obs)
