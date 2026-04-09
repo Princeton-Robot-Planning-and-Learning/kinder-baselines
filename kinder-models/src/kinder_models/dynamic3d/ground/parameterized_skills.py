@@ -57,18 +57,15 @@ from kinder_models.dynamic3d.utils import (
     WORLD_X_BOUNDS,
     WORLD_Y_BOUNDS,
     PyBulletSim,
-    _compute_per_joint_profile,
-    _trapezoidal_motion_profile,
     get_overhead_object_se2_pose,
-    get_target_robot_pose_from_parameters,
     run_base_motion_planning,
 )
 
 
 def get_jointwise_difference(
     joint_infos: list,
-    target_conf: np.ndarray,
-    current_conf: np.ndarray,
+    target_conf: np.ndarray | list[float],
+    current_conf: np.ndarray | list[float],
 ) -> np.ndarray:
     """Compute the wrapped difference between target and current joint configurations.
     
@@ -290,10 +287,11 @@ class MoveToTargetGroundController(
         extend_rot_magnitude: float = np.pi / 8,
         disable_collision_objects: list[str] | None = None,
     ) -> None:
+        assert not isinstance(params, float), "params must be a sequence"
         self._last_state = x
         self._current_params = params
         # Derive the target pose for the robot.
-        target_distance, target_rot = self._current_params
+        target_distance, target_rot = params
         target_object = self.objects[1]
         target_object_pose = get_overhead_object_se2_pose(x, target_object)
         target_base_pose = get_target_robot_pose_from_parameters(
@@ -404,13 +402,14 @@ class MoveArmToConfController(GroundParameterizedController[ObjectCentricState, 
         raise NotImplementedError
 
     def reset(self, x: ObjectCentricState, params: Union[tuple[float, ...], float]) -> None:
+        assert not isinstance(params, float), "params must be a sequence"
         # Initialize the PyBullet interface if this is the first time ever.
         if self._pybullet_sim is None:
             self._pybullet_sim = PyBulletSim(x)
         # Update the current state and parameters.
         self._last_state = x
         self._current_params = params
-        target_joints = list(self._current_params) + ([0.0] * 6)
+        target_joints = list(params) + ([0.0] * 6)
         # Reset PyBullet given the current state.
         self._pybullet_sim.set_state(x)
         # Run motion planning.
@@ -530,13 +529,14 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
         raise NotImplementedError
 
     def reset(self, x: ObjectCentricState, params: Union[tuple[float, ...], float]) -> None:
+        assert not isinstance(params, float), "params must be a sequence"
         # Initialize the PyBullet interface if this is the first time ever.
         if self._pybullet_sim is None:
             self._pybullet_sim = PyBulletSim(x)
         # Update the current state and parameters.
         self._last_state = x
         self._current_params = params
-        target_joints = list(self._current_params) + ([0.0] * 6)
+        target_joints = list(params) + ([0.0] * 6)
         # Reset PyBullet given the current state.
         self._pybullet_sim.set_state(x)
         # Run motion planning.
@@ -683,6 +683,7 @@ class MoveArmToEndEffectorController(
         raise NotImplementedError
 
     def reset(self, x: ObjectCentricState, params: Union[tuple[float, ...], float]) -> None:
+        assert not isinstance(params, float), "params must be a sequence"
         # Initialize the PyBullet interface if this is the first time ever.
         if self._pybullet_sim is None:
             self._pybullet_sim = PyBulletSim(x)
@@ -699,20 +700,20 @@ class MoveArmToEndEffectorController(
             current_arm_base_pose,
             Pose(
                 (
-                    self._current_params[0],
-                    self._current_params[1],
-                    self._current_params[2],
+                    params[0],
+                    params[1],
+                    params[2],
                 ),
                 (
-                    self._current_params[3],
-                    self._current_params[4],
-                    self._current_params[5],
-                    self._current_params[6],
+                    params[3],
+                    params[4],
+                    params[5],
+                    params[6],
                 ),
             ),
         )
 
-        rotation = Pose.from_rpy((0, 0, 0), (0, 0, self._current_params[7]))
+        rotation = Pose.from_rpy((0, 0, 0), (0, 0, params[7]))
         target_end_effector_pose = multiply_poses(
             target_end_effector_pose_temp,
             rotation,
@@ -973,6 +974,7 @@ class PickGroundController(GroundParameterizedController[ObjectCentricState, Arr
         extend_xy_magnitude: float = 0.025,
         extend_rot_magnitude: float = np.pi / 8,
     ) -> None:
+        assert not isinstance(params, float), "params must be a sequence"
         # Initialize the PyBullet interface if this is the first time ever.
         if self._pybullet_sim is None:
             self._pybullet_sim = PyBulletSim(x)
@@ -981,7 +983,7 @@ class PickGroundController(GroundParameterizedController[ObjectCentricState, Arr
 
         self._current_params = params
         # Derive the target pose for the robot.
-        target_distance, target_rot = self._current_params
+        target_distance, target_rot = params
         target_object = self.objects[1]
         target_object_pose = get_overhead_object_se2_pose(x, target_object)
         target_base_pose = get_target_robot_pose_from_parameters(
@@ -1320,6 +1322,7 @@ class PlaceGroundController(GroundParameterizedController[ObjectCentricState, Ar
         extend_xy_magnitude: float = 0.025,
         extend_rot_magnitude: float = np.pi / 8,
     ) -> None:
+        assert not isinstance(params, float), "params must be a sequence"
         # Initialize the PyBullet interface if this is the first time ever.
         if self._pybullet_sim is None:
             self._pybullet_sim = PyBulletSim(x)
@@ -1328,7 +1331,7 @@ class PlaceGroundController(GroundParameterizedController[ObjectCentricState, Ar
 
         self._current_params = params
         # Derive the target pose for the robot.
-        target_distance, target_offset, target_rot = self._current_params
+        target_distance, target_offset, target_rot = params
         target_object = self.objects[2]
         target_object_pose_temp = get_overhead_object_se2_pose(x, target_object)
         target_object_pose = SE2(

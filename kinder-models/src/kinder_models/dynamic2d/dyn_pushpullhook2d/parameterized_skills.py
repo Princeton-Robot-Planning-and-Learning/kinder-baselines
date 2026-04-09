@@ -107,6 +107,7 @@ class GroundGraspHookController(Dynamic2dRobotController):
         self, state: ObjectCentricState
     ) -> list[tuple[SE2Pose, float]]:
         """Generate waypoints to grasp the hook from the long-side bottom."""
+        assert not isinstance(self._current_params, float), "params must be a sequence"
         max_arm_length = state.get(self._robot, "arm_length")
         min_arm_length = (
             state.get(self._robot, "base_radius")
