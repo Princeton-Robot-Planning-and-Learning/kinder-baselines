@@ -382,7 +382,9 @@ class MoveArmToConfController(GroundParameterizedController[ObjectCentricState, 
         # want to specify the target arm conf themselves.
         raise NotImplementedError
 
-    def reset(self, x: ObjectCentricState, params: Union[tuple[float, ...], float]) -> None:
+    def reset(
+        self, x: ObjectCentricState, params: Union[tuple[float, ...], float]
+    ) -> None:
         assert not isinstance(params, float), "params must be a sequence"
         # Initialize the PyBullet interface if this is the first time ever.
         if self._pybullet_sim is None:
