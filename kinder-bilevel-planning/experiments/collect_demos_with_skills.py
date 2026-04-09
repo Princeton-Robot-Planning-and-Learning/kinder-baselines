@@ -255,7 +255,9 @@ def _main(cfg: DictConfig) -> None:
             logging.info("Saved demo to %s", path)
             successful += 1
 
-    logging.info("Done. Collected %d/%d demos in %d attempts.", successful, num_demos, attempt + 1)
+    logging.info(
+        "Done. Collected %d/%d demos in %d attempts.", successful, num_demos, attempt + 1
+    )
 
     if successful == 0:
         logging.error("No successful demos collected!")

@@ -1,5 +1,6 @@
 """Bilevel planning models for the TidyBot3D sweep3D environment."""
 
+import kinder
 import numpy as np
 from bilevel_planning.structs import (
     LiftedSkill,
@@ -14,7 +15,6 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoTidyBotRobotObjectType,
 )
 from kinder.envs.dynamic3d.robots.tidybot_robot_env import TidyBot3DRobotActionSpace
-from kinder.envs.dynamic3d.tidybot3d import ObjectCentricTidyBot3DEnv
 from kinder_models.dynamic3d.sweep3D.state_abstractions import (
     Sweep3DStateAbstractor,
     HandEmpty,
@@ -22,6 +22,7 @@ from kinder_models.dynamic3d.sweep3D.state_abstractions import (
     OnTable,
     InDrawer,
     DrawerOpen,
+    DrawerClosed,
 )
 from kinder_models.dynamic3d.sweep3D.parameterized_skills import (
     PyBulletSim,
@@ -50,7 +51,7 @@ def create_bilevel_planning_models(
     env = kinder.make(
         f"kinder/SweepIntoDrawer3D-o{num_objects}-v0", render_mode="rgb_array"
     )
-    sim = env.unwrapped._object_centric_env # pylint: disable=protected-access
+    sim = env.unwrapped._object_centric_env  # type: ignore[attr-defined]  # pylint: disable=protected-access
 
     # State and goal abstractors.
     abstractor = Sweep3DStateAbstractor(sim)
@@ -95,43 +96,63 @@ def create_bilevel_planning_models(
         OnTable,
         InDrawer,
         DrawerOpen,
+        DrawerClosed,
     }
 
-    # Open drawer controller.
+    # Open drawer operator.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
-    target = Variable("?target", MujocoMovableObjectType)
+    drawer = Variable("?drawer", MujocoDrawerObjectType)
 
     OpenDrawerOperator = LiftedOperator(
         "open_drawer",
+        [robot, drawer],
+        preconditions={
+            LiftedAtom(HandEmpty, [robot]),
+            LiftedAtom(DrawerClosed, [drawer]),
+        },
+        add_effects={LiftedAtom(DrawerOpen, [drawer])},
+        delete_effects={
+            LiftedAtom(DrawerClosed, [drawer]),
+        },
+    )
+
+    # Pick wiper controller.
+    robot = Variable("?robot", MujocoTidyBotRobotObjectType)
+    target = Variable("?target", MujocoMovableObjectType)
+
+    PickWiperOperator = LiftedOperator(
+        "pick_wiper",
         [robot, target],
         preconditions={
             LiftedAtom(HandEmpty, [robot]),
-            LiftedAtom(OnGround, [target]),
+            LiftedAtom(OnTable, [target]),
         },
         add_effects={LiftedAtom(Holding, [robot, target])},
         delete_effects={
             LiftedAtom(HandEmpty, [robot]),
-            LiftedAtom(OnGround, [target]),
+            LiftedAtom(OnTable, [target]),
         },
     )
 
-    # Place cupboard controller.
+    # Sweep controller.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
+    wiper = Variable("?wiper", MujocoMovableObjectType)
     target = Variable("?target", MujocoMovableObjectType)
-    target_place = Variable("?target_place", MujocoFixtureObjectType)
+    drawer = Variable("?drawer", MujocoDrawerObjectType)
 
-    PlaceTargetOperator = LiftedOperator(
-        "place_target",
-        [robot, target, target_place],
+    SweepOperator = LiftedOperator(
+        "sweep",
+        [robot, wiper, target, drawer],
         preconditions={
-            LiftedAtom(Holding, [robot, target]),
+            LiftedAtom(Holding, [robot, wiper]),
+            LiftedAtom(DrawerOpen, [drawer]),
+            LiftedAtom(OnTable, [target]),
         },
         add_effects={
-            LiftedAtom(HandEmpty, [robot]),
-            LiftedAtom(OnFixture, [target, target_place]),
+            LiftedAtom(InDrawer, [target, drawer]),
         },
         delete_effects={
-            LiftedAtom(Holding, [robot, target]),
+            LiftedAtom(OnTable, [target]),
         },
     )
 
@@ -143,13 +164,15 @@ def create_bilevel_planning_models(
     )
 
     # Controllers.
-    LiftedPickGroundController = controllers["pick_ground"]
-    LiftedPlaceGroundController = controllers["place_ground"]
+    LiftedOpenDrawerController = controllers["open_drawer"]
+    LiftedPickWiperController = controllers["pick_wiper"]
+    LiftedSweepController = controllers["sweep"]
 
     # Finalize the skills.
     skills = {
-        LiftedSkill(PickTargetOperator, LiftedPickGroundController),
-        LiftedSkill(PlaceTargetOperator, LiftedPlaceGroundController),
+        LiftedSkill(OpenDrawerOperator, LiftedOpenDrawerController),
+        LiftedSkill(PickWiperOperator, LiftedPickWiperController),
+        LiftedSkill(SweepOperator, LiftedSweepController),
     }
 
     # Finalize the models.

@@ -381,7 +381,7 @@ def test_motion2d_plan_and_replay_controllers():
             if ground_controller.terminated():
                 break
             action = ground_controller.step()
-            obs, _, done, _, _ = env.step(action)
+            obs, _, _, _, _ = env.step(action)
             state = env_models.observation_to_state(obs)
             ground_controller.observe(state)
 
