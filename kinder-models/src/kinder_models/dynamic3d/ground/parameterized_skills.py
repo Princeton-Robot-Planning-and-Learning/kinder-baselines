@@ -36,26 +36,6 @@ from relational_structs import (
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.utils import (
-    _ARM_MAX_ACCEL,
-    _ARM_MAX_VEL,
-    _CONTROL_DT,
-    ARM_MOVEMENT_CUPBOARD,
-    BASE_DISTANCE_TO_CUPBOARD,
-    BASE_TO_CUPBOARD_ROTATION,
-    GRASP_CLOSE_THRESHOLD,
-    GRASP_TRANSFORM_TO_OBJECT,
-    GRIPPER_CLOSED_THRESHOLD,
-    GRIPPER_OPEN_THRESHOLD,
-    MAX_SAMPLER_ATTEMPTS,
-    MOVE_TO_TARGET_DISTANCE_BOUNDS,
-    MOVE_TO_TARGET_ROT_BOUNDS,
-    PLACE_SAMPLER_COLLISION_THRESHOLD,
-    PLACE_SAMPLER_X_OFFSET_BOUNDS,
-    PLACE_SAMPLER_Y_OFFSET_BOUNDS,
-    ROBOT_ARM_POSE_TO_BASE,
-    WAYPOINT_TOL,
-    WORLD_X_BOUNDS,
-    WORLD_Y_BOUNDS,
     PyBulletSim,
     get_overhead_object_se2_pose,
     run_base_motion_planning,
@@ -72,10 +52,11 @@ def get_jointwise_difference(
     For revolute joints, this unwraps the angle difference to avoid large jumps.
     
     Args:
-        joint_infos: List of joint information (not currently used but kept for compatibility).
+        joint_infos: List of joint information (not currently used
+            but kept for compatibility).
         target_conf: Target joint configuration.
         current_conf: Current joint configuration.
-        
+
     Returns:
         Array of joint differences with angles properly wrapped.
     """

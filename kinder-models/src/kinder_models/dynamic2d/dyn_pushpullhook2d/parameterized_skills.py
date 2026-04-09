@@ -4,9 +4,6 @@ from typing import Optional, Sequence, cast
 
 import numpy as np
 from bilevel_planning.structs import LiftedParameterizedController
-from bilevel_planning.trajectory_samplers.trajectory_sampler import (
-    TrajectorySamplingFailure,
-)
 from gymnasium.spaces import Box
 from kinder.envs.dynamic2d.dyn_pushpullhook2d import (
     DynPushPullHook2DEnvConfig,
@@ -19,7 +16,6 @@ from kinder.envs.dynamic2d.utils import (
     run_motion_planning_for_kin_robot,
 )
 from kinder.envs.kinematic2d.structs import SE2Pose
-from kinder.envs.utils import state_2d_has_collision
 from numpy.typing import NDArray
 from prpl_utils.utils import get_signed_angle_distance, wrap_angle
 from relational_structs.object_centric_state import ObjectCentricState
@@ -144,10 +140,12 @@ class GroundGraspHookController(Dynamic2dRobotController):
         # moving_objects = {self._robot}
         # static_objects = set(full_state) - moving_objects
 
-        # Collision will cause the skill execution to fail, so we don't need to be extra strict 
-        # here by enforcing collision-free pre-grasp pose sampling. 
-        # The skill will just fail and we can resample parameters.
-        # if state_2d_has_collision(full_state, moving_objects, static_objects, {}):
+        # Collision will cause the skill execution to fail, so we
+        # don't need to be extra strict here by enforcing
+        # collision-free pre-grasp pose sampling. The skill will
+        # just fail and we can resample parameters.
+        # if state_2d_has_collision(full_state, moving_objects,
+        #                            static_objects, {}):
         #     raise TrajectorySamplingFailure(
         #         "Failed to find a collision-free pre-grasp pose for hook."
         #     )
