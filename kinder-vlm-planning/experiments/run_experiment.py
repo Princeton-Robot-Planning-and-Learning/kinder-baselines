@@ -21,6 +21,7 @@ Examples:
 
 import logging
 import os
+from typing import Any
 
 import hydra
 import kinder
@@ -41,7 +42,7 @@ def _main(cfg: DictConfig) -> None:
     logging.info(f"Running seed={cfg.seed}, env={cfg.env}, vlm_model={cfg.vlm_model}")
     # Create the environment.
     kinder.register_all_environments()
-    make_kwargs = {}
+    make_kwargs: dict[str, Any] = {}
     if cfg.get("rgb_observation", False):
         make_kwargs["render_mode"] = "rgb_array"
     # Enable state access for 3D environments (controllers need to call set_state)
