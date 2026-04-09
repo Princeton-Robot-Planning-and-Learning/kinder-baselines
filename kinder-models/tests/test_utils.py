@@ -1,11 +1,11 @@
 """Tests for utils.py."""
 
 import kinder
-from kinder.envs.dynamic3d.tidybot3d import (
+from kinder.envs.dynamic3d.envs import (
     MujocoTidyBotRobotObjectType,
     ObjectCentricTidyBot3DEnv,
 )
-from kinder_bilevel_planning.env_models.dynamic3d.tidybot3d_base_motion import (
+from kinder_bilevel_planning.env_models.dynamic3d.envs_base_motion import (
     create_bilevel_planning_models,
 )
 

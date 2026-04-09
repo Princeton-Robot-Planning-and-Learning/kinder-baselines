@@ -13,7 +13,7 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoTidyBotRobotObjectType,
 )
 from kinder.envs.dynamic3d.robots.tidybot_robot_env import TidyBot3DRobotActionSpace
-from kinder.envs.dynamic3d.tidybot3d import ObjectCentricTidyBot3DEnv
+from kinder.envs.dynamic3d.envs import ObjectCentricTidyBot3DEnv
 from kinder_models.dynamic3d.cupboard_real.state_abstractions import (
     CupboardRealStateAbstractor,
     HandEmpty,
