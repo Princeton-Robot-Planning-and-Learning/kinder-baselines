@@ -58,6 +58,14 @@ MOVE_TO_TARGET_ROT_BOUNDS = (-np.pi / 4, np.pi / 4)
 WORLD_X_BOUNDS = (-2.5, 2.5)
 WORLD_Y_BOUNDS = (-2.5, 2.5)
 
+# Sweep and drawer operation sampling bounds.
+OPEN_DRAWER_DISTANCE_BOUNDS = (0.4, 0.6)
+OPEN_DRAWER_ROT_BOUNDS = (-np.pi / 4, np.pi / 4)
+PICK_WIPER_DISTANCE_BOUNDS = (0.4, 0.6)
+PICK_WIPER_ROT_BOUNDS = (-np.pi / 4, np.pi / 4)
+SWEEP_DISTANCE_BOUNDS = (0.4, 1.0)
+SWEEP_ROT_BOUNDS = (-np.pi / 6, np.pi / 6)
+
 # End-effector transforms for each skill.
 GRASP_TRANSFORM_TO_OBJECT = Pose((-0.005, 0, 0.01), (0.707, 0.707, 0, 0))
 WIPER_TRANSFORM_TO_OBJECT = Pose.from_rpy(
