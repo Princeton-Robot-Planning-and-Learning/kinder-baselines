@@ -509,7 +509,9 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
         # want to specify the target arm conf themselves.
         raise NotImplementedError
 
-    def reset(self, x: ObjectCentricState, params: Union[tuple[float, ...], float]) -> None:
+    def reset(
+        self, x: ObjectCentricState, params: Union[tuple[float, ...], float]
+    ) -> None:
         assert not isinstance(params, float), "params must be a sequence"
         # Initialize the PyBullet interface if this is the first time ever.
         if self._pybullet_sim is None:
@@ -663,7 +665,9 @@ class MoveArmToEndEffectorController(
         # want to specify the target end effector pose themselves.
         raise NotImplementedError
 
-    def reset(self, x: ObjectCentricState, params: Union[tuple[float, ...], float]) -> None:
+    def reset(
+        self, x: ObjectCentricState, params: Union[tuple[float, ...], float]
+    ) -> None:
         assert not isinstance(params, float), "params must be a sequence"
         # Initialize the PyBullet interface if this is the first time ever.
         if self._pybullet_sim is None:
@@ -806,7 +810,11 @@ class CloseGripperController(GroundParameterizedController[ObjectCentricState, A
         # want to specify the target end effector pose themselves.
         raise NotImplementedError
 
-    def reset(self, x: ObjectCentricState, params: Union[tuple[float, ...], float, None] = None) -> None:
+    def reset(
+        self,
+        x: ObjectCentricState,
+        params: Union[tuple[float, ...], float, None] = None,
+    ) -> None:
         # Update the current state and parameters.
         self._last_state = x
 
@@ -852,7 +860,11 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
         # want to specify the target end effector pose themselves.
         raise NotImplementedError
 
-    def reset(self, x: ObjectCentricState, params: Union[tuple[float, ...], float, None] = None) -> None:
+    def reset(
+        self,
+        x: ObjectCentricState,
+        params: Union[tuple[float, ...], float, None] = None,
+    ) -> None:
         # Update the current state and parameters.
         self._last_state = x
 
@@ -2648,7 +2660,8 @@ def create_lifted_controllers(
     target = Variable("?target", MujocoObjectType)
 
     # Parameter space: [distance, rotation]
-    # Based on sample_parameters: distance can be 0.5, 0.85, 0.92; rotation can be 0.0, -π/2
+    # Based on sample_parameters: distance can be 0.5, 0.85, 0.92;
+    # rotation can be 0.0, -π/2
     move_to_target_params_space = Box(
         low=np.array([0.3, -np.pi], dtype=np.float32),
         high=np.array([1.5, np.pi], dtype=np.float32),
