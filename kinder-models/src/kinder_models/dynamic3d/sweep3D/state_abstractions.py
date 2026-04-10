@@ -5,13 +5,13 @@ from bilevel_planning.structs import (
     RelationalAbstractGoal,
     RelationalAbstractState,
 )
+from kinder.envs.dynamic3d.envs import ObjectCentricTidyBot3DEnv
 from kinder.envs.dynamic3d.object_types import (
     MujocoDrawerObjectType,
     MujocoFixtureObjectType,
     MujocoMovableObjectType,
     MujocoTidyBotRobotObjectType,
 )
-from kinder.envs.dynamic3d.tidybot3d import ObjectCentricTidyBot3DEnv
 from relational_structs import (
     GroundAtom,
     ObjectCentricState,

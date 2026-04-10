@@ -4,8 +4,8 @@ import kinder
 import numpy as np
 from conftest import MAKE_VIDEOS  # pylint: disable=import-error
 from gymnasium.wrappers import RecordVideo
+from kinder.envs.dynamic3d.envs import ObjectCentricTidyBot3DEnv
 from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
-from kinder.envs.dynamic3d.tidybot3d import ObjectCentricTidyBot3DEnv
 from relational_structs import ObjectCentricState
 
 from kinder_models.dynamic3d.shelf.parameterized_skills import (
