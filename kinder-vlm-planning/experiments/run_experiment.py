@@ -34,6 +34,7 @@ from prpl_utils.utils import sample_seed_from_rng, timer
 
 from kinder_vlm_planning.agent import VLMPlanningAgent, VLMPlanningAgentFailure
 from kinder_vlm_planning.env_controllers import get_controllers_for_environment
+from kinder_vlm_planning.in_context_examples_loader import get_in_context_examples
 
 
 @hydra.main(version_base=None, config_name="config", config_path="conf/")
@@ -59,6 +60,9 @@ def _main(cfg: DictConfig) -> None:
     parts = module_path.split(".")
     env_class_name = parts[-2]  # "kinematic2d"
     env_name = parts[-1]  # "motion2d"
+
+    # Load in-context examples for this environment
+    in_context_examples = get_in_context_examples(env_class_name, env_name, env)
 
     # Load environment-specific controllers if available.
     if env_name == "tidybot3d":
@@ -92,6 +96,7 @@ def _main(cfg: DictConfig) -> None:
                 env,
                 rng,
                 max_eval_steps=cfg.max_eval_steps,
+                in_context_examples=in_context_examples,
             )
             episode_metrics["eval_episode"] = eval_episode
             metrics.append(episode_metrics)
@@ -134,6 +139,7 @@ def _run_single_episode_evaluation(
     env: Env,
     rng: np.random.Generator,
     max_eval_steps: int,
+    in_context_examples: str,
 ) -> dict[str, float | bool | str]:
     steps = 0
     success = False
@@ -150,7 +156,7 @@ def _run_single_episode_evaluation(
         env.metadata["description"] is not None
     ), "Environment must have a description."
     info.update({"description": env.metadata["description"]})
-    info.update({"in_context_examples": env.metadata.get("in_context_examples", "")})
+    info.update({"in_context_examples": in_context_examples})
     planning_time = 0.0  # time spent generating plans (VLM queries)
     execution_time = 0.0  # time spent executing the policy (getting actions)
     planning_failed = False
