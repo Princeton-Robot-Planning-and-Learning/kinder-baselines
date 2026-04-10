@@ -75,20 +75,9 @@ class MoveToTargetGroundController(
         self._current_params: np.ndarray | None = None
         self._current_base_motion_plan: list[SE2] | None = None
 
-    def sample_parameters(
-        self, x: ObjectCentricState, rng: np.random.Generator, rotate: bool = False
-    ) -> Any:
-        if rotate:
-            if self.objects[2].name == "cube1":
-                distance = 0.85
-            elif self.objects[2].name == "cube2":
-                distance = 0.92
-            else:
-                raise ValueError(f"Unknown target object: {self.objects[2].name}")
-            rot = -np.pi / 2
-        else:
-            distance = 0.5  # for stable grasp
-            rot = 0.0
+    def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
+        distance = 0.5  # for stable grasp
+        rot = 0.0
         return np.array([distance, rot])
 
     def reset(
