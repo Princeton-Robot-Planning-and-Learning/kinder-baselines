@@ -1,7 +1,6 @@
 """Tests for tidybot3d_shelf3D.py."""
 
 import kinder
-import numpy as np
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 
