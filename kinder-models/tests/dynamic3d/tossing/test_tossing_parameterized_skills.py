@@ -21,7 +21,6 @@ from kinder_models.dynamic3d.tossing.parameterized_skills import (
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,
 )
-from kinder_models.dynamic3d.utils import PyBulletSim
 
 kinder.register_all_environments()
 
