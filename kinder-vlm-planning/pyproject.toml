@@ -18,7 +18,7 @@ dependencies = [
    "omegaconf",
    "kindergarden>=0.0.8",
    "prpl_llm_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git#subdirectory=prpl-llm-utils",
-   "bilevel_planning>=0.1.1",
+   "bilevel_planning>=0.1.2",
 ]
 
 [project.optional-dependencies]

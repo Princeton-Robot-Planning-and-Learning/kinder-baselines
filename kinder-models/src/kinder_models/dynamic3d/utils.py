@@ -55,16 +55,14 @@ WAYPOINT_TOL = 4 * 1e-2
 # Base navigation sampling bounds.
 MOVE_TO_TARGET_DISTANCE_BOUNDS = (0.5, 0.6)
 MOVE_TO_TARGET_ROT_BOUNDS = (-np.pi / 4, np.pi / 4)
+OPEN_DRAWER_DISTANCE_BOUNDS = (0.8, 0.8)
+OPEN_DRAWER_ROT_BOUNDS = (-np.pi, -np.pi)
+PICK_WIPER_DISTANCE_BOUNDS = (0.7, 0.7)
+PICK_WIPER_ROT_BOUNDS = (-np.pi, -np.pi)
+SWEEP_DISTANCE_BOUNDS = (0.55, 0.55)
+SWEEP_ROT_BOUNDS = (-np.pi, -np.pi)
 WORLD_X_BOUNDS = (-2.5, 2.5)
 WORLD_Y_BOUNDS = (-2.5, 2.5)
-
-# Sweep and drawer operation sampling bounds.
-OPEN_DRAWER_DISTANCE_BOUNDS = (0.4, 0.6)
-OPEN_DRAWER_ROT_BOUNDS = (-np.pi / 4, np.pi / 4)
-PICK_WIPER_DISTANCE_BOUNDS = (0.4, 0.6)
-PICK_WIPER_ROT_BOUNDS = (-np.pi / 4, np.pi / 4)
-SWEEP_DISTANCE_BOUNDS = (0.4, 1.0)
-SWEEP_ROT_BOUNDS = (-np.pi / 6, np.pi / 6)
 
 # End-effector transforms for each skill.
 GRASP_TRANSFORM_TO_OBJECT = Pose((-0.005, 0, 0.01), (0.707, 0.707, 0, 0))
@@ -81,10 +79,10 @@ WIPER_SWEEP_TRANSFORM_END_2 = Pose.from_rpy(
     (0.28, 0.15, 0.025), (-np.pi + np.pi / 16, 0, -np.pi / 2)
 )  # Pose((0.15, 0, 0.04), (-0.707, 0.707, 0, 0))
 DRAWER_TRANSFORM_TO_OBJECT = Pose.from_rpy(
-    (0.07, 0.3, -0.12), (-np.pi - np.pi / 16, 0, -np.pi / 2)
+    (0.07, 0.3, -0.12), (-np.pi - np.pi / 8, 0, -np.pi / 2)
 )
 DRAWER_TRANSFORM_TO_OBJECT_END = Pose.from_rpy(
-    (0.18, 0.3, -0.12), (-np.pi - np.pi / 16, 0, -np.pi / 2)
+    (0.18, 0.3, -0.12), (-np.pi - np.pi / 8, 0, -np.pi / 2)
 )
 
 # Cupboard-specific geometry and sampling bounds.
@@ -221,18 +219,16 @@ def run_base_motion_planning(
 
     rng = np.random.default_rng(seed)
 
-    disable_collision = True
     # Construct geoms.
     (robot,) = state.get_objects(MujocoTidyBotRobotObjectType)
     robot_width, robot_height, _ = get_bounding_box(state, robot)
     obstacles = state.get_objects(MujocoObjectType)
     if disable_collision_objects is not None:
         obstacles = [o for o in obstacles if o.name not in disable_collision_objects]
-    if disable_collision:
-        obstacle_geoms = set()
-    else:
-        geoms = get_overhead_kinematic2ds(state)
-        obstacle_geoms = {geoms[o.name] for o in obstacles}
+    obstacle_geoms: set[Geom2D] = set()
+    # uncomment to fully consider the collisions.
+    # geoms = get_overhead_kinematic2ds(state)
+    # obstacle_geoms = {geoms[o.name] for o in obstacles}
 
     # Set up the RRT methods.
     def sample_fn(_: SE2) -> SE2:
@@ -304,7 +300,8 @@ def run_base_motion_planning(
     )
 
     initial_pose = get_overhead_robot_se2_pose(state, robot)
-    return birrt.query(initial_pose, target_base_pose)
+    path = birrt.query(initial_pose, target_base_pose)
+    return path
 
 
 # Based on https://github.com/jimmyyhwu/tidybot/blob/main/robot/kinova.py#L310

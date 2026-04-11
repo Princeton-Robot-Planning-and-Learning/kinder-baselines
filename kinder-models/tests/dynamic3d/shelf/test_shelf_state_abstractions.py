@@ -4,15 +4,15 @@ import kinder
 import numpy as np
 from conftest import MAKE_VIDEOS  # pylint: disable=import-error
 from gymnasium.wrappers import RecordVideo
+from kinder.envs.dynamic3d.envs import ObjectCentricTidyBot3DEnv
 from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
-from kinder.envs.dynamic3d.tidybot3d import ObjectCentricTidyBot3DEnv
 from relational_structs import ObjectCentricState
 
-from kinder_models.dynamic3d.cupboard_real.state_abstractions import (
-    CupboardRealStateAbstractor,
-)
-from kinder_models.dynamic3d.ground.parameterized_skills import (
+from kinder_models.dynamic3d.shelf.parameterized_skills import (
     create_lifted_controllers,
+)
+from kinder_models.dynamic3d.shelf.state_abstractions import (
+    CupboardRealStateAbstractor,
 )
 from kinder_models.dynamic3d.utils import PyBulletSim
 
@@ -24,7 +24,7 @@ def _get_robot_from_state(state: ObjectCentricState):
     return list(robots)[0]
 
 
-def test_cupboard_real_state_abstraction():
+def test_shelf_state_abstraction():
     """Tests for CupboardRealStateAbstractor()."""
     kinder.register_all_environments()
     num_objects = 1
@@ -43,8 +43,6 @@ def test_cupboard_real_state_abstraction():
     # Check state abstraction in the initial state. The robot's hand should be empty
     # and the object should be on the ground.
     obs, _ = env.reset(seed=123)
-    for _ in range(5):
-        obs, _, _, _, _ = env.step(np.zeros(11))
     state = env.observation_space.devectorize(obs)
     assert isinstance(state, ObjectCentricState)
     abstract_state = abstractor.state_abstractor(state)
@@ -59,7 +57,7 @@ def test_cupboard_real_state_abstraction():
     controllers = create_lifted_controllers(env.action_space, pybullet_sim=pybullet_sim)
 
     # Pick up the cube.
-    lifted_controller = controllers["pick_ground"]
+    lifted_controller = controllers["pick_shelf"]
     robot = _get_robot_from_state(state)
     cube = state.get_object_from_name("cube1")
     object_parameters = (robot, cube)
@@ -87,7 +85,7 @@ def test_cupboard_real_state_abstraction():
     assert str(sorted(abstract_state.atoms)) == f"[(Holding {robot.name} cube1)]"
 
     # Plce the cube.
-    lifted_controller = controllers["place_ground"]
+    lifted_controller = controllers["place_shelf"]
     robot = _get_robot_from_state(state)
     cube = state.get_object_from_name("cube1")
     cupboard = state.get_object_from_name("cupboard_1")

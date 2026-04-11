@@ -126,7 +126,7 @@ def run_inference(
     # Create the environment
     render_mode = "rgb_array" if render or save else None
     env = kinder.make(
-        f"kinder/TidyBot3D-cupboard_real-o{num_cubes}-v0",
+        f"kinder/Shelf3D-o{num_cubes}-v0",
         render_mode=render_mode,
     )
 

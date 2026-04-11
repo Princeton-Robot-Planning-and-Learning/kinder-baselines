@@ -53,8 +53,6 @@ def test_sweep3D_state_abstraction():
     # Check state abstraction in the initial state. The robot's hand should be empty
     # and the object should be on the ground.
     obs, _ = env.reset(seed=123)
-    for _ in range(5):
-        obs, _, _, _, _ = env.step(np.zeros(11))
     state = env.observation_space.devectorize(obs)
     assert isinstance(state, ObjectCentricState)
     abstract_state = abstractor.state_abstractor(state)
@@ -86,11 +84,12 @@ def test_sweep3D_state_abstraction():
     cube4 = state.get_object_from_name("cube_4")
     object_parameters = (robot, wiper, drawer, cube0, cube1, cube2, cube3, cube4)
     controller = lifted_controller.ground(object_parameters)
-    params = np.array([0.7, -np.pi])
+    params = controller.sample_parameters(state, np.random.default_rng(123))
+    # params = np.array([0.7, -np.pi])
 
     # Reset and execute the controller until it terminates.
     controller.reset(state, params)
-    for _ in range(500):
+    for _ in range(300):
         action = controller.step()
         obs, _, _, _, _ = env.step(action)
         next_state = env.observation_space.devectorize(obs)
@@ -127,11 +126,12 @@ def test_sweep3D_state_abstraction():
     cube4 = state.get_object_from_name("cube_4")
     object_parameters = (robot, wiper, drawer, cube0, cube1, cube2, cube3, cube4)
     controller = lifted_controller.ground(object_parameters)
-    params = np.array([0.7, -np.pi])
+    params = controller.sample_parameters(state, np.random.default_rng(123))
+    # params = np.array([0.7, -np.pi])
 
     # Reset and execute the controller until it terminates.
     controller.reset(state, params)
-    for _ in range(500):
+    for _ in range(300):
         action = controller.step()
         obs, _, _, _, _ = env.step(action)
         next_state = env.observation_space.devectorize(obs)
@@ -166,11 +166,12 @@ def test_sweep3D_state_abstraction():
     cube4 = state.get_object_from_name("cube_4")
     object_parameters = (robot, wiper, drawer, cube0, cube1, cube2, cube3, cube4)
     controller = lifted_controller.ground(object_parameters)
-    params = np.array([0.55, -np.pi])
+    params = controller.sample_parameters(state, np.random.default_rng(123))
+    # params = np.array([0.55, -np.pi])
 
     # Reset and execute the controller until it terminates.
     controller.reset(state, params)
-    for _ in range(500):
+    for _ in range(200):
         action = controller.step()
         obs, _, _, _, _ = env.step(action)
         next_state = env.observation_space.devectorize(obs)

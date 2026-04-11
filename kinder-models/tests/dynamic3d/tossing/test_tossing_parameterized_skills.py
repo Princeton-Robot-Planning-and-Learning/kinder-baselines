@@ -14,7 +14,10 @@ from relational_structs.spaces import ObjectCentricBoxSpace
 from relational_structs.utils import create_state_from_dict
 from spatialmath import SE2
 
-from kinder_models.dynamic3d.ground.parameterized_skills import (
+from kinder_models.dynamic3d.shelf.parameterized_skills import (
+    create_lifted_controllers as shelf_create_lifted_controllers,
+)
+from kinder_models.dynamic3d.tossing.parameterized_skills import (
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,
 )
@@ -587,7 +590,7 @@ def test_pick_place_shelf():
     # Create the environment.
     num_cubes = 1
     env = kinder.make(
-        f"kinder/TidyBot3D-cupboard_real-o{num_cubes}-v0",
+        f"kinder/Shelf3D-o{num_cubes}-v0",
         render_mode="rgb_array",
         allow_state_access=True,
     )
@@ -770,202 +773,6 @@ def test_pick_place_shelf():
     # Reset and execute the controller until it terminates.
     controller.reset(state)
     for _ in range(20):
-        action = controller.step()
-        obs, _, _, _, _ = env.step(action)
-        next_state = env.observation_space.devectorize(obs)
-        controller.observe(next_state)
-        state = next_state
-        if controller.terminated():
-            break
-    else:
-        assert False, "Controller did not terminate"
-
-    env.close()
-
-
-def test_pick_place_skill():
-    """Test pick and place skill in ground environment with 1 cube."""
-
-    # Create the environment.
-    num_cubes = 1
-    env = kinder.make(f"kinder/Shelf3D-o{num_cubes}-v0", render_mode="rgb_array")
-    if MAKE_VIDEOS:
-        env = RecordVideo(
-            env, "unit_test_videos", name_prefix=f"TidyBot3D-cupboard-o{num_cubes}-real"
-        )
-
-    # Reset the environment and get the initial state.
-    obs, _ = env.reset(seed=123)
-    for _ in range(5):
-        obs, _, _, _, _ = env.step(np.zeros(11))
-    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
-    state = env.observation_space.devectorize(obs)
-
-    assert state is not None
-    pybullet_sim = PyBulletSim(state, rendering=False)
-
-    controllers = create_lifted_controllers(env.action_space, pybullet_sim=pybullet_sim)
-
-    # create the pick ground controller.
-    lifted_controller = controllers["pick_ground"]
-    robot = _get_robot_from_state(state)
-    cube = state.get_object_from_name("cube1")
-    object_parameters = (robot, cube)
-    controller = lifted_controller.ground(object_parameters)
-    params = controller.sample_parameters(state, np.random.default_rng(123))
-    # params = np.array([0.6, 0.0])
-
-    # Reset and execute the controller until it terminates.
-    controller.reset(state, params)
-    for _ in range(400):
-        action = controller.step()
-        obs, _, _, _, _ = env.step(action)
-        next_state = env.observation_space.devectorize(obs)
-        controller.observe(next_state)
-        state = next_state
-        if controller.terminated():
-            break
-    else:
-        assert False, "Controller did not terminate"
-
-    # create the place ground controller.
-    lifted_controller = controllers["place_ground"]
-    robot = _get_robot_from_state(state)
-    cube = state.get_object_from_name("cube1")
-    cupboard = state.get_object_from_name("cupboard_1")
-    object_parameters = (robot, cube, cupboard)
-    controller = lifted_controller.ground(object_parameters)
-    params = controller.sample_parameters(state, np.random.default_rng(123))
-
-    # Reset and execute the controller until it terminates.
-    controller.reset(state, params)
-    for _ in range(400):
-        action = controller.step()
-        obs, _, _, _, _ = env.step(action)
-        next_state = env.observation_space.devectorize(obs)
-        controller.observe(next_state)
-        state = next_state
-        if controller.terminated():
-            break
-    else:
-        assert False, "Controller did not terminate"
-
-    env.close()
-
-
-def test_pick_place_two_cubes_skill():
-    """Test pick and place skill in ground environment with 1 cube."""
-
-    # Create the environment.
-    num_cubes = 2
-    env = kinder.make(f"kinder/Shelf3D-o{num_cubes}-v0", render_mode="rgb_array")
-    if MAKE_VIDEOS:
-        env = RecordVideo(
-            env, "unit_test_videos", name_prefix=f"TidyBot3D-cupboard-o{num_cubes}-real"
-        )
-
-    # Reset the environment and get the initial state.
-    obs, _ = env.reset(seed=123)
-    for _ in range(5):
-        obs, _, _, _, _ = env.step(np.zeros(11))
-    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
-    state = env.observation_space.devectorize(obs)
-
-    assert state is not None
-    pybullet_sim = PyBulletSim(state, rendering=False)
-
-    # Create the move-base controller.
-    controllers = create_lifted_controllers(env.action_space, pybullet_sim=pybullet_sim)
-    # create the pick ground controller.
-    lifted_controller = controllers["pick_ground"]
-    robot = _get_robot_from_state(state)
-    cube = state.get_object_from_name("cube1")
-    object_parameters = (robot, cube)
-    controller = lifted_controller.ground(object_parameters)
-    # target_distance = 0.6
-    # target_rotation = 0.0
-    # params = np.array([target_distance, target_rotation])
-    params = controller.sample_parameters(state, np.random.default_rng(123))
-
-    # Reset and execute the controller until it terminates.
-    controller.reset(state, params)
-    for _ in range(400):
-        action = controller.step()
-        obs, _, _, _, _ = env.step(action)
-        next_state = env.observation_space.devectorize(obs)
-        controller.observe(next_state)
-        state = next_state
-        if controller.terminated():
-            break
-    else:
-        assert False, "Controller did not terminate"
-
-    # create the place ground controller.
-    lifted_controller = controllers["place_ground"]
-    robot = _get_robot_from_state(state)
-    cube = state.get_object_from_name("cube1")
-    cupboard = state.get_object_from_name("cupboard_1")
-    object_parameters = (robot, cube, cupboard)
-    controller = lifted_controller.ground(object_parameters)
-    # target_distance = 0.85
-    # offset = 0.0
-    # target_rotation = -np.pi / 2
-    # params = np.array([target_distance, offset, target_rotation])
-    params = controller.sample_parameters(state, np.random.default_rng(123))
-
-    # Reset and execute the controller until it terminates.
-    controller.reset(state, params)
-    for _ in range(800):
-        action = controller.step()
-        obs, _, _, _, _ = env.step(action)
-        next_state = env.observation_space.devectorize(obs)
-        controller.observe(next_state)
-        state = next_state
-        if controller.terminated():
-            break
-    else:
-        assert False, "Controller did not terminate"
-
-    # create the pick ground controller.
-    lifted_controller = controllers["pick_ground"]
-    robot = _get_robot_from_state(state)
-    cube = state.get_object_from_name("cube2")
-    object_parameters = (robot, cube)
-    controller = lifted_controller.ground(object_parameters)
-    # target_distance = 0.6
-    # target_rotation = 0.0
-    # params = np.array([target_distance, target_rotation])
-    params = controller.sample_parameters(state, np.random.default_rng(123))
-
-    # Reset and execute the controller until it terminates.
-    controller.reset(state, params)
-    for _ in range(400):
-        action = controller.step()
-        obs, _, _, _, _ = env.step(action)
-        next_state = env.observation_space.devectorize(obs)
-        controller.observe(next_state)
-        state = next_state
-        if controller.terminated():
-            break
-    else:
-        assert False, "Controller did not terminate"
-
-    # create the place ground controller.
-    lifted_controller = controllers["place_ground"]
-    robot = _get_robot_from_state(state)
-    cube = state.get_object_from_name("cube2")
-    cupboard = state.get_object_from_name("cupboard_1")
-    object_parameters = (robot, cube, cupboard)
-    controller = lifted_controller.ground(object_parameters)
-    # target_distance = 0.92
-    # offset = 0.0
-    # target_rotation = -np.pi / 2
-    # params = np.array([target_distance, offset, target_rotation])
-    params = controller.sample_parameters(state, np.random.default_rng(123))
-
-    # Reset and execute the controller until it terminates.
-    controller.reset(state, params)
-    for _ in range(400):
         action = controller.step()
         obs, _, _, _, _ = env.step(action)
         next_state = env.observation_space.devectorize(obs)
@@ -1274,43 +1081,43 @@ def test_pick_toss():
     env.close()
 
 
-def test_open_drawer():
-    """Test open drawer."""
+def test_pick_ground_toss():
+    """Test pick and place in ground environment with 1 cube."""
 
     # Create the environment.
-    num_cubes = 5
+    num_cubes = 1
     env = kinder.make(
-        f"kinder/SweepIntoDrawer3D-o{num_cubes}-v0", render_mode="rgb_array"
+        f"kinder/Tossing3D-o{num_cubes}-v0",
+        render_mode="rgb_array",
+        scene_bg=False,
     )
     if MAKE_VIDEOS:
+        env.unwrapped._object_centric_env.set_render_camera("task_view")  # type: ignore # pylint: disable=protected-access
         env = RecordVideo(
-            env, "unit_test_videos", name_prefix=f"TidyBot3D-cupboard-o{num_cubes}-real"
+            env, "unit_test_videos", name_prefix=f"TidyBot3D-ground-o{num_cubes}"
         )
 
     # Reset the environment and get the initial state.
-    obs, _ = env.reset(seed=123)
-    for _ in range(5):
-        obs, _, _, _, _ = env.step(np.zeros(11))
+    obs, _ = env.reset(seed=125)
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+
     state = env.observation_space.devectorize(obs)
 
-    assert state is not None
-    pybullet_sim = PyBulletSim(state, rendering=False)
-
-    controllers = create_lifted_controllers(env.action_space, pybullet_sim=pybullet_sim)
+    # Create the move-base controller.
+    controllers = shelf_create_lifted_controllers(env.action_space)
 
     # create the pick ground controller.
-    lifted_controller = controllers["open_drawer"]
+    lifted_controller = controllers["pick_shelf"]
     robot = _get_robot_from_state(state)
-    drawer = state.get_object_from_name("wiper_0")
-    object_parameters = (robot, drawer)
+    cube = state.get_object_from_name("cube_0")
+    object_parameters = (robot, cube)
     controller = lifted_controller.ground(object_parameters)
-    # params = controller.sample_parameters(state, np.random.default_rng(123))
-    params = np.array([0.7, -np.pi])
+    params = controller.sample_parameters(state, np.random.default_rng(123))
+    # params = np.array([0.45, np.pi/4])
 
     # Reset and execute the controller until it terminates.
     controller.reset(state, params)
-    for _ in range(300):
+    for _ in range(400):
         action = controller.step()
         obs, _, _, _, _ = env.step(action)
         next_state = env.observation_space.devectorize(obs)
@@ -1321,46 +1128,20 @@ def test_open_drawer():
     else:
         assert False, "Controller did not terminate"
 
-    env.close()
-
-
-def test_pick_wiper():
-    """Test pick wiper."""
-
-    # Create the environment.
-    num_cubes = 5
-    env = kinder.make(
-        f"kinder/SweepIntoDrawer3D-o{num_cubes}-v0", render_mode="rgb_array"
-    )
-    if MAKE_VIDEOS:
-        env = RecordVideo(
-            env, "unit_test_videos", name_prefix=f"TidyBot3D-cupboard-o{num_cubes}-real"
-        )
-
-    # Reset the environment and get the initial state.
-    obs, _ = env.reset(seed=123)
-    for _ in range(5):
-        obs, _, _, _, _ = env.step(np.zeros(11))
-    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
-    state = env.observation_space.devectorize(obs)
-
-    assert state is not None
-    pybullet_sim = PyBulletSim(state, rendering=False)
-
-    controllers = create_lifted_controllers(env.action_space, pybullet_sim=pybullet_sim)
-
-    # create the pick ground controller.
-    lifted_controller = controllers["pick_wiper"]
+    # Create the move-base controller.
+    controllers = create_lifted_controllers(env.action_space)
+    lifted_controller = controllers["move_to_target"]
     robot = _get_robot_from_state(state)
-    drawer = state.get_object_from_name("wiper_0")
-    object_parameters = (robot, drawer)
+    cube = state.get_object_from_name("bin_0")
+    object_parameters = (robot, cube)
     controller = lifted_controller.ground(object_parameters)
-    # params = controller.sample_parameters(state, np.random.default_rng(123))
-    params = np.array([0.7, -np.pi])
+    target_distance = 1.35
+    target_rotation = 0.0
+    params = np.array([target_distance, target_rotation])
 
     # Reset and execute the controller until it terminates.
-    controller.reset(state, params)
-    for _ in range(300):
+    controller.reset(state, params, disable_collision_objects=["cube_0"])
+    for _ in range(200):
         action = controller.step()
         obs, _, _, _, _ = env.step(action)
         next_state = env.observation_space.devectorize(obs)
@@ -1371,87 +1152,13 @@ def test_pick_wiper():
     else:
         assert False, "Controller did not terminate"
 
-    env.close()
-
-
-def test_open_drawer_pick_sweep_wiper():
-    """Test open drawer, pick and sweep wiper."""
-
-    # Create the environment.
-    num_cubes = 5
-    env = kinder.make(
-        f"kinder/SweepIntoDrawer3D-o{num_cubes}-v0", render_mode="rgb_array"
-    )
-    if MAKE_VIDEOS:
-        env = RecordVideo(
-            env, "unit_test_videos", name_prefix=f"TidyBot3D-cupboard-o{num_cubes}-real"
-        )
-
-    # Reset the environment and get the initial state.
-    obs, _ = env.reset(seed=123)
-    for _ in range(5):
-        obs, _, _, _, _ = env.step(np.zeros(11))
-    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
-    state = env.observation_space.devectorize(obs)
-
-    assert state is not None
-    pybullet_sim = PyBulletSim(state, rendering=False)
-
-    controllers = create_lifted_controllers(env.action_space, pybullet_sim=pybullet_sim)
-
-    # create the pick ground controller.
-    lifted_controller = controllers["open_drawer"]
+    # move the arm to the target configuration
+    lifted_controller = controllers["move_arm_to_conf"]
     robot = _get_robot_from_state(state)
-    drawer = state.get_object_from_name("wiper_0")
-    object_parameters = (robot, drawer)
+    object_parameters = (robot,)
     controller = lifted_controller.ground(object_parameters)
-    # params = controller.sample_parameters(state, np.random.default_rng(123))
-    params = np.array([0.7, -np.pi])
-
-    # Reset and execute the controller until it terminates.
-    controller.reset(state, params)
-    for _ in range(300):
-        action = controller.step()
-        obs, _, _, _, _ = env.step(action)
-        next_state = env.observation_space.devectorize(obs)
-        controller.observe(next_state)
-        state = next_state
-        if controller.terminated():
-            break
-    else:
-        assert False, "Controller did not terminate"
-
-    # create the pick ground controller.
-    lifted_controller = controllers["pick_wiper"]
-    robot = _get_robot_from_state(state)
-    drawer = state.get_object_from_name("wiper_0")
-    object_parameters = (robot, drawer)
-    controller = lifted_controller.ground(object_parameters)
-    # params = controller.sample_parameters(state, np.random.default_rng(123))
-    params = np.array([0.7, -np.pi])
-
-    # Reset and execute the controller until it terminates.
-    controller.reset(state, params)
-    for _ in range(300):
-        action = controller.step()
-        obs, _, _, _, _ = env.step(action)
-        next_state = env.observation_space.devectorize(obs)
-        controller.observe(next_state)
-        state = next_state
-        if controller.terminated():
-            break
-    else:
-        assert False, "Controller did not terminate"
-
-    # create the place ground controller.
-    lifted_controller = controllers["sweep"]
-    robot = _get_robot_from_state(state)
-    wiper = state.get_object_from_name("wiper_0")
-    target_cube = state.get_object_from_name("cube_0")
-    object_parameters = (robot, wiper, target_cube)
-    controller = lifted_controller.ground(object_parameters)
-    # params = controller.sample_parameters(state, np.random.default_rng(123))
-    params = np.array([0.55, -np.pi])
+    target_conf = np.deg2rad([0, 50, 180, -110, 0, -100, 90])  # pre toss
+    params = target_conf
 
     # Reset and execute the controller until it terminates.
     controller.reset(state, params)
@@ -1465,5 +1172,44 @@ def test_open_drawer_pick_sweep_wiper():
             break
     else:
         assert False, "Controller did not terminate"
+
+    # move the arm to the target configuration
+    lifted_controller = controllers["toss"]
+    robot = _get_robot_from_state(state)
+    object_parameters = (robot,)
+    controller = lifted_controller.ground(object_parameters)
+    target_conf = np.deg2rad([0, 20, 180, -35, 0, 25, 90])  # toss
+    params = target_conf
+
+    # Reset and execute the controller until it terminates.
+    controller.reset(state, params)
+    for _ in range(200):
+        action = controller.step()
+        obs, _, _, _, _ = env.step(action)
+        next_state = env.observation_space.devectorize(obs)
+        controller.observe(next_state)
+        state = next_state
+        if controller.terminated():
+            break
+    else:
+        assert False, "Controller did not terminate"
+    cube_position = [state.get(cube, "x"), state.get(cube, "y"), state.get(cube, "z")]
+    cube_orientation = [
+        state.get(cube, "qx"),
+        state.get(cube, "qy"),
+        state.get(cube, "qz"),
+        state.get(cube, "qw"),
+    ]
+    robot_base_position = [
+        state.get(robot, "pos_base_x"),
+        state.get(robot, "pos_base_y"),
+    ]
+    distance = np.linalg.norm(
+        np.array(cube_position[:2]) - np.array(robot_base_position[:2])
+    )
+    print("cube_position", cube_position)
+    print("cube_orientation", cube_orientation)
+    print("robot base position", robot_base_position)
+    print("distance", distance)
 
     env.close()

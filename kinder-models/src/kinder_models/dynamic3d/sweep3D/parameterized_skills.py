@@ -112,7 +112,6 @@ class OpenDrawerSweepController(
         distance = rng.uniform(*OPEN_DRAWER_DISTANCE_BOUNDS)  # type: ignore
         rot = rng.uniform(*OPEN_DRAWER_ROT_BOUNDS)
         return np.array([distance, rot])
-        # return np.array([0.8, -np.pi])
 
     def reset(
         self,
@@ -169,7 +168,7 @@ class OpenDrawerSweepController(
 
         target_object = self.objects[1]
 
-        target_grap_pose_world = Pose(
+        target_grasp_pose_world = Pose(
             (
                 plan_x.get(target_object, "x"),
                 plan_x.get(target_object, "y"),
@@ -184,18 +183,18 @@ class OpenDrawerSweepController(
         )
 
         target_end_effector_pose = multiply_poses(
-            target_grap_pose_world,
+            target_grasp_pose_world,
             DRAWER_TRANSFORM_TO_OBJECT,
         )
 
         target_end_effector_pose_end = multiply_poses(
-            target_grap_pose_world,
+            target_grasp_pose_world,
             DRAWER_TRANSFORM_TO_OBJECT_END,
         )
 
         self._pybullet_sim.base_link_to_held_obj = multiply_poses(
             target_end_effector_pose.invert(),
-            target_grap_pose_world,
+            target_grasp_pose_world,
         )
 
         target_joints = inverse_kinematics(
@@ -417,7 +416,6 @@ class OpenDrawerSweepController(
         x = self._last_state
         assert x is not None
         robot_obj = self.objects[0]  # Robot is first parameter
-        # return x.get(robot_obj, "pos_gripper")
         if x.get(robot_obj, "pos_gripper") > 0.2:
             return GRASP_CLOSE_THRESHOLD
         return 0.0
@@ -533,7 +531,7 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
 
         target_object = self.objects[1]
 
-        target_grap_pose_world = Pose(
+        target_grasp_pose_world = Pose(
             (
                 plan_x.get(target_object, "x"),
                 plan_x.get(target_object, "y"),
@@ -548,13 +546,13 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
         )
 
         target_end_effector_pose = multiply_poses(
-            target_grap_pose_world,
+            target_grasp_pose_world,
             WIPER_TRANSFORM_TO_OBJECT,
         )
 
         self._pybullet_sim.base_link_to_held_obj = multiply_poses(
             target_end_effector_pose.invert(),
-            target_grap_pose_world,
+            target_grasp_pose_world,
         )
 
         target_joints = inverse_kinematics(
@@ -577,7 +575,7 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
             self._pybullet_sim.robot,
             target_joints,
             self.home_joints.tolist(),
-            collision_bodies=self._pybullet_sim.get_collision_bodies(),  # pylint: disable=protected-access
+            collision_bodies=self._pybullet_sim.get_collision_bodies(),
             base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,  # pylint: disable=protected-access
             seed=0,  # use a constant seed to make this effectively deterministic
             physics_client_id=self._pybullet_sim.physics_client_id,
@@ -725,7 +723,6 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
         x = self._last_state
         assert x is not None
         robot_obj = self.objects[0]  # Robot is first parameter
-        # return x.get(robot_obj, "pos_gripper")
         if x.get(robot_obj, "pos_gripper") > 0.2:
             return GRASP_CLOSE_THRESHOLD
         return 0.0
@@ -1039,7 +1036,6 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         x = self._last_state
         assert x is not None
         robot_obj = self.objects[0]  # Robot is first parameter
-        # return x.get(robot_obj, "pos_gripper")
         if x.get(robot_obj, "pos_gripper") > 0.2:
             return GRASP_CLOSE_THRESHOLD
         return 0.0

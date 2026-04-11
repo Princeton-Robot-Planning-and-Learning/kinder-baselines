@@ -1,4 +1,4 @@
-"""Tests for tidybot3d_cupboard.py."""
+"""Tests for tidybot3d_shelf3D.py."""
 
 import kinder
 import numpy as np
@@ -11,7 +11,6 @@ from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 kinder.register_all_environments()
 
 
-# @pytest.mark.skip(reason="Failure when run in parallel, needs to be investigated")
 def test_tidybot3d_cupboard_bilevel_planning():
     """Tests for bilevel planning in the Shelf3D real environment."""
 
@@ -26,14 +25,12 @@ def test_tidybot3d_cupboard_bilevel_planning():
     for _ in range(5):
         obs, _, _, _, _ = env.step(np.zeros(11))
     total_reward = 0
-    state = env.observation_space.devectorize(obs)
 
     env_models = create_bilevel_planning_models(
-        "tidybot3d_cupboard_real",
+        "tidybot3d_shelf3D",
         env.observation_space,
         env.action_space,
         num_objects=num_objects,
-        initial_state=state,
     )
     agent = BilevelPlanningAgent(
         env_models,
