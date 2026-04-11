@@ -27,7 +27,7 @@ def get_in_context_examples(
             # Remove "kinder/" prefix if present
             if "/" in env_id:
                 env_id = env_id.split("/")[-1]
-            
+
             # Extract task name (part before variant and version)
             # e.g., "SweepIntoDrawer3D-o5-v0" -> "SweepIntoDrawer3D"
             task_name = env_id.split("-")[0]
@@ -44,8 +44,8 @@ def get_in_context_examples(
                 )
         else:
             raise NotImplementedError(
-                f"Cannot determine task type for dynamic3d environment. "
-                f"Environment must have spec.id attribute."
+                "Cannot determine task type for dynamic3d environment. "
+                "Environment must have spec.id attribute."
             )
     else:
         env_file_name = env_name
