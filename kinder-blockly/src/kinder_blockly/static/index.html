@@ -8,7 +8,9 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; }
-        header { background: #2c3e50; color: white; padding: 10px 20px; display: flex; align-items: center; gap: 16px; }
+
+        /* ── Header ──────────────────────────────────────── */
+        header { background: #2c3e50; color: white; padding: 10px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
         header h1 { font-size: 18px; font-weight: 600; }
         #run-btn {
             background: #27ae60; color: white; border: none; padding: 8px 20px;
@@ -17,18 +19,54 @@
         #run-btn:hover { background: #219a52; }
         #run-btn:disabled { background: #95a5a6; cursor: not-allowed; }
         #status { font-size: 13px; color: #bdc3c7; }
+
+        /* challenge picker */
+        #challenge-select {
+            padding: 5px 8px; border-radius: 4px; border: none; font-size: 13px;
+            background: #34495e; color: white;
+        }
+        #challenge-hint {
+            font-size: 12px; color: #bdc3c7; max-width: 360px; white-space: nowrap;
+            overflow: hidden; text-overflow: ellipsis;
+        }
+
+        /* ── Main layout ─────────────────────────────────── */
         .content { display: flex; flex: 1; overflow: hidden; }
         #blockly-area { flex: 2; position: relative; }
         #blockly-div { position: absolute; inset: 0; }
-        #output-panel { flex: 1; background: #ecf0f1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; }
-        #frame-display { max-width: 100%; max-height: 80%; border: 2px solid #bdc3c7; background: #2c3e50; }
-        #frame-info { margin-top: 10px; font-size: 13px; color: #7f8c8d; }
+
+        #output-panel {
+            flex: 1; background: #ecf0f1; display: flex; flex-direction: column;
+            align-items: center; padding: 12px; gap: 8px; overflow-y: auto;
+        }
+        .panel-label { font-size: 11px; font-weight: 600; color: #7f8c8d; text-transform: uppercase; letter-spacing: 0.5px; }
+        #frame-display { max-width: 100%; max-height: 40%; border: 2px solid #bdc3c7; background: #2c3e50; }
+        #frame-info { font-size: 13px; color: #7f8c8d; }
+
+        /* ── Canvases row ────────────────────────────────── */
+        #canvas-row { display: flex; gap: 8px; align-items: flex-start; }
+        .canvas-col { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+        .canvas-col canvas { border: 2px solid #bdc3c7; background: #fff; }
+
+        /* ── Score badge ─────────────────────────────────── */
+        #score-box {
+            display: none; text-align: center; padding: 6px 16px;
+            border-radius: 8px; font-weight: 700; font-size: 18px;
+        }
+        #score-box.good   { background: #27ae60; color: white; display: block; }
+        #score-box.ok     { background: #f39c12; color: white; display: block; }
+        #score-box.poor   { background: #e74c3c; color: white; display: block; }
+        #score-detail { font-size: 11px; font-weight: 400; opacity: 0.85; }
     </style>
 </head>
 <body>
     <header>
         <h1>KinDER Blockly</h1>
         <button id="run-btn" onclick="runProgram()">Run</button>
+        <select id="challenge-select" onchange="onChallengeChange()">
+            <option value="">Free Draw</option>
+        </select>
+        <span id="challenge-hint"></span>
         <span id="status"></span>
     </header>
     <div class="content">
@@ -36,14 +74,32 @@
             <div id="blockly-div"></div>
         </div>
         <div id="output-panel">
+            <span class="panel-label">3D View</span>
             <img id="frame-display" alt="Robot view" />
             <div id="frame-info">Drag blocks and click Run</div>
+
+            <div id="canvas-row">
+                <div class="canvas-col">
+                    <span class="panel-label">Target</span>
+                    <canvas id="target-canvas" width="250" height="250"></canvas>
+                </div>
+                <div class="canvas-col">
+                    <span class="panel-label">Your Drawing</span>
+                    <canvas id="trail-canvas" width="250" height="250"></canvas>
+                </div>
+            </div>
+            <div id="score-box"></div>
         </div>
     </div>
 
     <xml id="toolbox" style="display: none">
-        <category name="Skills" colour="210">
+        <category name="Movement" colour="210">
             <block type="move_base_to_target"></block>
+        </category>
+        <category name="Pen" colour="20">
+            <block type="set_pen_color"></block>
+            <block type="pen_down"></block>
+            <block type="pen_up"></block>
         </category>
     </xml>
 

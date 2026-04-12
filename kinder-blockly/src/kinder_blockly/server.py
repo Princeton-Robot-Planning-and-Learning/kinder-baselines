@@ -10,7 +10,8 @@ import numpy as np
 from flask import Flask, Response, request
 from PIL import Image
 
-from kinder_blockly.executor import execute_program, render_initial_frame
+from kinder_blockly.challenges import get_challenge, list_challenges, score_trail
+from kinder_blockly.executor import TrailSegment, execute_program, render_initial_frame
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -29,6 +30,9 @@ def _encode_frame(frame: "np.ndarray[Any, Any]") -> str:
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=80)
     return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+# ── Environment endpoints ────────────────────────────────────────
 
 
 @app.route("/reset", methods=["POST"])
@@ -53,7 +57,7 @@ def reset_env() -> Response:
 
 @app.route("/run", methods=["POST"])
 def run_program() -> Response:
-    """Execute a Blockly program and return rendered frames."""
+    """Execute a Blockly program and return rendered frames + trail."""
     data = request.get_json()
     if data is None:
         return Response(
@@ -66,18 +70,82 @@ def run_program() -> Response:
     seed = data.get("seed", 0)
 
     frames_b64: list[str] = []
+    trail: list[TrailSegment] = []
     try:
-        for frame in execute_program(program, seed=seed):
+        for frame in execute_program(program, seed=seed, trail_out=trail):
             frames_b64.append(_encode_frame(frame))
     except Exception as exc:  # pylint: disable=broad-except
         return Response(
-            json.dumps({"error": str(exc), "frames": frames_b64}),
+            json.dumps({"error": str(exc), "frames": frames_b64, "trail": trail}),
             status=500,
             mimetype="application/json",
         )
 
     return Response(
-        json.dumps({"success": True, "frames": frames_b64}),
+        json.dumps({"success": True, "frames": frames_b64, "trail": trail}),
+        status=200,
+        mimetype="application/json",
+    )
+
+
+# ── Challenge endpoints ──────────────────────────────────────────
+
+
+@app.route("/challenges", methods=["GET"])
+def challenges_list() -> Response:
+    """Return the list of available challenges (without trail data)."""
+    return Response(
+        json.dumps({"challenges": list_challenges()}),
+        status=200,
+        mimetype="application/json",
+    )
+
+
+@app.route("/challenges/<challenge_id>", methods=["GET"])
+def challenge_detail(challenge_id: str) -> Response:
+    """Return a single challenge including its target trail."""
+    challenge = get_challenge(challenge_id)
+    if challenge is None:
+        return Response(
+            json.dumps({"error": f"Unknown challenge: {challenge_id}"}),
+            status=404,
+            mimetype="application/json",
+        )
+    return Response(
+        json.dumps(challenge),
+        status=200,
+        mimetype="application/json",
+    )
+
+
+@app.route("/score", methods=["POST"])
+def score() -> Response:
+    """Score a student trail against a challenge target.
+
+    Body: ``{"challenge_id": "...", "student_trail": [...]}``
+    """
+    data = request.get_json()
+    if data is None:
+        return Response(
+            json.dumps({"error": "Invalid JSON"}),
+            status=400,
+            mimetype="application/json",
+        )
+
+    challenge_id = data.get("challenge_id")
+    student_trail = data.get("student_trail", [])
+
+    challenge = get_challenge(challenge_id)
+    if challenge is None:
+        return Response(
+            json.dumps({"error": f"Unknown challenge: {challenge_id}"}),
+            status=404,
+            mimetype="application/json",
+        )
+
+    result = score_trail(student_trail, challenge["target_trail"])
+    return Response(
+        json.dumps(result),
         status=200,
         mimetype="application/json",
     )
