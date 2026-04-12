@@ -1,7 +1,6 @@
-"""Tests for tidybot3d_cupboard.py."""
+"""Tests for tidybot3d_sweep3D.py."""
 
 import kinder
-import pytest
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 
@@ -11,29 +10,26 @@ from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 kinder.register_all_environments()
 
 
-@pytest.mark.skip(reason="Failure when run in parallel, needs to be investigated")
-def test_tidybot3d_cupboard_bilevel_planning():
-    """Tests for bilevel planning in the TidyBot3D cupboard real environment."""
+def test_tidybot3d_sweep_bilevel_planning():
+    """Tests for bilevel planning in the Sweep3D environment."""
 
-    num_objects = 4
+    num_objects = 5
     env = kinder.make(
-        f"kinder/TidyBot3D-cupboard_real-o{num_objects}-v0", render_mode="rgb_array"
+        f"kinder/SweepIntoDrawer3D-o{num_objects}-v0", render_mode="rgb_array"
     )
 
     if MAKE_VIDEOS:
-        env = RecordVideo(env, "unit_test_videos", name_prefix="TidyBot3D-cupboard")
+        env = RecordVideo(env, "unit_test_videos", name_prefix="TidyBot3D-sweep3d")
 
     seed = 123
     obs, info = env.reset(seed=seed)
     total_reward = 0
-    state = env.observation_space.devectorize(obs)
 
     env_models = create_bilevel_planning_models(
-        "tidybot3d_cupboard_real",
+        "tidybot3d_sweep3D",
         env.observation_space,
         env.action_space,
         num_objects=num_objects,
-        initial_state=state,
     )
     agent = BilevelPlanningAgent(
         env_models,

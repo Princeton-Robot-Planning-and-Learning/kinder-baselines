@@ -5,20 +5,20 @@ from bilevel_planning.structs import (
     RelationalAbstractGoal,
     RelationalAbstractState,
 )
+from kinder.envs.dynamic3d.envs import ObjectCentricTidyBot3DEnv
 from kinder.envs.dynamic3d.object_types import (
     MujocoFixtureObjectType,
     MujocoMovableObjectType,
     MujocoObjectType,
     MujocoTidyBotRobotObjectType,
 )
-from kinder.envs.dynamic3d.envs import ObjectCentricTidyBot3DEnv
 from relational_structs import (
     GroundAtom,
     ObjectCentricState,
     Predicate,
 )
 
-from kinder_models.dynamic3d.ground.parameterized_skills import PyBulletSim
+from kinder_models.dynamic3d.shelf.parameterized_skills import PyBulletSim
 
 # Predicates.
 OnFixture = Predicate("OnFixture", [MujocoObjectType, MujocoFixtureObjectType])

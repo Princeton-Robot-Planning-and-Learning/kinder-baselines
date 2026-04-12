@@ -6,6 +6,7 @@ from bilevel_planning.structs import (
     SesameModels,
 )
 from gymnasium.spaces import Space
+from kinder.envs.dynamic3d.envs import ObjectCentricTidyBot3DEnv
 from kinder.envs.dynamic3d.object_types import (
     MujocoFixtureObjectType,
     MujocoMovableObjectType,
@@ -13,17 +14,16 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoTidyBotRobotObjectType,
 )
 from kinder.envs.dynamic3d.robots.tidybot_robot_env import TidyBot3DRobotActionSpace
-from kinder.envs.dynamic3d.envs import ObjectCentricTidyBot3DEnv
-from kinder_models.dynamic3d.cupboard_real.state_abstractions import (
+from kinder_models.dynamic3d.shelf.parameterized_skills import (
+    PyBulletSim,
+    create_lifted_controllers,
+)
+from kinder_models.dynamic3d.shelf.state_abstractions import (
     CupboardRealStateAbstractor,
     HandEmpty,
     Holding,
     OnFixture,
     OnGround,
-)
-from kinder_models.dynamic3d.ground.parameterized_skills import (
-    PyBulletSim,
-    create_lifted_controllers,
 )
 from numpy.typing import NDArray
 from relational_structs import (
@@ -39,7 +39,6 @@ def create_bilevel_planning_models(
     observation_space: Space,
     action_space: Space,
     num_objects: int = 1,
-    initial_state: ObjectCentricState | None = None,
 ) -> SesameModels:
     """Create the env models for TidyBot base motion."""
     assert isinstance(observation_space, ObjectCentricBoxSpace)
@@ -57,7 +56,7 @@ def create_bilevel_planning_models(
     goal_deriver = abstractor.goal_deriver_place_cupboard
 
     # Need to call reset to initialize the qpos, qvel.
-    sim.reset()
+    initial_state, _ = sim.reset()
 
     # Convert observations into states. The important thing is that states are hashable.
     def observation_to_state(o: NDArray[np.float32]) -> ObjectCentricState:
@@ -99,7 +98,7 @@ def create_bilevel_planning_models(
     target = Variable("?target", MujocoMovableObjectType)
 
     PickTargetOperator = LiftedOperator(
-        "pick_ground",
+        "pick_shelf",
         [robot, target],
         preconditions={
             LiftedAtom(HandEmpty, [robot]),
@@ -140,13 +139,13 @@ def create_bilevel_planning_models(
     )
 
     # Controllers.
-    LiftedPickGroundController = controllers["pick_ground"]
-    LiftedPlaceGroundController = controllers["place_ground"]
+    LiftedPickShelfController = controllers["pick_shelf"]
+    LiftedPlaceShelfController = controllers["place_shelf"]
 
     # Finalize the skills.
     skills = {
-        LiftedSkill(PickTargetOperator, LiftedPickGroundController),
-        LiftedSkill(PlaceTargetOperator, LiftedPlaceGroundController),
+        LiftedSkill(PickTargetOperator, LiftedPickShelfController),
+        LiftedSkill(PlaceTargetOperator, LiftedPlaceShelfController),
     }
 
     # Finalize the models.
