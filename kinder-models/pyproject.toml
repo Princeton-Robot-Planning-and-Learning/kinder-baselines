@@ -17,7 +17,7 @@ dependencies = [
    "opencv-python>=4.9.0",
    "kindergarden>=0.0.9",
    "relational_structs>=0.0.1",
-   "bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git#subdirectory=bilevel-planning",
+   "bilevel_planning>=0.1.2",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,9 @@
+env_id: "kinder/StickButton2D-b1-v0"
+max_eval_steps: 200
+replan_interval: 1
+
+use_checkpoint: True
+checkpoint: "../kinder-mbrl/output/wm_stickbutton2d_b1_ep1000_20260324_133924.pt"
+
+preserved_indices: [3, 5, 7, 8, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 25, 26, 27]
+# 2 and 11 are thetas (ignored)

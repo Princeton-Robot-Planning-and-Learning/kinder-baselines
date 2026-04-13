@@ -11,7 +11,7 @@ import kinder
 import numpy as np
 from relational_structs.spaces import ObjectCentricBoxSpace
 
-from kinder_models.dynamic3d.ground.parameterized_skills import (
+from kinder_models.dynamic3d.shelf.parameterized_skills import (
     PyBulletSim,
     create_lifted_controllers,
 )
@@ -79,7 +79,7 @@ def collect_data(
     save: bool = True,
     grasping_only: bool = False,
     show_images: bool = False,
-    env_name: str = "TidyBot3D-cupboard_real-o1-v0",
+    env_name: str = "Shelf3D-o1-v0",
 ):
     """Collect pick and place demonstration data in ground environment.
 
@@ -97,8 +97,6 @@ def collect_data(
 
     # Reset the environment and get the initial state.
     obs, _ = env.reset(seed=seed)  # type: ignore
-    for _ in range(5):
-        obs, _, _, _, _ = env.step(np.zeros(11))
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
 
@@ -119,7 +117,7 @@ def collect_data(
 
     try:
         # Create the pick ground controller.
-        lifted_controller = controllers["pick_ground"]
+        lifted_controller = controllers["pick_shelf"]
         robot = state.get_object_from_name("robot")
         cube = state.get_object_from_name(target_object_key)
         object_parameters = (robot, cube)
@@ -179,7 +177,7 @@ def collect_data(
             return
         if not grasping_only:
             # Create the place ground controller.
-            lifted_controller = controllers["place_ground"]
+            lifted_controller = controllers["place_shelf"]
             robot = state.get_object_from_name("robot")
             cube = state.get_object_from_name(target_object_key)
             cupboard = state.get_object_from_name("cupboard_1")
@@ -278,7 +276,7 @@ def main() -> None:
     parser.add_argument(
         "--env-name",
         type=str,
-        default="TidyBot3D-cupboard_real-o1-v0",
+        default="Shelf3D-o1-v0",
         help="Name of the environment",
     )
 

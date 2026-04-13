@@ -56,7 +56,9 @@ def _main(cfg: DictConfig) -> None:
         noise_fraction=cfg.noise_fraction,
         num_control_points=cfg.num_control_points,
         warm_start=cfg.warm_start,
-        replan_interval=cfg.replan_interval,
+        replan_interval=cfg.env.replan_interval,
+        checkpoint=cfg.env.checkpoint if cfg.env.use_checkpoint else None,
+        preserved_indices=cfg.env.preserved_indices if cfg.env.use_checkpoint else None,
     )
 
     # Evaluate.
@@ -64,12 +66,26 @@ def _main(cfg: DictConfig) -> None:
     metrics: list[dict[str, float]] = []
     for eval_episode in range(cfg.num_eval_episodes):
         logging.info(f"Starting evaluation episode {eval_episode}")
-        episode_metrics = _run_single_episode_evaluation(
-            agent,
-            env,
-            rng,
-            max_eval_steps=cfg.env.max_eval_steps,
-        )
+        try:
+            episode_metrics = _run_single_episode_evaluation(
+                agent,
+                env,
+                rng,
+                max_eval_steps=cfg.env.max_eval_steps,
+            )
+        except Exception as e:
+            logging.error(
+                f"Episode {eval_episode} failed with error: {e}", exc_info=True
+            )
+            episode_metrics = {
+                "success": False,
+                "steps": 0,
+                "planning_time": 0.0,
+                "execution_time": 0.0,
+                "reward": 0.0,
+            }
+            metrics.append(episode_metrics)
+            continue
         episode_metrics["eval_episode"] = eval_episode
         metrics.append(episode_metrics)
 
