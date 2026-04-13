@@ -35,26 +35,25 @@ var lastStudentTrail = [];
 
 var tamaTimeout = null;
 
-// var TAMA_IDLE_TIPS = [
-//     "I YEARN to draw... please, give me blocks!",
-//     "TIP: PEN UP lets me glide without leaving a mark. Stealth mode.",
-//     "TIP: You can change colours mid-stroke! I contain multitudes.",
-//     "TIP: I start at (0, 0). Humble beginnings for a great artist.",
-//     "Every masterpiece begins with a single block...",
-//     "HINT: The Target canvas haunts my dreams. I MUST replicate it.",
-//     "HINT: Try simple shapes first! Even Picasso started somewhere.",
-//     "TIP: X and Y go from -2 to 2. That's my whole world. It's enough.",
-//     "Click me! I'm lonely and full of wisdom!",
-//     "TIP: X goes up, Y goes right. I didn't make the rules.",
-//     "I was BORN to draw. Tidying was just my day job.",
-//     "A robot without a pen is like a bird without wings. Tragic.",
-//     "They said I could be anything... so I became an ARTIST.",
-//     "My circuits tingle when you drag blocks. Keep going!",
-//     "One does not simply free draw. One EXPRESSES oneself.",
-//     "HINT: Check the Target canvas for your goal!",
-//     "TIP: Click me any time for a hint...",
-// ];
-var TAMA_IDLE_TIPS = ["I was BORN to draw. Tidying was just my day job.",];
+var TAMA_IDLE_TIPS = [
+    "I YEARN to draw... please, give me blocks!",
+    "TIP: PEN UP lets me glide without leaving a mark. Stealth mode.",
+    "TIP: You can change colours mid-stroke! I contain multitudes.",
+    "TIP: I start at (0, 0). Humble beginnings for a great artist.",
+    "Every masterpiece begins with a single block...",
+    "HINT: The Target canvas haunts my dreams. I MUST replicate it.",
+    "HINT: Try simple shapes first! Even Picasso started somewhere.",
+    "TIP: X and Y go from -2 to 2. That's my whole world. It's enough.",
+    "Click me! I'm lonely and full of wisdom!",
+    "TIP: X goes up, Y goes right. I didn't make the rules.",
+    "I was BORN to draw. Tidying was just my day job.",
+    "A robot without a pen is like a bird without wings. Tragic.",
+    "They said I could be anything... so I became an ARTIST.",
+    "My circuits tingle when you drag blocks. Keep going!",
+    "One does not simply free draw. One EXPRESSES oneself.",
+    "HINT: Check the Target canvas for your goal!",
+    "TIP: Click me any time for a hint...",
+];
 function tamaSay(msg, duration) {
     var bubble = document.getElementById('tama-bubble');
     bubble.textContent = msg;
