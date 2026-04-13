@@ -103,15 +103,15 @@ CHALLENGES: list[dict] = [
                 "Draw the square first, then pen up, move to the roof start, "
                 "change to blue, and draw the triangle.",
         "target_trail": (
-            # base (red square)
+            # base (red square) — left side
             _segments_from_waypoints(
-                [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.0), (-0.5, 0.0)],
+                [(-0.5, -0.5), (-0.5, 0.5), (0.0, 0.5), (0.0, -0.5)],
                 r=255, g=0, b=0, closed=True,
             )
             +
-            # roof (blue triangle)
+            # roof (blue triangle) — pointing right
             _segments_from_waypoints(
-                [(-0.5, 0.0), (0.0, 1.0), (0.5, 0.0)],
+                [(0.0, -0.5), (1.0, 0.0), (0.0, 0.5)],
                 r=0, g=80, b=255, closed=False,
             )
         ),

@@ -10,7 +10,7 @@ Blockly.Blocks['move_base_to_target'] = {
             .appendField(new Blockly.FieldNumber(0, -2, 2, 0.1), 'Y');
         this.setPreviousStatement(true, null);
         this.setNextStatement(true, null);
-        this.setColour(210);
+        this.setColour(260);
         this.setTooltip('Move the robot base to the given (x, y) position.');
     }
 };
@@ -27,7 +27,7 @@ Blockly.Blocks['set_pen_color'] = {
             .appendField(new Blockly.FieldNumber(0, 0, 255, 1), 'B');
         this.setPreviousStatement(true, null);
         this.setNextStatement(true, null);
-        this.setColour(20);
+        this.setColour(310);
         this.setTooltip('Set the drawing colour (RGB 0-255). Puts the pen down.');
     }
 };
@@ -38,7 +38,7 @@ Blockly.Blocks['pen_up'] = {
             .appendField('Pen up');
         this.setPreviousStatement(true, null);
         this.setNextStatement(true, null);
-        this.setColour(20);
+        this.setColour(310);
         this.setTooltip('Stop drawing while the robot moves.');
     }
 };
@@ -49,7 +49,7 @@ Blockly.Blocks['pen_down'] = {
             .appendField('Pen down');
         this.setPreviousStatement(true, null);
         this.setNextStatement(true, null);
-        this.setColour(20);
+        this.setColour(310);
         this.setTooltip('Resume drawing while the robot moves.');
     }
 };
