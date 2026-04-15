@@ -67,9 +67,9 @@ def _main(cfg: DictConfig) -> None:
     # Load environment-specific controllers if available.
     if env_class_name == "dynamic3d":
         if cfg.env.startswith("SweepIntoDrawer3D"):
-            env_name = "sweep3D"  # NOTE: this renaming is needed for parameterized skills
+            env_name = "sweep3D"  # NOTE: renaming for parameterized skills
         elif cfg.env.startswith("Shelf3D"):
-            env_name = "shelf"  # NOTE: this renaming is needed for parameterized skills
+            env_name = "shelf"  # NOTE: renaming for parameterized skills
         else:
             raise ValueError(f"Unrecognized dynamic3d environment name: {cfg.env}")
     env_controllers = get_controllers_for_environment(
