@@ -18,8 +18,6 @@ from kinder_models.dynamic3d.shelf.state_abstractions import (
 )
 from kinder_models.dynamic3d.utils import PyBulletSim
 
-_TEST_TASKS = Path(__file__).parent.parent.parent / "test_tasks"
-
 
 def _get_robot_from_state(state: ObjectCentricState):
     """Helper to get robot object from state by type."""
@@ -40,7 +38,11 @@ def test_shelf_state_abstraction():
             name_prefix="TidyBot3D-cupboard-real-state-abstraction",
         )
     sim = ObjectCentricTidyBot3DEnv(
-        task_config_path=str(_TEST_TASKS / f"tidybot-cupboard_real-o{num_objects}.json"),
+        task_config_path=str(
+            Path(kinder.__file__).parent
+            / "envs" / "dynamic3d" / "tasks" / "Shelf3D"
+            / f"Shelf3D-o{num_objects}.json"
+        ),
         num_objects=num_objects,
         allow_state_access=True,
     )
