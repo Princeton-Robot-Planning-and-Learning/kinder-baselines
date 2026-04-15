@@ -16,6 +16,10 @@ max_eval_steps: 3000
 make_videos: False
 video_folder: ${hydra:runtime.output_dir}/videos
 
+# Noise wrappers (0.0 = no noise).
+obs_noise_std: 0.0
+action_noise_std: 0.0
+
 # Approach.
 max_abstract_plans: 10
 samples_per_step: 3
