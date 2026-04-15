@@ -1,8 +1,9 @@
 """Tests for ground parameterized skills."""
 
+from pathlib import Path
+
 import kinder
 import numpy as np
-from pathlib import Path
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from kinder.envs.dynamic3d.envs import TidyBot3DEnv

@@ -1,7 +1,8 @@
 """Tests for utils.py."""
 
-import kinder
 from pathlib import Path
+
+import kinder
 from kinder.envs.dynamic3d.envs import (
     MujocoTidyBotRobotObjectType,
     ObjectCentricTidyBot3DEnv,
