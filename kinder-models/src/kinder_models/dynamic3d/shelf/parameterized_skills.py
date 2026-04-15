@@ -142,8 +142,8 @@ class PickShelfController(GroundParameterizedController[ObjectCentricState, Arra
         # Update the current state and parameters.
         self._last_state = x
 
-        assert isinstance(params, np.ndarray)
-        self._current_params = params.copy()
+        # Convert params to ndarray for compatibility (accepts tuple or array)
+        self._current_params = np.asarray(params, dtype=np.float32)
         # Derive the target pose for the robot.
         target_distance, target_rot = self._current_params
         target_object = self.objects[1]
@@ -489,8 +489,8 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
         # Update the current state and parameters.
         self._last_state = x
 
-        assert isinstance(params, np.ndarray)
-        self._current_params = params.copy()
+        # Convert params to ndarray for compatibility (accepts tuple or array)
+        self._current_params = np.asarray(params, dtype=np.float32)
         # Derive the target pose for the robot.
         target_distance, target_offset, target_rot = self._current_params
         target_object = self.objects[2]
