@@ -1,5 +1,8 @@
 """Tests for dynpushpullhook2d bilevel planning models."""
 
+import pickle
+from pathlib import Path
+
 import kinder
 import numpy as np
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
@@ -392,4 +395,68 @@ def test_dynpushpullhook2d_bilevel_planning_agent():
             break
 
     assert success, "Bilevel planning agent should solve the task"
+    env.close()
+
+
+def test_dynpushpullhook2d_replay_demo_controllers():
+    """Load a saved demo and replay its ground controllers in the environment.
+
+    1. Load the demo pickle (observations, actions, skill_info).
+    2. Reset the environment with the demo's seed.
+    3. Replay each skill's controller using recorded parameters.
+    4. Verify the environment reaches the goal.
+    """
+    demo_path = (
+        Path(__file__).resolve().parents[3]
+        / "skill_demos"
+        / "DynPushPullHook2D-o5-v0_seed649952284.pkl"
+    )
+    with open(demo_path, "rb") as f:
+        demo = pickle.load(f)
+
+    env_id = demo["env_id"]
+    seed = demo["seed"]
+    skill_info = demo["skill_info"]
+
+    assert env_id == "kinder/DynPushPullHook2D-o5-v0"
+    assert demo["terminated"] is True
+
+    env = kinder.make(env_id)
+    env_models = create_bilevel_planning_models(
+        "dynpushpullhook2d",
+        env.observation_space,
+        env.action_space,
+        num_obstructions=5,
+    )
+
+    obs, _ = env.reset(seed=seed)
+    state = env_models.observation_to_state(obs)
+    goal = env_models.goal_deriver(state)
+
+    skill_name_to_skill = {s.operator.name: s for s in env_models.skills}
+
+    for info in skill_info:
+        abstract_state = env_models.state_abstractor(state)
+        obj_name_to_obj = {o.name: o for o in abstract_state.objects}
+        operator_objects = tuple(
+            obj_name_to_obj[name] for name, _ in info["operator_objects"]
+        )
+
+        lifted_skill = skill_name_to_skill[info["operator_name"]]
+        ground_controller = lifted_skill.controller.ground(operator_objects)
+        ground_controller.reset(state, info["params"])
+
+        for _ in range(info["num_actions"]):
+            if ground_controller.terminated():
+                break
+            action = ground_controller.step()
+            obs, _, _, _, _ = env.step(action)
+            state = env_models.observation_to_state(obs)
+            ground_controller.observe(state)
+
+    abstract_state = env_models.state_abstractor(state)
+    assert goal.atoms.issubset(abstract_state.atoms), (
+        f"Goal not reached. Expected {goal.atoms} ⊆ {abstract_state.atoms}"
+    )
+
     env.close()

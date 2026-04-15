@@ -168,14 +168,19 @@ def parse_model_output_into_option_plan(
                     malformed = True
                     break
                 continuous_params_list.append(curr_cont_param)
-            if option.params_space is None:
+            # Only check params_space if there are actual continuous parameters
+            if len(continuous_params_list) > 0 and option.params_space is None:
                 logging.info(
                     f"Line {option_str} output by model has "
                     "continuous parameters but option has no params_space."
                 )
                 malformed = True
                 break
-            if len(continuous_params_list) != option.params_space.shape[0]:
+            if (
+                len(continuous_params_list) > 0
+                and option.params_space is not None
+                and len(continuous_params_list) != option.params_space.shape[0]
+            ):
                 logging.info(
                     f"Line {option_str} output by model has "
                     "invalid continouous parameter(s) that don't "
@@ -270,7 +275,20 @@ def option_policy_to_policy(
                 raise Exception("Exceeded max controller steps.")
 
             # Get new controller from the option policy
+            _pybullet_sim = None
+            if cur_option is not None:
+                # pylint: disable=protected-access
+                if (
+                    hasattr(cur_option, "_pybullet_sim")
+                    and cur_option._pybullet_sim is not None
+                ):
+                    _pybullet_sim = cur_option._pybullet_sim
+
             cur_option, params = option_policy(obs)
+
+            if _pybullet_sim is not None and hasattr(cur_option, "_pybullet_sim"):
+                cur_option._pybullet_sim = _pybullet_sim  # pylint: disable=protected-access
+
             logging.info(
                 f"[POLICY DEBUG] Received controller: {cur_option} with params {params}"
             )

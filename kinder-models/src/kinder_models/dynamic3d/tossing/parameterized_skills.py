@@ -89,8 +89,8 @@ class MoveToTargetGroundController(
         disable_collision_objects: list[str] | None = None,
     ) -> None:
         self._last_state = x
-        assert isinstance(params, np.ndarray)
-        self._current_params = params.copy()
+        # Convert params to ndarray for compatibility (accepts tuple or array)
+        self._current_params = np.asarray(params, dtype=np.float32)
         # Derive the target pose for the robot.
         target_distance, target_rot = self._current_params
         target_object = self.objects[1]
@@ -208,8 +208,8 @@ class MoveArmToConfController(GroundParameterizedController[ObjectCentricState, 
             self._pybullet_sim = PyBulletSim(x)
         # Update the current state and parameters.
         self._last_state = x
-        assert isinstance(params, np.ndarray)
-        self._current_params = params.copy()
+        # Convert params to ndarray for compatibility (accepts tuple or array)
+        self._current_params = np.asarray(params, dtype=np.float32)
         target_joints = self._current_params.tolist() + ([0.0] * 6)
         # Reset PyBullet given the current state.
         self._pybullet_sim.set_state(x)
@@ -335,8 +335,8 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
             self._pybullet_sim = PyBulletSim(x)
         # Update the current state and parameters.
         self._last_state = x
-        assert isinstance(params, np.ndarray)
-        self._current_params = params.copy()
+        # Convert params to ndarray for compatibility (accepts tuple or array)
+        self._current_params = np.asarray(params, dtype=np.float32)
         target_joints = self._current_params.tolist() + ([0.0] * 6)
         # Reset PyBullet given the current state.
         self._pybullet_sim.set_state(x)
@@ -489,8 +489,8 @@ class MoveArmToEndEffectorController(
             self._pybullet_sim = PyBulletSim(x)
         # Update the current state and parameters.
         self._last_state = x
-        assert isinstance(params, np.ndarray)
-        self._current_params = params.copy()
+        # Convert params to ndarray for compatibility (accepts tuple or array)
+        self._current_params = np.asarray(params, dtype=np.float32)
 
         # Reset PyBullet given the current state.
         self._pybullet_sim.set_state(x)

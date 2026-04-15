@@ -9,7 +9,7 @@ from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from relational_structs.spaces import ObjectCentricBoxSpace
 
-from kinder_models.dynamic2d.dynpushpullhook2d.parameterized_skills import (
+from kinder_models.dynamic2d.dyn_pushpullhook2d.parameterized_skills import (
     create_lifted_controllers,
 )
 
