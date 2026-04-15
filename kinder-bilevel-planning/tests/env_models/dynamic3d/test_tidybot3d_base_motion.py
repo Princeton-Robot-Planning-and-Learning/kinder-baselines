@@ -27,8 +27,8 @@ def test_tidybot3d_base_motion_bilevel_planning():
     agent = BilevelPlanningAgent(
         env_models,
         seed=seed,
-        max_abstract_plans=5,
-        samples_per_step=10,
+        max_abstract_plans=1,
+        samples_per_step=1,
         planning_timeout=30.0,
     )
     obs, info = env.reset(seed=seed)

@@ -32,8 +32,8 @@ def test_tidybot3d_cupboard_bilevel_planning():
     agent = BilevelPlanningAgent(
         env_models,
         seed=seed,
-        max_abstract_plans=5,
-        samples_per_step=10,
+        max_abstract_plans=1,
+        samples_per_step=1,
         planning_timeout=120.0,
         max_skill_horizon=400,
     )
