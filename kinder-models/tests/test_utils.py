@@ -28,10 +28,7 @@ def test_kinder_parameterized_skill_env():
     """Tests for KinDERParameterizedSkillEnv()."""
 
     # Set up the environment.
-    _test_tasks = (
-        Path(kinder.__file__).parent.parent.parent
-        / "tests" / "envs" / "dynamic3d" / "test_tasks"
-    )
+    _test_tasks = Path(__file__).parent / "test_tasks"
     kinder_env = TidyBot3DEnv(
         task_config_path=str(_test_tasks / "tidybot-base_motion-o1.json")
     )

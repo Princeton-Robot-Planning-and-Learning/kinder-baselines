@@ -12,10 +12,7 @@ from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
 kinder.register_all_environments()
 
-_TEST_TASKS = (
-    Path(kinder.__file__).parent.parent.parent
-    / "tests" / "envs" / "dynamic3d" / "test_tasks"
-)
+_TEST_TASKS = Path(__file__).parent.parent.parent / "test_tasks"
 
 
 def test_tidybot3d_base_motion_bilevel_planning():

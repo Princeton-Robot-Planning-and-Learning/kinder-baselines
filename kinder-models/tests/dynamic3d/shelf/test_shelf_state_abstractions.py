@@ -18,10 +18,7 @@ from kinder_models.dynamic3d.shelf.state_abstractions import (
 )
 from kinder_models.dynamic3d.utils import PyBulletSim
 
-_TEST_TASKS = (
-    Path(kinder.__file__).parent.parent.parent
-    / "tests" / "envs" / "dynamic3d" / "test_tasks"
-)
+_TEST_TASKS = Path(__file__).parent.parent.parent / "test_tasks"
 
 
 def _get_robot_from_state(state: ObjectCentricState):

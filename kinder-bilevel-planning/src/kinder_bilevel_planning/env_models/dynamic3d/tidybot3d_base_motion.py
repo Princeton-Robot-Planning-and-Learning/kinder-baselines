@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import kinder
 import numpy as np
 from bilevel_planning.structs import (
     LiftedSkill,
@@ -42,8 +41,7 @@ def create_bilevel_planning_models(
     assert isinstance(action_space, TidyBot3DRobotActionSpace)
 
     _TEST_TASKS = (
-        Path(kinder.__file__).parent.parent.parent
-        / "tests" / "envs" / "dynamic3d" / "test_tasks"
+        Path(__file__).parent.parent.parent.parent.parent / "tests" / "test_tasks"
     )
     sim = ObjectCentricTidyBot3DEnv(
         task_config_path=str(_TEST_TASKS / "tidybot-base_motion-o1.json"),
