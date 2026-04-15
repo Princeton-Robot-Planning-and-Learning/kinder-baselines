@@ -1,7 +1,8 @@
 """Tests for tidybot3d_base_motion.py."""
 
-import kinder
 from pathlib import Path
+
+import kinder
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from kinder.envs.dynamic3d.envs import TidyBot3DEnv
