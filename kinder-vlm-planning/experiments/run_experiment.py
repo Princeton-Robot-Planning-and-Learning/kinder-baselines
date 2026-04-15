@@ -65,9 +65,13 @@ def _main(cfg: DictConfig) -> None:
     in_context_examples = get_in_context_examples(env_class_name, env_name, env)
 
     # Load environment-specific controllers if available.
-    if env_name == "tidybot3d":
-        env_name = "ground"  # NOTE: this renaming is needed for parameterized skills
-        # use "ground" for Shelf3D task
+    if env_class_name == "dynamic3d":
+        if cfg.env.startswith("SweepIntoDrawer3D"):
+            env_name = "sweep3D"  # NOTE: this renaming is needed for parameterized skills
+        elif cfg.env.startswith("Shelf3D"):
+            env_name = "shelf"  # NOTE: this renaming is needed for parameterized skills
+        else:
+            raise ValueError(f"Unrecognized dynamic3d environment name: {cfg.env}")
     env_controllers = get_controllers_for_environment(
         env_class_name, env_name, action_space=env.action_space, make_kwargs=make_kwargs
     )
