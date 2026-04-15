@@ -23,7 +23,7 @@ from kinder.envs.dynamic2d.object_types import (
     LObjectType,
 )
 from kinder.envs.dynamic2d.utils import KinRobotActionSpace
-from kinder_models.dynamic2d.dynpushpullhook2d.parameterized_skills import (
+from kinder_models.dynamic2d.dyn_pushpullhook2d.parameterized_skills import (
     GroundHookDownController,
     create_lifted_controllers,
 )

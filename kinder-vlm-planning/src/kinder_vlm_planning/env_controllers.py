@@ -8,7 +8,10 @@ from bilevel_planning.structs import LiftedParameterizedController
 
 
 def get_controllers_for_environment(
-    env_class_name: str, env_name: str, action_space: Optional[Any] = None
+    env_class_name: str,
+    env_name: str,
+    action_space: Optional[Any] = None,
+    make_kwargs: Optional[dict[str, Any]] = None,
 ) -> Optional[dict[str, LiftedParameterizedController]]:
     """Automatically load LiftedParameterizedControllers for a given environment.
 
@@ -31,7 +34,7 @@ def get_controllers_for_environment(
         module_path = f"kinder_models.{env_class_name}.{env_name}.parameterized_skills"
 
     return _import_lifted_controllers(
-        module_path, env_name, env_class_name, action_space
+        module_path, env_name, env_class_name, action_space, make_kwargs=make_kwargs
     )
 
 
@@ -40,6 +43,7 @@ def _import_lifted_controllers(
     env_name: str,
     env_class_name: str,
     action_space: Optional[Any] = None,
+    make_kwargs: Optional[dict[str, Any]] = None,
 ) -> Optional[dict[str, LiftedParameterizedController]]:
     """Import LiftedParameterizedControllers using create_lifted_controllers method.
 
@@ -93,7 +97,7 @@ def _import_lifted_controllers(
                 )
 
             sim_class = getattr(env_module, sim_class_name)
-            sim = sim_class()
+            sim = sim_class(**(make_kwargs or {}))
 
             # Call with (action_space, sim) for kinematic3d
             lifted_controllers = create_lifted_controllers(action_space, sim)

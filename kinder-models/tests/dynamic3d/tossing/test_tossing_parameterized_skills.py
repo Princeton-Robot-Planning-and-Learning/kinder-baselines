@@ -15,7 +15,8 @@ from relational_structs.utils import create_state_from_dict
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.shelf.parameterized_skills import (
-    create_lifted_controllers as shelf_create_lifted_controllers,)
+    create_lifted_controllers as shelf_create_lifted_controllers,
+)
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,

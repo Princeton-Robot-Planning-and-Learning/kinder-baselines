@@ -21,6 +21,7 @@ Examples:
 
 import logging
 import os
+from typing import Any
 
 import hydra
 import kinder
@@ -33,6 +34,7 @@ from prpl_utils.utils import sample_seed_from_rng, timer
 
 from kinder_vlm_planning.agent import VLMPlanningAgent, VLMPlanningAgentFailure
 from kinder_vlm_planning.env_controllers import get_controllers_for_environment
+from kinder_vlm_planning.in_context_examples_loader import get_in_context_examples
 
 
 @hydra.main(version_base=None, config_name="config", config_path="conf/")
@@ -41,10 +43,13 @@ def _main(cfg: DictConfig) -> None:
     logging.info(f"Running seed={cfg.seed}, env={cfg.env}, vlm_model={cfg.vlm_model}")
     # Create the environment.
     kinder.register_all_environments()
+    make_kwargs: dict[str, Any] = {}
     if cfg.get("rgb_observation", False):
-        env = kinder.make(f"kinder/{cfg.env}", render_mode="rgb_array")
-    else:
-        env = kinder.make(f"kinder/{cfg.env}")
+        make_kwargs["render_mode"] = "rgb_array"
+    # Enable state access for 3D environments (controllers need to call set_state)
+    if "3D" in cfg.env or "3d" in cfg.env:
+        make_kwargs["allow_state_access"] = True
+    env = kinder.make(f"kinder/{cfg.env}", **make_kwargs)
     assert env.spec is not None, "Environment spec must not be None"
     assert hasattr(
         env.spec, "entry_point"
@@ -56,9 +61,19 @@ def _main(cfg: DictConfig) -> None:
     env_class_name = parts[-2]  # "kinematic2d"
     env_name = parts[-1]  # "motion2d"
 
+    # Load in-context examples for this environment
+    in_context_examples = get_in_context_examples(env_class_name, env_name, env)
+
     # Load environment-specific controllers if available.
+    if env_class_name == "dynamic3d":
+        if cfg.env.startswith("SweepIntoDrawer3D"):
+            env_name = "sweep3D"  # NOTE: renaming for parameterized skills
+        elif cfg.env.startswith("Shelf3D"):
+            env_name = "shelf"  # NOTE: renaming for parameterized skills
+        else:
+            raise ValueError(f"Unrecognized dynamic3d environment name: {cfg.env}")
     env_controllers = get_controllers_for_environment(
-        env_class_name, env_name, action_space=env.action_space
+        env_class_name, env_name, action_space=env.action_space, make_kwargs=make_kwargs
     )
     assert env_controllers is not None, "Environment controllers must be available"
 
@@ -71,6 +86,7 @@ def _main(cfg: DictConfig) -> None:
         max_planning_horizon=cfg.max_eval_steps,
         seed=cfg.seed,
         rgb_observation=cfg.get("rgb_observation", False),
+        prompt_type=cfg.get("prompt_type", "basic"),
     )
 
     # Evaluate.
@@ -84,6 +100,7 @@ def _main(cfg: DictConfig) -> None:
                 env,
                 rng,
                 max_eval_steps=cfg.max_eval_steps,
+                in_context_examples=in_context_examples,
             )
             episode_metrics["eval_episode"] = eval_episode
             metrics.append(episode_metrics)
@@ -126,6 +143,7 @@ def _run_single_episode_evaluation(
     env: Env,
     rng: np.random.Generator,
     max_eval_steps: int,
+    in_context_examples: str,
 ) -> dict[str, float | bool | str]:
     steps = 0
     success = False
@@ -142,6 +160,7 @@ def _run_single_episode_evaluation(
         env.metadata["description"] is not None
     ), "Environment must have a description."
     info.update({"description": env.metadata["description"]})
+    info.update({"in_context_examples": in_context_examples})
     planning_time = 0.0  # time spent generating plans (VLM queries)
     execution_time = 0.0  # time spent executing the policy (getting actions)
     planning_failed = False
