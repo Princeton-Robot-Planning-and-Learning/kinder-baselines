@@ -1,19 +1,29 @@
 """Tests for tidybot3d_base_motion.py."""
 
 import kinder
+from pathlib import Path
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
+from kinder.envs.dynamic3d.envs import TidyBot3DEnv
 
 from kinder_bilevel_planning.agent import BilevelPlanningAgent
 from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
 kinder.register_all_environments()
 
+_TEST_TASKS = (
+    Path(kinder.__file__).parent.parent.parent
+    / "tests" / "envs" / "dynamic3d" / "test_tasks"
+)
+
 
 def test_tidybot3d_base_motion_bilevel_planning():
     """Tests for bilevel planning in the TidyBot3D base motion environment."""
 
-    env = kinder.make("kinder/TidyBot3D-base_motion-o1-v0", render_mode="rgb_array")
+    env = TidyBot3DEnv(
+        task_config_path=str(_TEST_TASKS / "tidybot-base_motion-o1.json"),
+        render_mode="rgb_array",
+    )
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos", name_prefix="TidyBot3D-base_motion")
