@@ -1,8 +1,9 @@
 """Test utils for dynamic3d models."""
 
+from pathlib import Path
+
 import kinder
 import numpy as np
-from pathlib import Path
 from kinder.envs.dynamic3d.envs import TidyBot3DEnv
 from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
 from matplotlib import pyplot as plt
