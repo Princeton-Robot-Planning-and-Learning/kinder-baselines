@@ -1,7 +1,10 @@
 """Test utils for dynamic3d models."""
 
+from pathlib import Path
+
 import kinder
 import numpy as np
+from kinder.envs.dynamic3d.envs import TidyBot3DEnv
 from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
 from matplotlib import pyplot as plt
 from relational_structs import ObjectCentricState
@@ -20,6 +23,8 @@ from kinder_models.dynamic3d.utils import (
 
 kinder.register_all_environments()
 
+_TEST_TASKS = Path(__file__).parent.parent / "test_tasks"
+
 
 def _get_robot_from_state(state: ObjectCentricState):
     """Helper to get robot object from state by type."""
@@ -32,7 +37,7 @@ def test_get_overhead_object_se2_pose():
     """Tests for get_overhead_object_se2_pose()."""
 
     # Get a real object-centric state.
-    env = kinder.make("kinder/TidyBot3D-ground-o1-v0")
+    env = TidyBot3DEnv(task_config_path=str(_TEST_TASKS / "tidybot-ground-o1.json"))
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     obs, _ = env.reset(seed=123)
     state1 = env.observation_space.devectorize(obs)
@@ -60,7 +65,7 @@ def test_get_overhead_robot_se2_pose():
     """Tests for get_overhead_robot_se2_pose()."""
 
     # Get a real object-centric state.
-    env = kinder.make("kinder/TidyBot3D-ground-o1-v0")
+    env = TidyBot3DEnv(task_config_path=str(_TEST_TASKS / "tidybot-ground-o1.json"))
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     obs, _ = env.reset(seed=123)
     state1 = env.observation_space.devectorize(obs)
@@ -80,7 +85,7 @@ def test_get_overhead_robot_se2_pose():
 
 def test_get_overhead_kinematic2ds():
     """Tests for get_overhead_kinematic2ds()."""
-    env = kinder.make("kinder/TidyBot3D-ground-o1-v0")
+    env = TidyBot3DEnv(task_config_path=str(_TEST_TASKS / "tidybot-ground-o1.json"))
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     obs, _ = env.reset(seed=123)
     state = env.observation_space.devectorize(obs)
@@ -96,7 +101,10 @@ def test_get_overhead_kinematic2ds():
 def test_plot_overhead_scene():
     """Tests for plot_overhead_scene()."""
 
-    env = kinder.make("kinder/TidyBot3D-ground-o3-v0", render_mode="rgb_array")
+    env = TidyBot3DEnv(
+        task_config_path=str(_TEST_TASKS / "tidybot-ground-o3.json"),
+        render_mode="rgb_array",
+    )
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     obs, _ = env.reset(seed=123)
     state = env.observation_space.devectorize(obs)
