@@ -15,7 +15,9 @@ def test_tidybot3d_sweep_bilevel_planning():
 
     num_objects = 5
     env = kinder.make(
-        f"kinder/SweepIntoDrawer3D-o{num_objects}-v0", render_mode="rgb_array"
+        f"kinder/SweepIntoDrawer3D-o{num_objects}-v0",
+        render_mode="rgb_array",
+        scene_bg=True,
     )
 
     if MAKE_VIDEOS:

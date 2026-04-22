@@ -78,7 +78,9 @@ def test_pick_place_skill():
 
     # Create the environment.
     num_cubes = 1
-    env = kinder.make(f"kinder/Shelf3D-o{num_cubes}-v0", render_mode="rgb_array")
+    env = kinder.make(
+        f"kinder/Shelf3D-o{num_cubes}-v0", render_mode="rgb_array", scene_bg=True
+    )
     if MAKE_VIDEOS:
         env = RecordVideo(
             env, "unit_test_videos", name_prefix=f"TidyBot3D-cupboard-o{num_cubes}-real"
@@ -147,7 +149,9 @@ def test_pick_place_two_cubes_skill():
 
     # Create the environment.
     num_cubes = 2
-    env = kinder.make(f"kinder/Shelf3D-o{num_cubes}-v0", render_mode="rgb_array")
+    env = kinder.make(
+        f"kinder/Shelf3D-o{num_cubes}-v0", render_mode="rgb_array", scene_bg=True
+    )
     if MAKE_VIDEOS:
         env = RecordVideo(
             env, "unit_test_videos", name_prefix=f"TidyBot3D-cupboard-o{num_cubes}-real"

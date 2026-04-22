@@ -49,7 +49,10 @@ def create_bilevel_planning_models(
 
     _task_config_path = str(
         Path(kinder.__file__).parent
-        / "envs" / "dynamic3d" / "tasks" / "Shelf3D"
+        / "envs"
+        / "dynamic3d"
+        / "tasks"
+        / "Shelf3D"
         / f"Shelf3D-o{num_objects}.json"
     )
     sim = ObjectCentricTidyBot3DEnv(

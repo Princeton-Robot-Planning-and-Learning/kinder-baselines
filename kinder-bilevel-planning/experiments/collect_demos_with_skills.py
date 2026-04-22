@@ -118,7 +118,10 @@ def _collect_single_demo(
     planning_timeout: float,
     max_eval_steps: int,
 ) -> dict | None:
-    """Attempt one demo collection.  Returns demo dict or None on failure."""
+    """Attempt one demo collection.
+
+    Returns demo dict or None on failure.
+    """
     obs, _ = env.reset(seed=seed)
 
     result = _run_planning_with_logging(
@@ -245,8 +248,8 @@ def _main(cfg: DictConfig) -> None:
         )
 
         if demo is not None:
-            env_id_clean = cfg.env.make_kwargs["id"].replace("kinder/", "").replace(
-                "/", "_"
+            env_id_clean = (
+                cfg.env.make_kwargs["id"].replace("kinder/", "").replace("/", "_")
             )
             fname = f"{env_id_clean}_seed{seed}.pkl"
             path = demo_dir / fname
@@ -256,7 +259,10 @@ def _main(cfg: DictConfig) -> None:
             successful += 1
 
     logging.info(
-        "Done. Collected %d/%d demos in %d attempts.", successful, num_demos, attempt + 1
+        "Done. Collected %d/%d demos in %d attempts.",
+        successful,
+        num_demos,
+        attempt + 1,
     )
 
     if successful == 0:

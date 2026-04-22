@@ -18,8 +18,7 @@ from relational_structs.utils import create_state_from_dict
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.shelf.parameterized_skills import (
-    create_lifted_controllers as shelf_create_lifted_controllers,
-)
+    create_lifted_controllers as shelf_create_lifted_controllers,)
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,
@@ -601,6 +600,7 @@ def test_pick_place_shelf():
         f"kinder/Shelf3D-o{num_cubes}-v0",
         render_mode="rgb_array",
         allow_state_access=True,
+        scene_bg=True,
     )
     if MAKE_VIDEOS:
         env = RecordVideo(
@@ -891,7 +891,7 @@ def test_pick_toss():
     env = kinder.make(
         f"kinder/Tossing3D-o{num_cubes}-v0",
         render_mode="rgb_array",
-        scene_bg=False,
+        scene_bg=True,
     )
     if MAKE_VIDEOS:
         env.unwrapped._object_centric_env.set_render_camera("task_view")  # type: ignore # pylint: disable=protected-access
@@ -1097,7 +1097,7 @@ def test_pick_ground_toss():
     env = kinder.make(
         f"kinder/Tossing3D-o{num_cubes}-v0",
         render_mode="rgb_array",
-        scene_bg=False,
+        scene_bg=True,
     )
     if MAKE_VIDEOS:
         env.unwrapped._object_centric_env.set_render_camera("task_view")  # type: ignore # pylint: disable=protected-access

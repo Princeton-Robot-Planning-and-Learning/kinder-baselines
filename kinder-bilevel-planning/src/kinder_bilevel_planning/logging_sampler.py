@@ -67,12 +67,13 @@ class LoggingParameterizedControllerTrajectorySampler(
         self._all_records.clear()
 
     def extract_plan_records(
-        self, plan: Plan,
+        self,
+        plan: Plan,
     ) -> list[SkillExecutionRecord]:
         """Match logged records to the final successful plan.
 
-        Walks through Plan.states and finds the unique sequence of records
-        whose states/actions tiles cover the plan exactly.
+        Walks through Plan.states and finds the unique sequence of records whose
+        states/actions tiles cover the plan exactly.
         """
         matched: list[SkillExecutionRecord] = []
         plan_idx = 0  # current position in plan.states

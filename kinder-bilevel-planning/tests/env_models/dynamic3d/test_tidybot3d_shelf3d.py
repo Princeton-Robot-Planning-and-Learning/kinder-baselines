@@ -14,7 +14,9 @@ def test_tidybot3d_cupboard_bilevel_planning():
     """Tests for bilevel planning in the Shelf3D real environment."""
 
     num_objects = 1
-    env = kinder.make(f"kinder/Shelf3D-o{num_objects}-v0", render_mode="rgb_array")
+    env = kinder.make(
+        f"kinder/Shelf3D-o{num_objects}-v0", render_mode="rgb_array", scene_bg=True
+    )
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos", name_prefix="TidyBot3D-shelf3d")

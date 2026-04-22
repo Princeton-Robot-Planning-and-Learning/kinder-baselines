@@ -29,7 +29,9 @@ def test_open_drawer():
     # Create the environment.
     num_cubes = 5
     env = kinder.make(
-        f"kinder/SweepIntoDrawer3D-o{num_cubes}-v0", render_mode="rgb_array"
+        f"kinder/SweepIntoDrawer3D-o{num_cubes}-v0",
+        render_mode="rgb_array",
+        scene_bg=True,
     )
     if MAKE_VIDEOS:
         env = RecordVideo(
@@ -82,7 +84,9 @@ def test_pick_wiper():
     # Create the environment.
     num_cubes = 5
     env = kinder.make(
-        f"kinder/SweepIntoDrawer3D-o{num_cubes}-v0", render_mode="rgb_array"
+        f"kinder/SweepIntoDrawer3D-o{num_cubes}-v0",
+        render_mode="rgb_array",
+        scene_bg=True,
     )
     if MAKE_VIDEOS:
         env = RecordVideo(
@@ -135,7 +139,9 @@ def test_open_drawer_pick_sweep_wiper():
     # Create the environment.
     num_cubes = 5
     env = kinder.make(
-        f"kinder/SweepIntoDrawer3D-o{num_cubes}-v0", render_mode="rgb_array"
+        f"kinder/SweepIntoDrawer3D-o{num_cubes}-v0",
+        render_mode="rgb_array",
+        scene_bg=True,
     )
     if MAKE_VIDEOS:
         env = RecordVideo(

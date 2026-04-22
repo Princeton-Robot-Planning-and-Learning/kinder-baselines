@@ -28,7 +28,9 @@ def test_sweep3D_state_abstraction():
     kinder.register_all_environments()
     num_objects = 5
     env = kinder.make(
-        f"kinder/SweepIntoDrawer3D-o{num_objects}-v0", render_mode="rgb_array"
+        f"kinder/SweepIntoDrawer3D-o{num_objects}-v0",
+        render_mode="rgb_array",
+        scene_bg=True,
     )
     if MAKE_VIDEOS:
         env = RecordVideo(
