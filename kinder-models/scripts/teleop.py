@@ -4,7 +4,7 @@ Saves demonstrations in the same format as collect_demos_ds.py for compatibility
 generate_demo_video.py and other kinder tools.
 
 Example usage:
-    python teleop_dynamics3d_prbench.py \
+    python teleop.py \
         --teleop-device vr \
         --env-name Tossing3D-o1-v0 \
         --show-images \
