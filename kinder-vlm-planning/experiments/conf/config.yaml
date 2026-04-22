@@ -8,6 +8,7 @@ vlm_model: "gpt-5"
 temperature: 1
 rgb_observation: true
 use_env_models: true
+prompt_type: "basic"  # "basic" or "llmplanner"
 
 # Evaluation configuration
 seed: 0

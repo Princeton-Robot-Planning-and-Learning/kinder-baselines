@@ -128,8 +128,8 @@ class OpenDrawerSweepController(
         # Update the current state and parameters.
         self._last_state = x
 
-        assert isinstance(params, np.ndarray)
-        self._current_params = params.copy()
+        # Convert params to ndarray for compatibility (accepts tuple or array)
+        self._current_params = np.asarray(params, dtype=np.float32)
         # Derive the target pose for the robot.
         target_distance, target_rot = self._current_params
         target_object = self.objects[1]
@@ -496,8 +496,8 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
         # Update the current state and parameters.
         self._last_state = x
 
-        assert isinstance(params, np.ndarray)
-        self._current_params = params.copy()
+        # Convert params to ndarray for compatibility (accepts tuple or array)
+        self._current_params = np.asarray(params, dtype=np.float32)
         # Derive the target pose for the robot.
         target_distance, target_rot = self._current_params
         target_object = self.objects[1]
@@ -807,8 +807,8 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         # Update the current state and parameters.
         self._last_state = x
 
-        assert isinstance(params, np.ndarray)
-        self._current_params = params.copy()
+        # Convert params to ndarray for compatibility (accepts tuple or array)
+        self._current_params = np.asarray(params, dtype=np.float32)
         # Derive the target pose for the robot.
         target_distance, target_rot = self._current_params
         target_object = self.objects[3]

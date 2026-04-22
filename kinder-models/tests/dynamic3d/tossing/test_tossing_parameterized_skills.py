@@ -1,9 +1,12 @@
 """Tests for ground parameterized skills."""
 
+from pathlib import Path
+
 import kinder
 import numpy as np
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
+from kinder.envs.dynamic3d.envs import TidyBot3DEnv
 from kinder.envs.dynamic3d.object_types import (
     MujocoMovableObjectType,
     MujocoObjectTypeFeatures,
@@ -15,13 +18,16 @@ from relational_structs.utils import create_state_from_dict
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.shelf.parameterized_skills import (
-    create_lifted_controllers as shelf_create_lifted_controllers,)
+    create_lifted_controllers as shelf_create_lifted_controllers,
+)
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,
 )
 
 kinder.register_all_environments()
+
+_TEST_TASKS = Path(__file__).parent.parent.parent / "test_tasks"
 
 
 def _get_robot_from_state(state: ObjectCentricState):
@@ -137,8 +143,9 @@ def test_move_to_target_controller_one_cube():
 
     # Create the environment.
     num_cubes = 1
-    env = kinder.make(
-        f"kinder/TidyBot3D-ground-o{num_cubes}-v0", render_mode="rgb_array"
+    env = TidyBot3DEnv(
+        task_config_path=str(_TEST_TASKS / f"tidybot-ground-o{num_cubes}.json"),
+        render_mode="rgb_array",
     )
     if MAKE_VIDEOS:
         env = RecordVideo(
@@ -182,8 +189,9 @@ def test_move_to_target_arm_configuration():
 
     # Create the environment.
     num_cubes = 1
-    env = kinder.make(
-        f"kinder/TidyBot3D-ground-o{num_cubes}-v0", render_mode="rgb_array"
+    env = TidyBot3DEnv(
+        task_config_path=str(_TEST_TASKS / f"tidybot-ground-o{num_cubes}.json"),
+        render_mode="rgb_array",
     )
     if MAKE_VIDEOS:
         env = RecordVideo(
@@ -225,8 +233,9 @@ def test_move_to_target_arm_end_effector():
 
     # Create the environment.
     num_cubes = 1
-    env = kinder.make(
-        f"kinder/TidyBot3D-ground-o{num_cubes}-v0", render_mode="rgb_array"
+    env = TidyBot3DEnv(
+        task_config_path=str(_TEST_TASKS / f"tidybot-ground-o{num_cubes}.json"),
+        render_mode="rgb_array",
     )
     if MAKE_VIDEOS:
         env = RecordVideo(
@@ -279,8 +288,9 @@ def test_close_gripper_controller():
 
     # Create the environment.
     num_cubes = 1
-    env = kinder.make(
-        f"kinder/TidyBot3D-ground-o{num_cubes}-v0", render_mode="rgb_array"
+    env = TidyBot3DEnv(
+        task_config_path=str(_TEST_TASKS / f"tidybot-ground-o{num_cubes}.json"),
+        render_mode="rgb_array",
     )
     if MAKE_VIDEOS:
         env = RecordVideo(
@@ -385,8 +395,8 @@ def test_pick_place_ground():
 
     # Create the environment.
     num_cubes = 1
-    env = kinder.make(
-        f"kinder/TidyBot3D-ground-o{num_cubes}-v0",
+    env = TidyBot3DEnv(
+        task_config_path=str(_TEST_TASKS / f"tidybot-ground-o{num_cubes}.json"),
         render_mode="rgb_array",
         allow_state_access=True,
     )
@@ -789,8 +799,8 @@ def test_velocity_tracking_mode():
 
     # Create the environment.
     num_cubes = 1
-    env = kinder.make(
-        f"kinder/TidyBot3D-ground-o{num_cubes}-v0",
+    env = TidyBot3DEnv(
+        task_config_path=str(_TEST_TASKS / f"tidybot-ground-o{num_cubes}.json"),
         render_mode="rgb_array",
         allow_state_access=True,
     )

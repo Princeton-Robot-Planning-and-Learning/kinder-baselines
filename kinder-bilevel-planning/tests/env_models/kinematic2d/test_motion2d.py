@@ -6,11 +6,23 @@ import imageio.v2 as iio
 import kinder
 import numpy as np
 import pytest
+from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
+    RelationalHeuristicSearchAbstractPlanGenerator,
+)
+from bilevel_planning.bilevel_planners.sesame_planner import SesamePlanner
+from bilevel_planning.structs import PlanningProblem
+from bilevel_planning.utils import (
+    RelationalAbstractSuccessorGenerator,
+    RelationalControllerGenerator,
+)
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 
 from kinder_bilevel_planning.agent import BilevelPlanningAgent
 from kinder_bilevel_planning.env_models import create_bilevel_planning_models
+from kinder_bilevel_planning.logging_sampler import (
+    LoggingParameterizedControllerTrajectorySampler,
+)
 
 kinder.register_all_environments()
 
@@ -279,5 +291,105 @@ def test_motion2d_bilevel_planning(num_passages, max_abstract_plans, samples_per
             break
     else:
         assert False, "Did not terminate successfully"
+
+    env.close()
+
+
+def test_motion2d_plan_and_replay_controllers():
+    """Plan with logging sampler, then replay ground controllers in the env.
+
+    1. Reset the environment.
+    2. Run bilevel planning with the logging sampler to get a plan + skill records.
+    3. Re-reset the env with the same seed, then execute each ground controller
+       in sequence using the recorded parameters.
+    4. Verify the environment reaches the goal.
+    """
+    num_passages = 0
+    seed = 123
+
+    env = kinder.make(f"kinder/Motion2D-p{num_passages}-v0", render_mode="rgb_array")
+    env_models = create_bilevel_planning_models(
+        "motion2d",
+        env.observation_space,
+        env.action_space,
+        num_passages=num_passages,
+    )
+
+    # --- Step 1 & 2: plan with logging sampler ---
+    obs, _ = env.reset(seed=seed)
+    initial_state = env_models.observation_to_state(obs)
+    goal = env_models.goal_deriver(initial_state)
+
+    problem = PlanningProblem(
+        env_models.state_space,
+        env_models.action_space,
+        initial_state,
+        env_models.transition_fn,
+        goal,
+    )
+
+    trajectory_sampler = LoggingParameterizedControllerTrajectorySampler(
+        controller_generator=RelationalControllerGenerator(env_models.skills),
+        transition_function=env_models.transition_fn,
+        state_abstractor=env_models.state_abstractor,
+        max_trajectory_steps=100,
+    )
+
+    abstract_plan_generator = RelationalHeuristicSearchAbstractPlanGenerator(
+        env_models.types,
+        env_models.predicates,
+        env_models.operators,
+        "hff",
+        seed=seed,
+    )
+
+    abstract_successor_fn = RelationalAbstractSuccessorGenerator(env_models.operators)
+
+    planner = SesamePlanner(
+        abstract_plan_generator,
+        trajectory_sampler,
+        10,  # max_abstract_plans
+        3,  # num_sampling_attempts_per_step
+        abstract_successor_fn,
+        env_models.state_abstractor,
+        seed=seed,
+    )
+
+    trajectory_sampler.clear()
+    plan, _ = planner.run(problem, timeout=30.0)
+    assert plan is not None, "Planning failed"
+
+    skill_records = trajectory_sampler.extract_plan_records(plan)
+    assert len(skill_records) > 0
+
+    # --- Step 3: replay controllers in a fresh env reset ---
+    obs, _ = env.reset(seed=seed)
+    state = env_models.observation_to_state(obs)
+
+    for rec in skill_records:
+        # Recreate the ground controller from the skill's lifted controller.
+        skill_name_to_skill = {s.operator.name: s for s in env_models.skills}
+        lifted_skill = skill_name_to_skill[rec.ground_operator.name]
+        ground_controller = lifted_skill.controller.ground(
+            rec.ground_operator.parameters
+        )
+
+        # Reset with the recorded parameters.
+        ground_controller.reset(state, rec.params)
+
+        for _ in range(200):
+            if ground_controller.terminated():
+                break
+            action = ground_controller.step()
+            obs, _, _, _, _ = env.step(action)
+            state = env_models.observation_to_state(obs)
+            ground_controller.observe(state)
+
+    # --- Step 4: verify goal reached ---
+    abstract_state = env_models.state_abstractor(state)
+    goal_atoms = goal.atoms
+    assert goal_atoms.issubset(abstract_state.atoms), (
+        f"Goal not reached. Expected {goal_atoms} ⊆ {abstract_state.atoms}"
+    )
 
     env.close()

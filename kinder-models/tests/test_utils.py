@@ -1,9 +1,11 @@
 """Tests for utils.py."""
 
-import kinder
+from pathlib import Path
+
 from kinder.envs.dynamic3d.envs import (
     MujocoTidyBotRobotObjectType,
     ObjectCentricTidyBot3DEnv,
+    TidyBot3DEnv,
 )
 from kinder_bilevel_planning.env_models.dynamic3d.tidybot3d_base_motion import (
     create_bilevel_planning_models,
@@ -25,8 +27,10 @@ def test_kinder_parameterized_skill_env():
     """Tests for KinDERParameterizedSkillEnv()."""
 
     # Set up the environment.
-    kinder.register_all_environments()
-    kinder_env = kinder.make("kinder/TidyBot3D-base_motion-o1-v0")
+    _test_tasks = Path(__file__).parent / "test_tasks"
+    kinder_env = TidyBot3DEnv(
+        task_config_path=str(_test_tasks / "tidybot-base_motion-o1.json")
+    )
     sim = kinder_env.unwrapped._object_centric_env  # pylint: disable=protected-access
     assert isinstance(sim, ObjectCentricTidyBot3DEnv)
     env_models = create_bilevel_planning_models(
