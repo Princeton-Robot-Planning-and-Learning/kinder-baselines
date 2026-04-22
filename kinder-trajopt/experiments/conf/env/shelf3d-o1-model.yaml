@@ -1,0 +1,8 @@
+env_id: "kinder/Shelf3D-o1-v0"
+max_eval_steps: 500
+replan_interval: 50
+
+use_checkpoint: True
+checkpoint: "../kinder-mbrl/output/wm_shelf3d_106_new_ep1000_20260405_004246.pt"
+
+preserved_indices: [13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
