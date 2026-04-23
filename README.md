@@ -12,6 +12,8 @@ Baseline methods for the [KinDER](https://github.com/Princeton-Robot-Planning-an
 | `kinder-models` | Model zoo (skills, operators, samplers) |
 | `kinder-rl` | Reinforcement learning baselines |
 | `kinder-vlm-planning` | Vision-language model planning baselines |
+| `kinder-trajopt` | Model-predictive control baselines |
+| `kinder-mbrl` | Model-based reinforcement learning (world model) baselines |
 
 ## Installation
 

@@ -1,7 +1,7 @@
 """Run trajopt experiments across all environments, 5 seeds each.
 
 Usage:
-    python scripts/run_all_envs.py
+    python scripts/run_all_wm_envs.py
 Run from the kinder-trajopt directory.
 """
 
@@ -15,8 +15,15 @@ import sys
 #     "motion2d-p0-model",
 # ]
 
+# ENVS = [
+#     "dynobstruction2d-o1-model",
+# ]
+
 ENVS = [
-    "dynobstruction2d-o1-model",
+    "dynpushpullhook2d-o5-model",
+    "shelf3d-o1-model",
+    "transport3d-o2-model",
+    "sweepintodrawer3d-o5-model",
 ]
 
 for env in ENVS:
