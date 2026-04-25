@@ -19,7 +19,7 @@ dependencies = [
    "dacite",
    "gymnasium[classic-control]==0.29.1",
    "tensorboard",
-   "kindergarden>=0.0.8",
+   "kindergarden>=0.0.11",
 ]
 
 [project.optional-dependencies]
