@@ -144,7 +144,8 @@ def _run_single_episode_evaluation(
     seed = sample_seed_from_rng(rng)
     obs, info = env.reset(seed=seed)
     planning_time = 0.0  # time spent generating plans (abstract + skill planning)
-    execution_time = 0.0  # time spent executing the policy (getting actions)
+    execution_time = 0.0  # time spent in agent.step() + agent.update()
+    env_step_time = 0.0   # time spent in env.step() (physics + rendering)
     planning_failed = False
     with timer() as result:
         try:
@@ -153,6 +154,7 @@ def _run_single_episode_evaluation(
             logging.info(f"Agent failed during reset(): {e}")
             planning_failed = True
     planning_time += result["time"]
+    logging.debug(f"Planning took {result['time']:.2f}s")
     if planning_failed:
         return {
             "success": False,
@@ -178,7 +180,9 @@ def _run_single_episode_evaluation(
                 "execution_time": execution_time,
                 "reward": total_reward,
             }
-        obs, rew, done, truncated, info = env.step(action)
+        with timer() as result:
+            obs, rew, done, truncated, info = env.step(action)
+        env_step_time += result["time"]
         reward = float(rew)
         total_reward += reward
         assert not truncated
@@ -193,7 +197,10 @@ def _run_single_episode_evaluation(
             success = True
             break
         steps += 1
-    logging.info(f"Success result: {success}")
+    logging.info(f"Success result: {success}, steps={steps}")
+    logging.debug(
+        f"Timing: policy={execution_time:.2f}s, env.step={env_step_time:.2f}s"
+    )
     return {
         "success": success,
         "steps": steps,
