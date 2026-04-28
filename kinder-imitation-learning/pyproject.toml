@@ -18,7 +18,7 @@ dependencies = [
     "matplotlib",
     "wandb",
     "tqdm",
-    "kindergarden>=0.0.11",
+    "kindergarden>=0.1.0",
 ]
 
 [project.optional-dependencies]
