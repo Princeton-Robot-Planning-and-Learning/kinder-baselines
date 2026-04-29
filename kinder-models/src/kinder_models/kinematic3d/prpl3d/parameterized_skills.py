@@ -137,14 +137,19 @@ class GroundPickController(
             if len(self._current_base_plan) == 0:
                 self._navigated = True
             delta = target_base_pose - self._current_state.base_pose
-            return np.array([delta.x, delta.y, delta.rot] + [0.0] * 7 + [0.0], dtype=np.float32)
+            return np.array(
+                [delta.x, delta.y, delta.rot] + [0.0] * 7 + [0.0],
+                dtype=np.float32,
+            )
 
         # ── Phase 2: top-down approach + descent to grasp ────────────────────
         if self._navigated and not self._descended:
             if self._current_arm_joint_plan is None:
                 self._sim.set_state(self._current_state)
 
-                cube_pos = self._current_state.get_object_pose(self.objects[1].name).position
+                cube_pos = self._current_state.get_object_pose(
+                    self.objects[1].name
+                ).position
                 pre_grasp_pose = Pose.from_rpy(
                     (cube_pos[0], cube_pos[1], cube_pos[2] + _PRE_GRASP_Z_OFFSET),
                     _FLOOR_GRASP_RPY,
@@ -167,7 +172,9 @@ class GroundPickController(
                 except InverseKinematicsError:
                     joint_plan1 = None
                 if joint_plan1 is None:
-                    raise TrajectorySamplingFailure("Motion planning to pre-grasp failed")
+                    raise TrajectorySamplingFailure(
+                        "Motion planning to pre-grasp failed"
+                    )
 
                 # Descend to grasp pose.
                 self._sim.robot.arm.set_joints(joint_plan1[-1])
@@ -222,7 +229,7 @@ class GroundPickController(
                 grasped_id = self._sim._grasped_object_id  # pylint: disable=protected-access
                 grasped_tf = self._sim._grasped_object_transform  # pylint: disable=protected-access
                 all_ids = self._sim._get_collision_object_ids()  # pylint: disable=protected-access
-                joint_plan = run_motion_planning(
+                raw_plan = run_motion_planning(
                     self._sim.robot.arm,
                     initial_positions=self._sim.robot.arm.get_joint_positions(),
                     target_positions=HOME_JOINT_POSITIONS.tolist(),
@@ -232,10 +239,10 @@ class GroundPickController(
                     held_object=grasped_id,
                     base_link_to_held_obj=grasped_tf,
                 )
-                if joint_plan is None:
+                if raw_plan is None:
                     raise TrajectorySamplingFailure("Retract motion planning failed")
                 joint_plan = remap_joint_position_plan_to_constant_distance(
-                    joint_plan,
+                    raw_plan,
                     self._sim.robot.arm,
                     max_distance=self._sim.config.max_action_mag / 2,
                 )
@@ -265,10 +272,13 @@ class GroundPickController(
 class GroundPlaceController(BasePlaceController):
     """Place a cube onto the PRPL lab countertop."""
 
-    def __init__(self, objects: Sequence[Object], sim: ObjectCentricPrplLab3DEnv) -> None:
+    def __init__(
+        self, objects: Sequence[Object], sim: ObjectCentricPrplLab3DEnv
+    ) -> None:
         # The PRPL lab URDF has a dense mesh; give smooth MP enough time to
         # find a collision-free path around the cabinet geometry.
         super().__init__(objects, sim, smooth_mp_max_time=10.0)
+        self._sim: ObjectCentricPrplLab3DEnv = sim
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         assert isinstance(x, PrplLab3DObjectCentricState)
@@ -308,10 +318,18 @@ class GroundPlaceController(BasePlaceController):
 
             # Compute placement pose relative to the prpl_lab fixture.
             fixture_pose = self._current_state.get_object_pose(self.objects[2].name)
-            target_x = fixture_pose.position[0] + COUNTER_X_FROM_FIXTURE + self._current_params[0]
-            target_y = fixture_pose.position[1] + COUNTER_Y_FROM_FIXTURE + self._current_params[1]
+            target_x = (
+                fixture_pose.position[0]
+                + COUNTER_X_FROM_FIXTURE
+                + self._current_params[0]
+            )
+            target_y = (
+                fixture_pose.position[1]
+                + COUNTER_Y_FROM_FIXTURE
+                + self._current_params[1]
+            )
             block_half_z = self._sim.config.block_half_extents[2]
-            target_z = self._sim._counter_top_z + block_half_z
+            target_z = self._sim._counter_top_z + block_half_z  # pylint: disable=protected-access
 
             desired_object_pose = Pose((target_x, target_y, target_z), (0, 0, 0, 1))
 
@@ -369,10 +387,14 @@ def create_lifted_controllers(
     del action_space
 
     class PickController(GroundPickController):
+        """Pick controller bound to sim."""
+
         def __init__(self, objects):
             super().__init__(objects, sim)
 
     class PlaceController(GroundPlaceController):
+        """Place controller bound to sim."""
+
         def __init__(self, objects):
             super().__init__(objects, sim)
 
@@ -383,8 +405,12 @@ def create_lifted_controllers(
         [robot, target],
         PickController,
         Box(
-            low=np.array([MOVE_TO_TARGET_DISTANCE_BOUNDS[0], MOVE_TO_TARGET_ROT_BOUNDS[0]]),
-            high=np.array([MOVE_TO_TARGET_DISTANCE_BOUNDS[1], MOVE_TO_TARGET_ROT_BOUNDS[1]]),
+            low=np.array(
+                [MOVE_TO_TARGET_DISTANCE_BOUNDS[0], MOVE_TO_TARGET_ROT_BOUNDS[0]]
+            ),
+            high=np.array(
+                [MOVE_TO_TARGET_DISTANCE_BOUNDS[1], MOVE_TO_TARGET_ROT_BOUNDS[1]]
+            ),
         ),
     )
 
