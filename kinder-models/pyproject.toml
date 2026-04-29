@@ -15,7 +15,7 @@ dependencies = [
    "h5py",
    "flask-socketio",
    "opencv-python>=4.9.0",
-   "kindergarden>=0.0.9",
+   "kindergarden>=0.1.0",
    "relational_structs>=0.0.1",
    "bilevel_planning>=0.1.2",
 ]
