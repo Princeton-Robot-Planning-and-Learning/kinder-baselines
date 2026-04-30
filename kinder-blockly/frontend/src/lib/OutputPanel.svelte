@@ -14,6 +14,7 @@
   export let panelWidth = 0;
   export let canGoPrev = false;
   export let canGoNext = false;
+  export let showTarget = true;
 
   let el;
   let frameImg;
@@ -104,7 +105,7 @@
     frameRo.observe(frameImg);
 
     const updateLabelPad = () => {
-      targetLabelPad = Math.max(0, trailLabel.scrollHeight - targetLabel.scrollHeight);
+      targetLabelPad = targetLabel ? Math.max(0, trailLabel.scrollHeight - targetLabel.scrollHeight) : 0;
     };
     const labelRo = new ResizeObserver(updateLabelPad);
     labelRo.observe(trailLabel);
@@ -129,6 +130,7 @@
     <button class="nav-btn nav-next" disabled={!canGoNext} on:click={() => dispatch('nextFrame')}>&gt;</button>
     <div id="frame-info">{frameInfo}</div>
     <div id="canvas-row">
+      {#if showTarget}
       <div class="canvas-col">
         <span class="panel-label" bind:this={targetLabel} style="padding-top:{targetLabelPad}px">// TARGET</span>
         <div class="canvas-wrapper">
@@ -141,6 +143,7 @@
           ></canvas>
         </div>
       </div>
+      {/if}
       <div class="canvas-col">
         <span class="panel-label" bind:this={trailLabel}>// YOUR DRAWING</span>
         <canvas bind:this={trailCanvas} class="retro-border" width="220" height="220" style="width:{canvasSize}px;height:{canvasSize}px"></canvas>

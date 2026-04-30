@@ -47,35 +47,162 @@ class FieldColorSwatch extends Blockly.Field {
   setRGB(r, g, b) { this.setValue(`${r},${g},${b}`); }
 }
 
+class FieldDropdownDark extends Blockly.FieldDropdown {
+  initView() {
+    super.initView();
+    this.forceTextDark_();
+  }
+  applyColour() {
+    super.applyColour();
+    this.forceTextDark_();
+    if (this.arrow) this.arrow.style.setProperty('fill', '#1a1a1a', 'important');
+  }
+  render_() {
+    super.render_();
+    this.forceTextDark_();
+  }
+  showEditor_(opt_e) {
+    super.showEditor_(opt_e);
+    requestAnimationFrame(() => {
+      document.querySelector('.blocklyDropDownDiv')?.classList.add('kinder-param-dropdown');
+    });
+  }
+  forceTextDark_() {
+    this.fieldGroup_?.querySelectorAll('text, tspan').forEach(el => {
+      el.style.setProperty('fill', '#1a1a1a', 'important');
+    });
+    if (this.textElement_) this.textElement_.style.setProperty('fill', '#1a1a1a', 'important');
+  }
+}
+
+// Walk up the parent chain to find the topmost block.
+function getChainHead(block) {
+  let b = block;
+  while (b) {
+    const parent = b.getParent();
+    if (!parent) return b;
+    b = parent;
+  }
+  return null;
+}
+
 export function registerBlocks() {
-  Blockly.Blocks['move_base_to_target'] = {
+  // Inline number block used as a shadow inside movement value inputs.
+  Blockly.Blocks['kinder_num'] = {
     init: function() {
       this.appendDummyInput()
-        .appendField('Move base to')
-        .appendField('x')
-        .appendField(new Blockly.FieldNumber(0, -2, 2, 0.1), 'X')
-        .appendField('y')
-        .appendField(new Blockly.FieldNumber(0, -2, 2, 0.1), 'Y');
+        .appendField(new Blockly.FieldNumber(0, null, null, 0.1), 'NUM');
+      this.setOutput(true, null);
+      this.setColour(260);
+      this.setTooltip('A number value.');
+    }
+  };
+
+  // Parameter reference block — yellow, dropdown of params from enclosing define_skill.
+  Blockly.Blocks['param_ref'] = {
+    init: function() {
+      const getOptions = function() {
+        const block = this.getSourceBlock();
+        if (!block) return [['(no params)', '__NONE__']];
+        const head = getChainHead(block);
+        if (head?.type !== 'define_skill') return [['(no params)', '__NONE__']];
+
+        // Filter params by the expected type of the parent input.
+        let expectedKind = null;
+        const parent = block.getParent();
+        if (parent) {
+          if (parent.type === 'set_pen_color') expectedKind = 'color';
+          else if (parent.type === 'move_base_to_target' || parent.type === 'move_base_by') expectedKind = 'num';
+        }
+
+        const count = parseInt(head.getFieldValue('ARGS')) || 0;
+        const opts = [];
+        for (let i = 0; i < count; i++) {
+          const name = head.getFieldValue('PARAM_NAME_' + i) || ('param' + (i + 1));
+          const type = head.getFieldValue('PARAM_TYPE_' + i) || 'int';
+          const isNum = type === 'int' || type === 'float';
+          const isColor = type === 'color';
+          if (expectedKind === 'num' && !isNum) continue;
+          if (expectedKind === 'color' && !isColor) continue;
+          opts.push([name, name]);
+        }
+        return opts.length ? opts : [['(no params)', '__NONE__']];
+      };
+      this.appendDummyInput()
+        .appendField(new FieldDropdownDark(getOptions), 'PARAM');
+      this.setOutput(true, null);
+      this.setStyle('param_style');
+      this.setTooltip('Reference a parameter from the enclosing skill.');
+    }
+  };
+
+  function collapseValueInput(block, inputName) {
+    const connected = block.getInput(inputName)?.connection?.targetBlock();
+    if (!connected) return { text: '?', isParam: false };
+    if (connected.type === 'param_ref') return { text: connected.getFieldValue('PARAM') || '?', isParam: true };
+    return { text: String(connected.getFieldValue('NUM') ?? '?'), isParam: false };
+  }
+
+  Blockly.Blocks['move_base_to_target'] = {
+    init: function() {
+      this.isCustomCollapsed_ = false;
+      this.appendValueInput('INPUT_X').appendField('Move base to x');
+      this.appendValueInput('INPUT_Y').appendField('y');
+      this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
       this.setColour(260);
       this.setTooltip('Move the robot base to the given (x, y) position.');
-    }
+    },
+    customCollapse_: function() {
+      this.isCustomCollapsed_ = true;
+      this.getInput('INPUT_X')?.setVisible(false);
+      this.getInput('INPUT_Y')?.setVisible(false);
+      if (this.getInput('SUM')) this.removeInput('SUM');
+      const x = collapseValueInput(this, 'INPUT_X');
+      const y = collapseValueInput(this, 'INPUT_Y');
+      const row = this.appendDummyInput('SUM').appendField('Move base to x');
+      row.appendField(x.isParam ? new FieldLabelUnderline(x.text) : x.text);
+      row.appendField('y');
+      row.appendField(y.isParam ? new FieldLabelUnderline(y.text) : y.text);
+    },
+    customExpand_: function() {
+      this.isCustomCollapsed_ = false;
+      if (this.getInput('SUM')) this.removeInput('SUM');
+      this.getInput('INPUT_X')?.setVisible(true);
+      this.getInput('INPUT_Y')?.setVisible(true);
+    },
   };
 
   Blockly.Blocks['move_base_by'] = {
     init: function() {
-      this.appendDummyInput()
-        .appendField('Move base by')
-        .appendField('x')
-        .appendField(new Blockly.FieldNumber(0, -4, 4, 0.1), 'DX')
-        .appendField('y')
-        .appendField(new Blockly.FieldNumber(0, -4, 4, 0.1), 'DY');
+      this.isCustomCollapsed_ = false;
+      this.appendValueInput('INPUT_DX').appendField('Move base by x');
+      this.appendValueInput('INPUT_DY').appendField('y');
+      this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
       this.setColour('#a88fe0');
       this.setTooltip('Move the robot base by (dx, dy) relative to its current position.');
-    }
+    },
+    customCollapse_: function() {
+      this.isCustomCollapsed_ = true;
+      this.getInput('INPUT_DX')?.setVisible(false);
+      this.getInput('INPUT_DY')?.setVisible(false);
+      if (this.getInput('SUM')) this.removeInput('SUM');
+      const dx = collapseValueInput(this, 'INPUT_DX');
+      const dy = collapseValueInput(this, 'INPUT_DY');
+      const row = this.appendDummyInput('SUM').appendField('Move base by x');
+      row.appendField(dx.isParam ? new FieldLabelUnderline(dx.text) : dx.text);
+      row.appendField('y');
+      row.appendField(dy.isParam ? new FieldLabelUnderline(dy.text) : dy.text);
+    },
+    customExpand_: function() {
+      this.isCustomCollapsed_ = false;
+      if (this.getInput('SUM')) this.removeInput('SUM');
+      this.getInput('INPUT_DX')?.setVisible(true);
+      this.getInput('INPUT_DY')?.setVisible(true);
+    },
   };
 
   Blockly.Blocks['set_pen_color'] = {
@@ -87,6 +214,7 @@ export function registerBlocks() {
       function makeValidator(ch) {
         return function(newVal) {
           const src = this.getSourceBlock();
+          if (!src) return newVal;
           const r = ch === 'R' ? Number(newVal) : Number(src.getFieldValue('R'));
           const g = ch === 'G' ? Number(newVal) : Number(src.getFieldValue('G'));
           const b = ch === 'B' ? Number(newVal) : Number(src.getFieldValue('B'));
@@ -102,16 +230,50 @@ export function registerBlocks() {
       gField.setValidator(makeValidator('G'));
       bField.setValidator(makeValidator('B'));
 
-      this.appendDummyInput()
-        .appendField('Set pen color')
+      this.appendValueInput('COLOR_PARAM').appendField('Set pen color');
+      this.appendDummyInput('RGB_ROW')
         .appendField('R').appendField(rField, 'R')
         .appendField('G').appendField(gField, 'G')
         .appendField('B').appendField(bField, 'B');
+      this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#ff0000'); // matches default R=255 G=0 B=0
-      this.setTooltip('Set the drawing colour (RGB 0-255).');
-    }
+      this.setColour('#ff0000');
+      this.setTooltip('Set the drawing colour (RGB 0-255 or a color parameter).');
+
+      this.setOnChange(function(evt) {
+        if ([Blockly.Events.BLOCK_MOVE, Blockly.Events.BLOCK_CHANGE,
+             Blockly.Events.BLOCK_CREATE, Blockly.Events.BLOCK_DELETE].includes(evt.type)) {
+          if (!this.isCustomCollapsed_) {
+            const hasParam = !!this.getInput('COLOR_PARAM')?.connection?.targetBlock();
+            this.getInput('RGB_ROW')?.setVisible(!hasParam);
+          }
+        }
+      });
+      this.isCustomCollapsed_ = false;
+    },
+    customCollapse_: function() {
+      this.isCustomCollapsed_ = true;
+      this.getInput('COLOR_PARAM')?.setVisible(false);
+      this.getInput('RGB_ROW')?.setVisible(false);
+      if (this.getInput('SUM')) this.removeInput('SUM');
+      const colorBlock = this.getInput('COLOR_PARAM')?.connection?.targetBlock();
+      if (colorBlock) {
+        const paramName = colorBlock.getFieldValue('PARAM') || '?';
+        this.appendDummyInput('SUM')
+          .appendField('Set pen color')
+          .appendField(new FieldLabelUnderline(paramName));
+      } else {
+        this.appendDummyInput('SUM').appendField('Set pen color');
+      }
+    },
+    customExpand_: function() {
+      this.isCustomCollapsed_ = false;
+      if (this.getInput('SUM')) this.removeInput('SUM');
+      this.getInput('COLOR_PARAM')?.setVisible(true);
+      const hasParam = !!this.getInput('COLOR_PARAM')?.connection?.targetBlock();
+      this.getInput('RGB_ROW')?.setVisible(!hasParam);
+    },
   };
 
   Blockly.Blocks['start'] = {
@@ -416,8 +578,14 @@ export const toolbox = {
       { kind: 'block', type: 'start' },
     ]},
     { kind: 'category', name: 'Movement', colour: '260', contents: [
-      { kind: 'block', type: 'move_base_to_target' },
-      { kind: 'block', type: 'move_base_by' },
+      { kind: 'block', type: 'move_base_to_target', inputs: {
+          INPUT_X: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
+          INPUT_Y: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
+      }},
+      { kind: 'block', type: 'move_base_by', inputs: {
+          INPUT_DX: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
+          INPUT_DY: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
+      }},
     ]},
     { kind: 'category', name: 'Pen', colour: '310', contents: [
       { kind: 'block', type: 'set_pen_color' },
@@ -427,6 +595,7 @@ export const toolbox = {
     { kind: 'category', name: 'Abstraction', colour: '#1e3a8a', contents: [
       { kind: 'block', type: 'define_skill' },
       { kind: 'block', type: 'use_skill' },
+      { kind: 'block', type: 'param_ref' },
     ]},
   ]
 };

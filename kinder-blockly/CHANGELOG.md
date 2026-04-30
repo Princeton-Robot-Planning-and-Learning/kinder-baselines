@@ -1,5 +1,39 @@
 # Changelog
 
+## [Unreleased] — 2026-04-30 (continued 7)
+
+### UI
+
+- **Target canvas hidden in free-draw mode** — `OutputPanel` gains a `showTarget` prop; `App.svelte` passes `currentChallenge !== null`, so the `// TARGET` canvas and label are only rendered when a challenge is active.
+
+---
+
+## [Unreleased] — 2026-04-30 (continued 6)
+
+### Blocks — `param_ref`
+
+- **New `param_ref` block** — yellow (`#fef9c3`) value block in the Abstraction toolbox. Drops into any value input of `move_base_to_target`, `move_base_by`, or `set_pen_color`. Dropdown lists parameters from the nearest enclosing `define_skill`, filtered by expected type (int/float for movement inputs, color for pen color input).
+- **Black text** — `FieldDropdownDark` subclass forces `fill: #1a1a1a !important` on all text/tspan elements after every render and colour pass, overriding Blockly's injected `.blocklyText { fill: #fff }` rule.
+- **Always connectable** — `param_ref` is never disabled; the dropdown shows `(no params)` when outside a `define_skill` body instead of graying the block out.
+- **Parent block disabled on `(no params)`** — `updateEnabledStates` grays out any block whose value input holds a `param_ref` with `__NONE__` selected. Choosing a valid param re-enables it immediately.
+
+### Blocks — Movement & Pen
+
+- **`move_base_to_target` and `move_base_by` use value inputs** — X/Y and DX/DY converted from `FieldNumber` fields to inline `appendValueInput` slots (`INPUT_X`, `INPUT_Y`, `INPUT_DX`, `INPUT_DY`). Default values are provided by `kinder_num` shadow blocks defined in the toolbox entries.
+- **`kinder_num` shadow block** — lightweight inline number block (`FieldNumber`, output null) used as the default shadow inside movement value inputs.
+- **`set_pen_color` accepts a color parameter** — a `COLOR_PARAM` value input sits above the RGB row. When a `param_ref` block is connected the RGB row hides; disconnecting it restores it. `setInputsInline(true)` makes the layout compact.
+- **`set_pen_color` custom collapse** — added to `CUSTOM_COLLAPSE`; collapsed view shows `Set pen color <param_name>` (underlined) when a param is connected, or just `Set pen color` otherwise. R/G/B fields never appear in the collapsed summary.
+
+### Blockly Workspace
+
+- **Value blocks don't trigger collapse** — when a block with an output connection (e.g. `param_ref`) is picked up from the toolbox, the previously selected block is no longer collapsed. This keeps value input slots visible while dragging a param block over them.
+- **Shadow blocks skipped in `updateEnabledStates`** — `kinder_num` shadow blocks are now excluded from the enabled/disabled pass so they are never grayed out.
+- **Canvas click/drag still works** — `setMoveCoords` and `setMoveDelta` now write into the shadow block's `NUM` field via `isShadow()` check instead of setting a field on the parent block directly.
+- **`getProgram` resolves `param_ref`** — `getNumFromInput` helper looks up the connected block: if it is a `param_ref`, returns `params[name]` from the current call frame; otherwise reads `NUM` from the shadow. `set_pen_color` likewise resolves a connected color `param_ref` via `callParams`.
+- **localStorage key bumped to `v2`** — invalidates old saves whose movement blocks used the previous field-based structure.
+
+---
+
 ## [Unreleased] — 2026-04-30 (continued 5)
 
 ### Blocks — Abstraction (use_skill params)

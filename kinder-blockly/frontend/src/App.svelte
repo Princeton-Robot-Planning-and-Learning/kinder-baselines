@@ -180,6 +180,7 @@
   <BlocklyWorkspace bind:this={blocklyWorkspace} on:message={e => tamaSay(e.detail, 4000)} />
   <OutputPanel
     {frameDataUrl} {frameInfo} {frameLabel} {studentTrail} {studentPenEvents} {targetTrail} score={scoreData}
+    showTarget={currentChallenge !== null}
     {canGoPrev} {canGoNext}
     bind:panelWidth={outputPanelWidth}
     on:gridClick={e => blocklyWorkspace.setMoveCoords(e.detail.x, e.detail.y)}

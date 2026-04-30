@@ -42,6 +42,7 @@
   }
 
   function openPicker(block) {
+    if (block.getInput('COLOR_PARAM')?.connection?.targetBlock()) return;
     const r = Number(block.getFieldValue('R'));
     const g = Number(block.getFieldValue('G'));
     const b = Number(block.getFieldValue('B'));
@@ -94,6 +95,13 @@
 
   const retroTheme = Blockly.Theme.defineTheme('retro', {
     base: Blockly.Themes.Classic,
+    blockStyles: {
+      param_style: {
+        colourPrimary:   '#fef9c3',
+        colourSecondary: '#fde047',
+        colourTertiary:  '#ca8a04',
+      },
+    },
     componentStyles: {
       workspaceBackgroundColour: '#080312',
       toolboxBackgroundColour:   '#0f0525',
@@ -107,22 +115,27 @@
     fontStyle: { family: "'Silkscreen', monospace", size: 12 },
   });
 
+  function setShadowNum(block, inputName, val) {
+    const connected = block.getInput(inputName)?.connection?.targetBlock();
+    if (connected?.isShadow()) connected.setFieldValue(String(val), 'NUM');
+  }
+
   export function setMoveCoords(x, y) {
     if (!lastMoveToBlock || lastMoveToBlock.isDisposed()) return;
     const snap = v => Math.round(Math.max(-2, Math.min(2, v)) * 10) / 10;
-    lastMoveToBlock.setFieldValue(snap(x), 'X');
-    lastMoveToBlock.setFieldValue(snap(y), 'Y');
+    setShadowNum(lastMoveToBlock, 'INPUT_X', snap(x));
+    setShadowNum(lastMoveToBlock, 'INPUT_Y', snap(y));
   }
 
   export function setMoveDelta(dx, dy) {
     if (!lastMoveByBlock || lastMoveByBlock.isDisposed()) return;
     const snap = v => Math.round(Math.max(-4, Math.min(4, v)) * 10) / 10;
-    lastMoveByBlock.setFieldValue(snap(dx), 'DX');
-    lastMoveByBlock.setFieldValue(snap(dy), 'DY');
+    setShadowNum(lastMoveByBlock, 'INPUT_DX', snap(dx));
+    setShadowNum(lastMoveByBlock, 'INPUT_DY', snap(dy));
   }
 
   const SEQUENCE_HEADS = new Set(['start', 'define_skill']);
-  const CUSTOM_COLLAPSE = new Set(['define_skill', 'use_skill']);
+  const CUSTOM_COLLAPSE = new Set(['define_skill', 'use_skill', 'set_pen_color', 'move_base_to_target', 'move_base_by']);
 
   function isUseSkillValid(block) {
     const skillName = block.getFieldValue('SKILL');
@@ -148,6 +161,17 @@
     return true;
   }
 
+  function hasInvalidParamRef(block) {
+    for (const input of block.inputList) {
+      const connected = input.connection?.targetBlock();
+      if (connected?.type === 'param_ref') {
+        const val = connected.getFieldValue('PARAM');
+        if (!val || val === '__NONE__') return true;
+      }
+    }
+    return false;
+  }
+
   function updateEnabledStates() {
     if (!workspace) return;
     const reachable = new Set();
@@ -159,10 +183,11 @@
     }
     for (const block of workspace.getAllBlocks(false)) {
       if (SEQUENCE_HEADS.has(block.type)) continue;
+      if (block.isShadow()) continue;
+      if (block.type === 'param_ref') continue; // always connectable; dropdown handles invalid context
       let should = reachable.has(block.id);
-      if (should && block.type === 'use_skill') {
-        should = isUseSkillValid(block);
-      }
+      if (should && block.type === 'use_skill') should = isUseSkillValid(block);
+      if (should) should = !hasInvalidParamRef(block);
       if (block.isEnabled() !== should) block.setEnabled(should);
     }
   }
@@ -191,8 +216,18 @@
       }
     }
 
+    function getNumFromInput(block, inputName, params) {
+      const connected = block.getInput(inputName)?.connection?.targetBlock();
+      if (!connected) return 0;
+      if (connected.type === 'param_ref') {
+        const val = params?.[connected.getFieldValue('PARAM')];
+        return (val != null && !isNaN(Number(val))) ? Number(val) : 0;
+      }
+      return Number(connected.getFieldValue('NUM') ?? 0);
+    }
+
     // Inline-expand a chain of blocks, substituting skill calls recursively.
-    // `params` is a map of param name → value for the current call frame (future use).
+    // `params` maps param name → value for the current call frame.
     function expandChain(block, params, depth) {
       if (depth > 20) return; // guard against infinite recursion
       while (block) {
@@ -202,7 +237,6 @@
           const skillName = block.getFieldValue('SKILL');
           const bodyStart = skillBodies[skillName];
           if (bodyStart) {
-            // Collect param values at this call site for future param-reference blocks
             const defs = block.paramDefs_ || [];
             const callParams = {};
             for (let i = 0; i < defs.length; i++) {
@@ -220,15 +254,23 @@
         } else {
           const entry = { type: block.type };
           if (block.type === 'move_base_to_target') {
-            entry.x = block.getFieldValue('X');
-            entry.y = block.getFieldValue('Y');
+            entry.x = getNumFromInput(block, 'INPUT_X', params);
+            entry.y = getNumFromInput(block, 'INPUT_Y', params);
           } else if (block.type === 'move_base_by') {
-            entry.dx = block.getFieldValue('DX');
-            entry.dy = block.getFieldValue('DY');
+            entry.dx = getNumFromInput(block, 'INPUT_DX', params);
+            entry.dy = getNumFromInput(block, 'INPUT_DY', params);
           } else if (block.type === 'set_pen_color') {
-            entry.r = Number(block.getFieldValue('R'));
-            entry.g = Number(block.getFieldValue('G'));
-            entry.b = Number(block.getFieldValue('B'));
+            const colorBlock = block.getInput('COLOR_PARAM')?.connection?.targetBlock();
+            if (colorBlock?.type === 'param_ref') {
+              const colorVal = params?.[colorBlock.getFieldValue('PARAM')];
+              entry.r = colorVal?.type === 'color' ? colorVal.r : 0;
+              entry.g = colorVal?.type === 'color' ? colorVal.g : 0;
+              entry.b = colorVal?.type === 'color' ? colorVal.b : 0;
+            } else {
+              entry.r = Number(block.getFieldValue('R'));
+              entry.g = Number(block.getFieldValue('G'));
+              entry.b = Number(block.getFieldValue('B'));
+            }
           }
           blocks.push(entry);
         }
@@ -324,20 +366,26 @@
       '.blocklyTreeRow{padding-top:14px!important;padding-bottom:14px!important;height:auto!important}' +
       '.blocklyContextMenu{font-size:20px!important}' +
       '.blocklyMenuItem{padding:10px 24px!important;min-height:unset!important}' +
-      '.blocklyMenuItemContent{font-size:20px!important}';
+      '.blocklyMenuItemContent{font-size:20px!important}' +
+      '.kinder-param-dropdown .blocklyMenuItemContent{color:#1a1a1a!important}' +
+      '.kinder-param-dropdown .blocklyMenuItem{color:#1a1a1a!important}';
     document.head.appendChild(s);
 
     workspace.addChangeListener(e => {
       if (e.type === 'selected') {
-        // Collapse the block that just lost focus; expand the one gaining it
-        if (e.oldElementId) {
-          const old = workspace.getBlockById(e.oldElementId);
-          if (CUSTOM_COLLAPSE.has(old?.type)) old.customCollapse_?.();
-          else if (old && !old.isCollapsed()) old.setCollapsed(true);
-        }
+        // Collapse the block that just lost focus; expand the one gaining it.
+        // Exception: if a value block (output) is being picked up to drop into an input,
+        // keep the old block expanded so its value input slots remain accessible.
         const block = e.newElementId ? workspace.getBlockById(e.newElementId) : null;
+        if (!block?.outputConnection) {
+          if (e.oldElementId) {
+            const old = workspace.getBlockById(e.oldElementId);
+            if (CUSTOM_COLLAPSE.has(old?.type)) old.customCollapse_?.();
+            else if (old && !old.isCollapsed() && !old.outputConnection) old.setCollapsed(true);
+          }
+        }
         if (CUSTOM_COLLAPSE.has(block?.type)) block.customExpand_?.();
-        else if (block?.isCollapsed()) block.setCollapsed(false);
+        else if (block?.isCollapsed() && !block.outputConnection) block.setCollapsed(false);
 
         if (block?.type === 'move_base_to_target') { lastMoveToBlock = block; lastMoveByBlock = null; }
         else if (block?.type === 'move_base_by')   { lastMoveByBlock = block; lastMoveToBlock = null; }
@@ -359,7 +407,7 @@
       if (evt.type === Blockly.Events.BLOCK_CREATE) {
         const block = workspace.getBlockById(evt.blockId);
         if (CUSTOM_COLLAPSE.has(block?.type)) block.customCollapse_?.();
-        else if (block && !block.isCollapsed()) block.setCollapsed(true);
+        else if (block && !block.isCollapsed() && !block.outputConnection) block.setCollapsed(true);
         if (block?.type === 'start') {
           const startBlocks = workspace.getAllBlocks(false).filter(b => b.type === 'start');
           if (startBlocks.length > 1) {
@@ -377,6 +425,8 @@
           for (const b of workspace.getAllBlocks(false)) {
             if (b.type === 'use_skill') b.updateParamInputs_?.();
           }
+          updateEnabledStates();
+        } else if (changed?.type === 'param_ref') {
           updateEnabledStates();
         }
       }
@@ -409,8 +459,8 @@
       }
     });
 
-    // Persist workspace across hot reloads
-    const WS_KEY = 'kinder-blockly-ws';
+    // Persist workspace across hot reloads (v2: movement blocks use value inputs)
+    const WS_KEY = 'kinder-blockly-ws-v2';
     workspace.addChangeListener(() => {
       clearTimeout(saveTimer);
       saveTimer = setTimeout(() => {
