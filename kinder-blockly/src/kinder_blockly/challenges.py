@@ -40,7 +40,7 @@ CHALLENGES: list[dict] = [
         "id": "square",
         "name": "Square",
         "difficulty": "easy",
-        "description": "Draw a red square (side length 1, centred at the origin).",
+        "description": "Draw a red square (side length 1, centered at the origin).",
         "hint": "Move to one corner, put the pen down, then visit the other three corners and come back.",
         "target_trail": _segments_from_waypoints(
             [(0.5, 0.5), (0.5, -0.5), (-0.5, -0.5), (-0.5, 0.5)],

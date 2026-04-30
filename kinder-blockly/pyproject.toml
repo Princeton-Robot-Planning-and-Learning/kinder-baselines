@@ -30,7 +30,7 @@ develop = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-kinder_blockly = ["py.typed", "static/*"]
+kinder_blockly = ["py.typed", "static/**/*"]
 
 [tool.black]
 line-length = 88
