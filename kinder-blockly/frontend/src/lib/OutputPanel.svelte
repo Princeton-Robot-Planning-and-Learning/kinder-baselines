@@ -6,6 +6,7 @@
 
   export let frameDataUrl = '';
   export let frameInfo = 'DRAG BLOCKS AND CLICK RUN';
+  export let frameLabel = null;
   export let studentTrail = [];
   export let targetTrail = [];
   export let score = null;
@@ -117,7 +118,14 @@
   <span class="panel-label">// 3D VIEW</span>
   <div id="view-grid">
     <button class="nav-btn nav-prev" disabled={!canGoPrev} on:click={() => dispatch('prevFrame')}>&lt;</button>
-    <img id="frame-display" class="retro-border" bind:this={frameImg} src={frameDataUrl || undefined} alt="Robot view" />
+    <div id="frame-wrap">
+      <img id="frame-display" class="retro-border" bind:this={frameImg} src={frameDataUrl || undefined} alt="Robot view" />
+      {#if frameLabel}
+        <div class="frame-label" style="color:rgb({frameLabel.r},{frameLabel.g},{frameLabel.b});text-shadow:0 0 10px rgb({frameLabel.r},{frameLabel.g},{frameLabel.b})">
+          {frameLabel.text}
+        </div>
+      {/if}
+    </div>
     <button class="nav-btn nav-next" disabled={!canGoNext} on:click={() => dispatch('nextFrame')}>&gt;</button>
     <div id="frame-info">{frameInfo}</div>
     <div id="canvas-row">
@@ -163,7 +171,13 @@
   }
   #view-grid     { display: grid; grid-template-columns: auto auto auto; max-width: 100%; row-gap: 8px; }
   .nav-prev      { grid-column: 1; grid-row: 1; align-self: center; }
-  #frame-display { grid-column: 2; grid-row: 1; max-width: 100%; max-height: 38vh; background: #000; object-fit: contain; }
+  #frame-wrap    { grid-column: 2; grid-row: 1; position: relative; display: flex; }
+  #frame-display { max-width: 100%; max-height: 38vh; background: #000; object-fit: contain; width: 100%; }
+  .frame-label   {
+    position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%);
+    font-family: 'Silkscreen', monospace; font-size: 18px; white-space: nowrap;
+    background: rgba(0,0,0,0.55); padding: 3px 10px; pointer-events: none;
+  }
   .nav-next      { grid-column: 3; grid-row: 1; align-self: center; }
   #frame-info    { grid-column: 2; grid-row: 2; font-size: 22px; color: var(--muted); text-align: center; }
   #canvas-row    { grid-column: 2; grid-row: 3; display: flex; justify-content: center; gap: 8px; align-items: flex-start; }

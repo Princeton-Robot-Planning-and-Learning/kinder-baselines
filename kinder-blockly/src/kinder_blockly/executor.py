@@ -36,6 +36,10 @@ TrailSegment = dict[str, float]  # keys: x1 y1 x2 y2 r g b
 # Pen-up / pen-down event for the physics marker overlay.
 PenEvent = dict[str, Any]  # keys: x y type('up'|'down') r g b
 
+# Per-frame action label shown as an overlay in the 3-D view.
+# None for frames with no associated block (e.g. the initial reset frame).
+FrameLabel = dict[str, Any] | None  # keys: text str, r int, g int, b int
+
 
 def _add_trail_box(
     x1: float, y1: float, x2: float, y2: float,
@@ -128,6 +132,7 @@ def execute_program(
     seed: int = 0,
     trail_out: list[TrailSegment] | None = None,
     pen_events_out: list[PenEvent] | None = None,
+    frame_labels_out: list[FrameLabel] | None = None,
 ) -> Iterator[NDArray[np.uint8]]:
     """Execute a Blockly program and yield rendered frames.
 
@@ -163,6 +168,8 @@ def execute_program(
         pen.prev_xy = [state.base_pose.x, state.base_pose.y]
 
         frame: NDArray[np.uint8] = env.render()  # type: ignore[assignment]
+        if frame_labels_out is not None:
+            frame_labels_out.append(None)
         yield frame
 
         for block in blocks:
@@ -191,11 +198,20 @@ def execute_program(
                 # UI X = horizontal = robot Y; UI Y = vertical = -robot X (camera is at +X)
                 target_x = -float(block.get("y", 0.0))
                 target_y = float(block.get("x", 0.0))
+                ui_x = float(block.get("x", 0.0))
+                ui_y = float(block.get("y", 0.0))
+                label: FrameLabel = {
+                    "text": f"Move to ({ui_x:.1f}, {ui_y:.1f})",
+                    "r": 116, "g": 91, "b": 166,  # Blockly hue 260
+                }
                 state, frames = _run_move_base_to(
                     env, state, sim, target_x, target_y,
                     pen=pen, client_id=client_id,
                 )
-                yield from frames
+                for f in frames:
+                    if frame_labels_out is not None:
+                        frame_labels_out.append(label)
+                    yield f
 
             elif block_type == "move_base_by":
                 assert isinstance(state, BaseMotion3DObjectCentricState)
@@ -204,11 +220,20 @@ def execute_program(
                 robot_dy = float(block.get("dx", 0.0))
                 target_x = float(np.clip(state.base_pose.x + robot_dx, -2.0, 2.0))
                 target_y = float(np.clip(state.base_pose.y + robot_dy, -2.0, 2.0))
+                ui_dx = float(block.get("dx", 0.0))
+                ui_dy = float(block.get("dy", 0.0))
+                by_label: FrameLabel = {
+                    "text": f"Move by ({ui_dx:+.1f}, {ui_dy:+.1f})",
+                    "r": 168, "g": 143, "b": 224,  # #a88fe0
+                }
                 state, frames = _run_move_base_to(
                     env, state, sim, target_x, target_y,
                     pen=pen, client_id=client_id,
                 )
-                yield from frames
+                for f in frames:
+                    if frame_labels_out is not None:
+                        frame_labels_out.append(by_label)
+                    yield f
 
         # If program ends with pen still down, record implicit pen-up so ○ appears.
         if pen.down:

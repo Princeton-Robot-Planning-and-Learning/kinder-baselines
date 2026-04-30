@@ -1,5 +1,60 @@
 # Changelog
 
+## [Unreleased] — 2026-04-30 (continued 5)
+
+### Blocks — Abstraction (use_skill params)
+
+- **`use_skill` param values use `=`** — collapsed view now shows `name = value` instead of `name: value`.
+- **Type system revised** — `string` removed; `float` added (displayed as "floating point" in `define_skill` dropdown, "float" in compact collapsed view). `int` now displays as "integer" in the expanded dropdown.
+- **`define_skill` param count preserved on resize** — increasing the count keeps existing param names/types; only new rows get fresh defaults.
+- **`use_skill` param inputs** — int/float params use `FieldTextInput` defaulting to `"NULL"` (user types a number or `"NULL"`). Color params use `FieldColorSwatch` with a `FieldLabel` NULL indicator.
+- **NULL state** — new params default to `"NULL"` in the text box. Typing a real value clears the red. Color params show a `" NULL"` label next to the swatch when stale; picking a color clears it.
+- **Red name on param count mismatch** — `use_skill` collapsed skill name goes red when the referenced skill exists but param count differs.
+- **Red name on invalid skill** — skill name goes red when no matching `define_skill` exists.
+- **Imprecise float→int** — if a float value (e.g. `1.5`) is mapped to an int param, it is not silently rounded: the original value is preserved in `impreciseSaved_` and shown in red. Reverting to float restores the original value.
+- **Stale kind mismatch** — incompatible type changes (num↔color) set `staleSaved_` for that index; collapsed view shows the current value (or `NULL` for color) in red. Picking a new color clears the stale flag.
+- **Red values survive type revert** — snapshotting prefers `impreciseSaved_` over the zeroed field so the original value is restored when the type reverts.
+- **Live `define_skill` propagation** — any `define_skill` field change calls `updateParamInputs_()` on all `use_skill` blocks (not just a re-collapse), keeping param inputs, null states, and validity in sync.
+- **`isUseSkillValid` extended** — also checks `impreciseSaved_`, `staleSaved_`, and `"NULL"` text values before enabling a `use_skill` block.
+
+### Blockly Workspace
+
+- **Workspace persistence across hot reloads** — workspace state is serialized to `localStorage` 400 ms after any change and restored on mount. Zoom and scroll are always reset to 1.5× centred on origin after restore.
+
+---
+
+## [Unreleased] — 2026-04-30 (continued 4)
+
+### Blocks — Abstraction
+
+- **`define_skill` block** — new navy-blue (`#1e3a8a`) block in a new "Abstraction" toolbox category (after Pen). Has no top notch (sequence head only). Fields: skill name (text input), param count (0–5 dropdown). Sequences connected below are enabled just like `Start`.
+- **`define_skill` param rows** — selecting a param count dynamically adds/removes bullet rows (`• name : type`) with editable name and a type dropdown (int / string / color). Uses `saveExtraState`/`loadExtraState` for correct serialization of dynamic inputs.
+- **`define_skill` custom collapse** — instead of Blockly's single-line collapse, uses input visibility toggling. Collapsed view shows Python-style long syntax: `def name(` / `    param: type,` / `)`. Zero-param skills collapse to a single line `def name()`. The skill name is underlined via a custom `FieldLabelUnderline` field subclass.
+- **`use_skill` block** — teal (`#14b8a6`) block with a dynamic dropdown listing all `define_skill` names currently on the workspace. Collapses to `name(` / `)` with the skill name underlined. Skill name forwarded in `getProgram` output as `entry.skill`.
+- **Skill enable/disable propagation** — `updateEnabledStates` disables `use_skill` blocks whose referenced name doesn't match any current `define_skill` name. Re-runs on `BLOCK_CHANGE` when a `define_skill` NAME field is edited.
+- **`CUSTOM_COLLAPSE` set** — `BlocklyWorkspace` routes `define_skill` and `use_skill` through `customCollapse_`/`customExpand_` instead of `setCollapsed`, both on selection change and `BLOCK_CREATE`.
+
+### Color picker
+
+- **Picker anchors to block only** — color picker now opens directly below the `set_pen_color` block itself using `:scope > .blocklyPath` bounding rect, not the whole connected sequence.
+
+---
+
+## [Unreleased] — 2026-04-30 (continued 3)
+
+### Blockly Workspace
+
+- **"Duplicate from here" context menu** — right-clicking any non-`start` block shows a "Duplicate from here" option that copies the block and its entire following sequence, places the copy 40 px offset, and collapses all duplicated blocks.
+- **Remove "Expand block" context menu item** — `blockCollapseExpand` unregistered on workspace init (joins `blockCollapse` and `blockDisable`).
+- **One `start` block enforced** — if a second `start` block is dragged from the flyout, TidyBot immediately says "You can only start once!" and the duplicate is disposed when the drag is released.
+
+### UI
+
+- **TidyBot event dispatch** — `BlocklyWorkspace` now dispatches a `message` event (via Svelte `createEventDispatcher`) so workspace-level interactions can trigger TidyBot messages. `App.svelte` handles it with `on:message={e => tamaSay(e.detail)}`.
+- **Favicon** — browser tab now shows the TidyBot pixel-art sprite (`public/favicon.svg`) — a faithful SVG recreation of the CSS box-shadow pixel art with the retro dark background.
+
+---
+
 ## [Unreleased] — 2026-04-30 (continued 2)
 
 ### Blocks

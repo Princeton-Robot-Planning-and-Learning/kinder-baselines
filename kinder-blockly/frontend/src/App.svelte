@@ -14,12 +14,14 @@
   let status = '';
   let hint = '';
   let allFrames = [];
+  let allFrameLabels = [];
   let currentFrameIndex = -1;
   let frameInfo = 'DRAG BLOCKS AND CLICK RUN';
 
   $: frameDataUrl = currentFrameIndex >= 0 && allFrames.length > 0
     ? 'data:image/jpeg;base64,' + allFrames[currentFrameIndex]
     : '';
+  $: frameLabel = allFrameLabels[currentFrameIndex] ?? null;
   $: canGoPrev = currentFrameIndex > 0;
   $: canGoNext = currentFrameIndex >= 0 && currentFrameIndex < allFrames.length - 1;
 
@@ -114,10 +116,11 @@
   }
 
   async function runProgram() {
+    if (blocklyWorkspace.hasParamErrors()) { status = 'ERRORS!'; tamaSay("Oh no, the skills are broken! Fix the red params first.", 4000); return; }
     const program = blocklyWorkspace.getProgram();
     if (program.blocks.length === 0) { status = 'NO BLOCKS!'; tamaSay("Drag some blocks first!", 3000); return; }
 
-    isRunning = true; status = 'RUNNING...'; frameInfo = ''; scoreData = null; studentTrail = []; studentPenEvents = [];
+    isRunning = true; status = 'RUNNING...'; frameInfo = ''; scoreData = null; studentTrail = []; studentPenEvents = []; allFrameLabels = [];
     tamaSay("Let's go! Executing program...", 3000);
 
     try {
@@ -132,6 +135,7 @@
 
       const frames = data.frames || [];
       allFrames = frames;
+      allFrameLabels = data.frame_labels || [];
       for (let i = 0; i < frames.length; i++) {
         currentFrameIndex = i;
         frameInfo = `FRAME ${i+1}/${frames.length}`;
@@ -173,9 +177,9 @@
 />
 
 <div class="content">
-  <BlocklyWorkspace bind:this={blocklyWorkspace} />
+  <BlocklyWorkspace bind:this={blocklyWorkspace} on:message={e => tamaSay(e.detail, 4000)} />
   <OutputPanel
-    {frameDataUrl} {frameInfo} {studentTrail} {studentPenEvents} {targetTrail} score={scoreData}
+    {frameDataUrl} {frameInfo} {frameLabel} {studentTrail} {studentPenEvents} {targetTrail} score={scoreData}
     {canGoPrev} {canGoNext}
     bind:panelWidth={outputPanelWidth}
     on:gridClick={e => blocklyWorkspace.setMoveCoords(e.detail.x, e.detail.y)}
