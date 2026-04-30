@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import Header from './lib/Header.svelte';
   import BlocklyWorkspace from './lib/BlocklyWorkspace.svelte';
   import OutputPanel from './lib/OutputPanel.svelte';
@@ -13,9 +13,24 @@
   let isRunning = false;
   let status = '';
   let hint = '';
-  let frameDataUrl = '';
+  let allFrames = [];
+  let currentFrameIndex = -1;
   let frameInfo = 'DRAG BLOCKS AND CLICK RUN';
+
+  $: frameDataUrl = currentFrameIndex >= 0 && allFrames.length > 0
+    ? 'data:image/jpeg;base64,' + allFrames[currentFrameIndex]
+    : '';
+  $: canGoPrev = currentFrameIndex > 0;
+  $: canGoNext = currentFrameIndex >= 0 && currentFrameIndex < allFrames.length - 1;
+
+  function prevFrame() {
+    if (canGoPrev) { currentFrameIndex--; frameInfo = `FRAME ${currentFrameIndex + 1}/${allFrames.length}`; }
+  }
+  function nextFrame() {
+    if (canGoNext) { currentFrameIndex++; frameInfo = `FRAME ${currentFrameIndex + 1}/${allFrames.length}`; }
+  }
   let studentTrail = [];
+  let studentPenEvents = [];
   let targetTrail = [];
   let scoreData = null;
   let tamaMsg = '';
@@ -52,7 +67,12 @@
     tamaSay(TAMA_IDLE_TIPS[Math.floor(Math.random() * TAMA_IDLE_TIPS.length)], 4000);
   }
 
+  const onKey = e => { if (e.key === 'Escape') { tamaVisible = false; if (tamaTimer) clearTimeout(tamaTimer); } };
+  onDestroy(() => document.removeEventListener('keydown', onKey));
+
   onMount(async () => {
+    document.addEventListener('keydown', onKey);
+
     await Promise.all([loadChallenges(), loadInitialFrame()]);
     setTimeout(() => tamaSay(
       "Greetings, young artist! I am TidyBot, and I LIVE to draw. Pick a challenge... or let me free draw. Please.",
@@ -73,7 +93,7 @@
     try {
       const r = await fetch('/reset', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({seed:0}) });
       const d = await r.json();
-      if (d.frame) { frameDataUrl = 'data:image/jpeg;base64,' + d.frame; frameInfo = 'READY!'; }
+      if (d.frame) { allFrames = [d.frame]; currentFrameIndex = 0; frameInfo = 'READY!'; }
     } catch { frameInfo = 'LOAD FAILED'; }
   }
 
@@ -97,7 +117,7 @@
     const program = blocklyWorkspace.getProgram();
     if (program.blocks.length === 0) { status = 'NO BLOCKS!'; tamaSay("Drag some blocks first!", 3000); return; }
 
-    isRunning = true; status = 'RUNNING...'; frameInfo = ''; scoreData = null; studentTrail = [];
+    isRunning = true; status = 'RUNNING...'; frameInfo = ''; scoreData = null; studentTrail = []; studentPenEvents = [];
     tamaSay("Let's go! Executing program...", 3000);
 
     try {
@@ -111,14 +131,16 @@
       if (data.error) tamaSay("Oops! " + data.error, 5000);
 
       const frames = data.frames || [];
+      allFrames = frames;
       for (let i = 0; i < frames.length; i++) {
-        frameDataUrl = 'data:image/jpeg;base64,' + frames[i];
+        currentFrameIndex = i;
         frameInfo = `FRAME ${i+1}/${frames.length}`;
         await new Promise(r => setTimeout(r, 100));
       }
       if (!frames.length) frameInfo = 'NO FRAMES';
 
       studentTrail = data.trail || [];
+      studentPenEvents = data.pen_events || [];
 
       if (currentChallenge && studentTrail.length > 0) {
         await requestScore(currentChallenge.id, studentTrail);
@@ -153,8 +175,13 @@
 <div class="content">
   <BlocklyWorkspace bind:this={blocklyWorkspace} />
   <OutputPanel
-    {frameDataUrl} {frameInfo} {studentTrail} {targetTrail} score={scoreData}
+    {frameDataUrl} {frameInfo} {studentTrail} {studentPenEvents} {targetTrail} score={scoreData}
+    {canGoPrev} {canGoNext}
     bind:panelWidth={outputPanelWidth}
+    on:gridClick={e => blocklyWorkspace.setMoveCoords(e.detail.x, e.detail.y)}
+    on:gridDrag={e => blocklyWorkspace.setMoveDelta(e.detail.dx, e.detail.dy)}
+    on:prevFrame={prevFrame}
+    on:nextFrame={nextFrame}
   />
 </div>
 

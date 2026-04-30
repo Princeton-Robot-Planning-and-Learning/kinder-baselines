@@ -11,7 +11,7 @@ from flask import Flask, Response, request
 from PIL import Image
 
 from kinder_blockly.challenges import get_challenge, list_challenges, score_trail
-from kinder_blockly.executor import TrailSegment, execute_program, render_initial_frame
+from kinder_blockly.executor import PenEvent, TrailSegment, execute_program, render_initial_frame
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -71,18 +71,19 @@ def run_program() -> Response:
 
     frames_b64: list[str] = []
     trail: list[TrailSegment] = []
+    pen_events: list[PenEvent] = []
     try:
-        for frame in execute_program(program, seed=seed, trail_out=trail):
+        for frame in execute_program(program, seed=seed, trail_out=trail, pen_events_out=pen_events):
             frames_b64.append(_encode_frame(frame))
     except Exception as exc:  # pylint: disable=broad-except
         return Response(
-            json.dumps({"error": str(exc), "frames": frames_b64, "trail": trail}),
+            json.dumps({"error": str(exc), "frames": frames_b64, "trail": trail, "pen_events": pen_events}),
             status=500,
             mimetype="application/json",
         )
 
     return Response(
-        json.dumps({"success": True, "frames": frames_b64, "trail": trail}),
+        json.dumps({"success": True, "frames": frames_b64, "trail": trail, "pen_events": pen_events}),
         status=200,
         mimetype="application/json",
     )

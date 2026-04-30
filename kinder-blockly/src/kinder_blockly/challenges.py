@@ -43,7 +43,7 @@ CHALLENGES: list[dict] = [
         "description": "Draw a red square (side length 1, centered at the origin).",
         "hint": "Move to one corner, put the pen down, then visit the other three corners and come back.",
         "target_trail": _segments_from_waypoints(
-            [(0.5, 0.5), (0.5, -0.5), (-0.5, -0.5), (-0.5, 0.5)],
+            [(-0.5, 0.5), (-0.5, -0.5), (0.5, -0.5), (0.5, 0.5)],
             r=255, g=0, b=0, closed=True,
         ),
     },
@@ -54,7 +54,7 @@ CHALLENGES: list[dict] = [
         "description": "Draw a blue triangle.",
         "hint": "Three points, three moves, close the shape!",
         "target_trail": _segments_from_waypoints(
-            [(0.0, 1.0), (-1.0, -0.5), (1.0, -0.5)],
+            [(0.0, 1.0), (1.0, -0.5), (-1.0, -0.5)],
             r=0, g=80, b=255, closed=True,
         ),
     },
@@ -65,7 +65,7 @@ CHALLENGES: list[dict] = [
         "description": "Draw a green letter L.",
         "hint": "Two straight lines: one going down, one going right.",
         "target_trail": _segments_from_waypoints(
-            [(-0.5, 1.0), (-0.5, -0.5), (0.5, -0.5)],
+            [(0.5, 1.0), (0.5, -0.5), (-0.5, -0.5)],
             r=0, g=200, b=0, closed=False,
         ),
     },
@@ -76,7 +76,7 @@ CHALLENGES: list[dict] = [
         "description": "Draw a red diamond (rotated square).",
         "hint": "Four diagonal moves connecting top, right, bottom, left.",
         "target_trail": _segments_from_waypoints(
-            [(0.0, 1.0), (1.0, 0.0), (0.0, -1.0), (-1.0, 0.0)],
+            [(0.0, 1.0), (-1.0, 0.0), (0.0, -1.0), (1.0, 0.0)],
             r=255, g=0, b=0, closed=True,
         ),
     },
@@ -88,8 +88,8 @@ CHALLENGES: list[dict] = [
         "hint": "Alternate between moving up-right and down-right.",
         "target_trail": _segments_from_waypoints(
             [
-                (-1.0, 0.0), (-0.5, 0.5), (0.0, 0.0),
-                (0.5, 0.5), (1.0, 0.0),
+                (1.0, 0.0), (0.5, 0.5), (0.0, 0.0),
+                (-0.5, 0.5), (-1.0, 0.0),
             ],
             r=255, g=140, b=0, closed=False,
         ),
@@ -103,15 +103,15 @@ CHALLENGES: list[dict] = [
                 "Draw the square first, then pen up, move to the roof start, "
                 "change to blue, and draw the triangle.",
         "target_trail": (
-            # base (red square) — left side
+            # base (red square)
             _segments_from_waypoints(
-                [(-0.5, -0.5), (-0.5, 0.5), (0.0, 0.5), (0.0, -0.5)],
+                [(0.5, -0.5), (0.5, 0.5), (0.0, 0.5), (0.0, -0.5)],
                 r=255, g=0, b=0, closed=True,
             )
             +
-            # roof (blue triangle) — pointing right
+            # roof (blue triangle)
             _segments_from_waypoints(
-                [(0.0, -0.5), (1.0, 0.0), (0.0, 0.5)],
+                [(0.0, -0.5), (-1.0, 0.0), (0.0, 0.5)],
                 r=0, g=80, b=255, closed=False,
             )
         ),
@@ -125,10 +125,10 @@ CHALLENGES: list[dict] = [
         "target_trail": _segments_from_waypoints(
             [
                 (0.0, 1.0),
-                (0.5, -0.5),
-                (-1.0, 0.5),
-                (1.0, 0.5),
                 (-0.5, -0.5),
+                (1.0, 0.5),
+                (-1.0, 0.5),
+                (0.5, -0.5),
             ],
             r=220, g=180, b=0, closed=True,
         ),

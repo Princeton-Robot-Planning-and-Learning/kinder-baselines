@@ -33,6 +33,9 @@ TRAIL_HALF_THICKNESS = 0.001  # half-height — paper-thin
 # Trail segment returned to the frontend for the top-down canvas.
 TrailSegment = dict[str, float]  # keys: x1 y1 x2 y2 r g b
 
+# Pen-up / pen-down event for the physics marker overlay.
+PenEvent = dict[str, Any]  # keys: x y type('up'|'down') r g b
+
 
 def _add_trail_box(
     x1: float, y1: float, x2: float, y2: float,
@@ -72,6 +75,16 @@ class _PenState:
     color_rgb: tuple[int, int, int] = (255, 0, 0)
     prev_xy: list[float] | None = None
     trail: list[TrailSegment] = field(default_factory=list)
+    events: list[PenEvent] = field(default_factory=list)
+
+    def record_event(self, event_type: str) -> None:
+        if self.prev_xy is None:
+            return
+        r, g, b = self.color_rgb
+        self.events.append({
+            "x": float(self.prev_xy[0]), "y": float(self.prev_xy[1]),
+            "type": event_type, "r": r, "g": g, "b": b,
+        })
 
     @property
     def color_01(self) -> tuple[float, float, float]:
@@ -114,6 +127,7 @@ def execute_program(
     program: dict[str, Any],
     seed: int = 0,
     trail_out: list[TrailSegment] | None = None,
+    pen_events_out: list[PenEvent] | None = None,
 ) -> Iterator[NDArray[np.uint8]]:
     """Execute a Blockly program and yield rendered frames.
 
@@ -160,26 +174,51 @@ def execute_program(
                     int(block.get("g", 0)),
                     int(block.get("b", 0)),
                 )
-                pen.down = True
 
             elif block_type == "pen_down":
+                was_down = pen.down
                 pen.down = True
+                if not was_down:
+                    pen.record_event("down")
 
             elif block_type == "pen_up":
+                was_down = pen.down
                 pen.down = False
+                if was_down:
+                    pen.record_event("up")
 
             elif block_type == "move_base_to_target":
-                target_x = float(block.get("x", 0.0))
-                target_y = float(block.get("y", 0.0))
+                # UI X = horizontal = robot Y; UI Y = vertical = -robot X (camera is at +X)
+                target_x = -float(block.get("y", 0.0))
+                target_y = float(block.get("x", 0.0))
                 state, frames = _run_move_base_to(
                     env, state, sim, target_x, target_y,
                     pen=pen, client_id=client_id,
                 )
                 yield from frames
 
-        # Copy accumulated trail to the caller's list.
+            elif block_type == "move_base_by":
+                assert isinstance(state, BaseMotion3DObjectCentricState)
+                # UI DX = horizontal = robot dY; UI DY = vertical = -robot dX
+                robot_dx = -float(block.get("dy", 0.0))
+                robot_dy = float(block.get("dx", 0.0))
+                target_x = float(np.clip(state.base_pose.x + robot_dx, -2.0, 2.0))
+                target_y = float(np.clip(state.base_pose.y + robot_dy, -2.0, 2.0))
+                state, frames = _run_move_base_to(
+                    env, state, sim, target_x, target_y,
+                    pen=pen, client_id=client_id,
+                )
+                yield from frames
+
+        # If program ends with pen still down, record implicit pen-up so ○ appears.
+        if pen.down:
+            pen.record_event("up")
+
+        # Copy accumulated trail and events to the caller's lists.
         if trail_out is not None:
             trail_out.extend(pen.trail)
+        if pen_events_out is not None:
+            pen_events_out.extend(pen.events)
     finally:
         env.close()  # type: ignore[no-untyped-call]
 
