@@ -1,6 +1,6 @@
 """Execute Blockly programs in KinDER environments."""
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -87,6 +87,7 @@ class _PenState:
     events: list[PenEvent] = field(default_factory=list)
 
     def record_event(self, event_type: str) -> None:
+        """Append a pen-up or pen-down event at the current position."""
         if self.prev_xy is None:
             return
         r, g, b = self.color_rgb
@@ -127,7 +128,7 @@ def validate_program(program: dict[str, Any]) -> dict[str, Any]:
     if not blocks:
         return {}
 
-    _OP_FNS = {
+    _OP_FNS: dict[str, Callable[[float, float], bool]] = {
         ">":  lambda a, b: a > b,
         ">=": lambda a, b: a >= b,
         "=":  lambda a, b: abs(a - b) < 0.05,
@@ -173,7 +174,8 @@ def validate_program(program: dict[str, Any]) -> dict[str, Any]:
                 op        = blk.get("op", ">")
                 threshold = float(blk.get("threshold", 0.0))
                 body      = blk.get("body", [])
-                op_fn     = _OP_FNS.get(op, lambda a, b: False)
+                _default: Callable[[float, float], bool] = lambda a, b: False
+                op_fn = _OP_FNS.get(op, _default)
                 for _ in range(100):
                     cur: float
                     if var == "X":
@@ -272,7 +274,9 @@ def execute_program(
             "<=": lambda a, b: a <= b,
         }
 
-        def run_blocks(blks: list[dict[str, Any]], depth: int = 0) -> Iterator[NDArray[np.uint8]]:
+        def run_blocks(  # pylint: disable=too-many-branches
+            blks: list[dict[str, Any]], depth: int = 0,
+        ) -> Iterator[NDArray[np.uint8]]:
             if depth > 20:
                 return
             for blk in blks:
@@ -346,11 +350,12 @@ def execute_program(
                     op  = blk.get("op", ">")
                     threshold = float(blk.get("threshold", 0.0))
                     body = blk.get("body", [])
-                    op_fn = _OP_FNS.get(op, lambda a, b: False)
+                    _default: Callable[[float, float], bool] = lambda a, b: False
+                op_fn = _OP_FNS.get(op, _default)
                     for _ in range(100):
                         s = state_box[0]
                         assert isinstance(s, BaseMotion3DObjectCentricState)
-                        # UI X = robot Y; UI Y = -robot X; anything else is a resolved param value
+                        # UI X = robot Y; UI Y = -robot X; else: resolved param
                         if var == "X":
                             cur = float(s.base_pose.y)
                         elif var == "Y":

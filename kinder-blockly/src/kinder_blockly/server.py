@@ -14,7 +14,10 @@ from flask import Flask, Response, request, stream_with_context
 from PIL import Image
 
 from kinder_blockly.challenges import get_challenge, list_challenges, score_trail
-from kinder_blockly.executor import FrameLabel, PenEvent, TrailSegment, execute_program, render_initial_frame, validate_program
+from kinder_blockly.executor import (
+    FrameLabel, PenEvent, TrailSegment,
+    execute_program, render_initial_frame, validate_program,
+)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -107,7 +110,8 @@ def run_program() -> Response:
                 frame_labels_out=frame_labels, infinite_loop_out=infinite_loop,
                 stop_event=_stop_event,
             ):
-                label = frame_labels[frame_index] if frame_index < len(frame_labels) else None
+                idx = frame_index
+                label = frame_labels[idx] if idx < len(frame_labels) else None
                 yield json.dumps({
                     "type": "frame",
                     "frame": _encode_frame(frame),
@@ -119,7 +123,7 @@ def run_program() -> Response:
                     _stop_event.set()
                     error = (
                         "Phew, I'm exhausted!! That program took too long to run. "
-                        "Try using fewer moves, or check for a loop that repeats too many times!"
+                        "Try fewer moves, or check for a loop that's too long!"
                     )
                     break
         except Exception as exc:  # pylint: disable=broad-except

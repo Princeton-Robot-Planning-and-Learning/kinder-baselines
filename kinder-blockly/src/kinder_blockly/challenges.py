@@ -41,7 +41,10 @@ CHALLENGES: list[dict] = [
         "name": "Square",
         "difficulty": "easy",
         "description": "Draw a red square (side length 1, centered at the origin).",
-        "hint": "Move to one corner, put the pen down, then visit the other three corners and come back.",
+        "hint": (
+            "Move to one corner, put the pen down, "
+            "then visit the other three corners and come back."
+        ),
         "target_trail": _segments_from_waypoints(
             [(-0.5, 0.5), (-0.5, -0.5), (0.5, -0.5), (0.5, 0.5)],
             r=255, g=0, b=0, closed=True,
@@ -121,7 +124,9 @@ CHALLENGES: list[dict] = [
         "name": "Star",
         "difficulty": "hard",
         "description": "Draw a yellow five-pointed star.",
-        "hint": "A star is drawn by connecting every other vertex of a regular pentagon.",
+        "hint": (
+            "A star is drawn by connecting every other vertex of a regular pentagon."
+        ),
         "target_trail": _segments_from_waypoints(
             [
                 (0.0, 1.0),
@@ -207,7 +212,7 @@ def score_trail(
     # Coverage: fraction of target points within *tolerance* of any student point.
     covered = 0
     color_diffs: list[float] = []
-    for i, tp in enumerate(target_pts):
+    for tp in target_pts:
         best_dist = float("inf")
         best_j = 0
         for j, sp_xy in enumerate(s_xy):
@@ -218,7 +223,9 @@ def score_trail(
         if best_dist <= tolerance:
             covered += 1
             sp = student_pts[best_j]
-            cdiff = (abs(tp[2] - sp[2]) + abs(tp[3] - sp[3]) + abs(tp[4] - sp[4])) / (3.0 * 255.0)
+            cdiff = (
+                abs(tp[2] - sp[2]) + abs(tp[3] - sp[3]) + abs(tp[4] - sp[4])
+            ) / (3.0 * 255.0)
             color_diffs.append(1.0 - cdiff)
 
     coverage = covered / len(target_pts)
