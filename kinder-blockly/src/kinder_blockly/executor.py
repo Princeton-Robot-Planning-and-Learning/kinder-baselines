@@ -351,7 +351,7 @@ def execute_program(
                     threshold = float(blk.get("threshold", 0.0))
                     body = blk.get("body", [])
                     _default: Callable[[float, float], bool] = lambda a, b: False
-                    op_fn = _OP_FNS.get(op, _default)
+                    op_fn: Callable[[float, float], bool] = _OP_FNS.get(op, _default)
                     for _ in range(100):
                         s = state_box[0]
                         assert isinstance(s, BaseMotion3DObjectCentricState)
