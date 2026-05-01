@@ -1,0 +1,4 @@
+# @package _global_
+# Configuration for SweepIntoDrawer3D-o5-v0
+env: "SweepIntoDrawer3D-o5-v0"
+max_eval_steps: 500

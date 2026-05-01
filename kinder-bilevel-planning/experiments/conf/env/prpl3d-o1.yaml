@@ -1,0 +1,9 @@
+env_name: "prpl3d"
+
+make_kwargs:
+  id: "kinder/PrplLab3D-o1-v0"
+
+env_model_kwargs:
+  num_objects: 1
+
+max_eval_steps: 500

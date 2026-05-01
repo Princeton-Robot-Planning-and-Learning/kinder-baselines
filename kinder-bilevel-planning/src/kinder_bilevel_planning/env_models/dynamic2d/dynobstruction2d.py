@@ -17,7 +17,7 @@ from kinder.envs.dynamic2d.utils import (
     KinRobotActionSpace,
 )
 from kinder.envs.kinematic2d.utils import is_on
-from kinder_models.dynamic2d.dynobstruction2d.parameterized_skills import (
+from kinder_models.dynamic2d.dyn_obstruction2d.parameterized_skills import (
     create_lifted_controllers,
 )
 from numpy.typing import NDArray

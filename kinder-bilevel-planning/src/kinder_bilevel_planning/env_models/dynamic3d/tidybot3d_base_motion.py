@@ -1,5 +1,7 @@
 """Bilevel planning models for the TidyBot3D base motion environment."""
 
+from pathlib import Path
+
 import numpy as np
 from bilevel_planning.structs import (
     LiftedSkill,
@@ -38,8 +40,11 @@ def create_bilevel_planning_models(
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, TidyBot3DRobotActionSpace)
 
+    _TEST_TASKS = (
+        Path(__file__).parent.parent.parent.parent.parent / "tests" / "test_tasks"
+    )
     sim = ObjectCentricTidyBot3DEnv(
-        scene_type="base_motion",
+        task_config_path=str(_TEST_TASKS / "tidybot-base_motion-o1.json"),
         num_objects=1,
         allow_state_access=True,
     )

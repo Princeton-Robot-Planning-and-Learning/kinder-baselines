@@ -4,9 +4,6 @@ from typing import Optional, Sequence, cast
 
 import numpy as np
 from bilevel_planning.structs import LiftedParameterizedController
-from bilevel_planning.trajectory_samplers.trajectory_sampler import (
-    TrajectorySamplingFailure,
-)
 from gymnasium.spaces import Box
 from kinder.envs.dynamic2d.dyn_pushpullhook2d import (
     DynPushPullHook2DEnvConfig,
@@ -19,7 +16,6 @@ from kinder.envs.dynamic2d.utils import (
     run_motion_planning_for_kin_robot,
 )
 from kinder.envs.kinematic2d.structs import SE2Pose
-from kinder.envs.utils import state_2d_has_collision
 from numpy.typing import NDArray
 from prpl_utils.utils import get_signed_angle_distance, wrap_angle
 from relational_structs.object_centric_state import ObjectCentricState
@@ -55,16 +51,10 @@ class GroundGraspHookController(Dynamic2dRobotController):
 
     def sample_parameters(
         self, x: ObjectCentricState, rng: np.random.Generator
-    ) -> float:
+    ) -> tuple[float]:
         """Sample arm length parameter for the grasp."""
-        max_arm_length = x.get(self._robot, "arm_length")
-        min_arm_length = (
-            x.get(self._robot, "base_radius")
-            + x.get(self._robot, "gripper_base_width")
-            + 1e-4
-        )
-        arm_length = rng.uniform(min_arm_length, max_arm_length)
-        return float(arm_length)
+        norm_arm_length = rng.uniform(0.0, 1.0)
+        return (float(norm_arm_length),)
 
     def _requires_multi_phase_gripper(self) -> bool:
         """Grasp uses two phases: move to hook, then close gripper."""
@@ -113,7 +103,18 @@ class GroundGraspHookController(Dynamic2dRobotController):
         self, state: ObjectCentricState
     ) -> list[tuple[SE2Pose, float]]:
         """Generate waypoints to grasp the hook from the long-side bottom."""
-        desired_arm_length = cast(float, self._current_params)
+        assert not isinstance(self._current_params, float), "params must be a sequence"
+        max_arm_length = state.get(self._robot, "arm_length")
+        min_arm_length = (
+            state.get(self._robot, "base_radius")
+            + state.get(self._robot, "gripper_base_width")
+            + 1e-4
+        )
+        # desired_arm_length = cast(float, self._current_params) * \
+        #     (max_arm_length - min_arm_length) + min_arm_length
+        desired_arm_length = cast(float, self._current_params[0]) * \
+            (max_arm_length - min_arm_length) + min_arm_length
+
 
         robot_x = state.get(self._robot, "x")
         robot_y = state.get(self._robot, "y")
@@ -136,13 +137,18 @@ class GroundGraspHookController(Dynamic2dRobotController):
         full_state.set(self._robot, "theta", target_se2_pre_pose.theta)
         full_state.set(self._robot, "arm_joint", desired_arm_length)
 
-        moving_objects = {self._robot}
-        static_objects = set(full_state) - moving_objects
+        # moving_objects = {self._robot}
+        # static_objects = set(full_state) - moving_objects
 
-        if state_2d_has_collision(full_state, moving_objects, static_objects, {}):
-            raise TrajectorySamplingFailure(
-                "Failed to find a collision-free pre-grasp pose for hook."
-            )
+        # Collision will cause the skill execution to fail, so we
+        # don't need to be extra strict here by enforcing
+        # collision-free pre-grasp pose sampling. The skill will
+        # just fail and we can resample parameters.
+        # if state_2d_has_collision(full_state, moving_objects,
+        #                            static_objects, {}):
+        #     raise TrajectorySamplingFailure(
+        #         "Failed to find a collision-free pre-grasp pose for hook."
+        #     )
 
         # Waypoints: retract arm -> navigate to pre-grasp -> move in for contact.
         final_waypoints: list[tuple[SE2Pose, float]] = [
@@ -262,13 +268,14 @@ class GroundPreHookController(Dynamic2dRobotController):
             * SE2Pose(rel_dx, rel_dy, rel_hook_theta).inverse
         )
         pre_hook_pose_robot = pre_hook_pose_hook * hook2robot
-        if (
-            pre_hook_pose_robot.y > self.world_y_max
-            or pre_hook_pose_robot.y < self.world_y_min
-        ):
-            raise TrajectorySamplingFailure(
-                "Sampled pre-hook pose is out of y-bounds for straight down pull."
-            )
+        # The skill execution will hit the wall casing failure
+        # if (
+        #     pre_hook_pose_robot.y > self.world_y_max
+        #     or pre_hook_pose_robot.y < self.world_y_min
+        # ):
+        #     raise TrajectorySamplingFailure(
+        #         "Sampled pre-hook pose is out of y-bounds for straight down pull."
+        #     )
 
         final_waypoints: list[tuple[SE2Pose, float]] = [
             (SE2Pose(robot_x, robot_y, robot_theta), robot_arm_joint),
@@ -512,8 +519,8 @@ def create_lifted_controllers(
         dtype=np.float32,
     )
     prehook_params_space = Box(
-        low=np.array([0.0, 0.0, 0.0]),
-        high=np.array([1.0, 1.0, 1.0]),
+        low=np.array([np.pi / 3, -0.05, -0.05]),
+        high=np.array([2 * np.pi / 3, 0.0, 0.0]),
         dtype=np.float32,
     )
     hookdown_params_space = Box(

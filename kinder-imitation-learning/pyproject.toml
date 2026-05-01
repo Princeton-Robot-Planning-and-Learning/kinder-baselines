@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.0.0",
-    "numpy",
+    "numpy==1.26",
     "diffusers==0.35.1",
     "datasets==4.1.1",
     "gymnasium",
@@ -18,7 +18,7 @@ dependencies = [
     "matplotlib",
     "wandb",
     "tqdm",
-    "kindergarden>=0.0.8",
+    "kindergarden>=0.1.0",
 ]
 
 [project.optional-dependencies]

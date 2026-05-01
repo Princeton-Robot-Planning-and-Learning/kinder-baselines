@@ -1,5 +1,7 @@
 """Tests for cupboard real state_abstractions.py."""
 
+from pathlib import Path
+
 import kinder
 import numpy as np
 from conftest import MAKE_VIDEOS  # pylint: disable=import-error
@@ -36,7 +38,13 @@ def test_shelf_state_abstraction():
             name_prefix="TidyBot3D-cupboard-real-state-abstraction",
         )
     sim = ObjectCentricTidyBot3DEnv(
-        scene_type="cupboard_real", num_objects=num_objects, allow_state_access=True
+        task_config_path=str(
+            Path(kinder.__file__).parent
+            / "envs" / "dynamic3d" / "tasks" / "Shelf3D"
+            / f"Shelf3D-o{num_objects}.json"
+        ),
+        num_objects=num_objects,
+        allow_state_access=True,
     )
     abstractor = CupboardRealStateAbstractor(sim)
 

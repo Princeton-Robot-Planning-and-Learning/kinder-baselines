@@ -47,6 +47,12 @@ def _main(cfg: DictConfig) -> None:
     kinder.register_all_environments()
     env = kinder.make(**cfg.env.make_kwargs, render_mode="rgb_array")
 
+    # Apply noisy wrappers.
+    if cfg.obs_noise_std > 0:
+        env = kinder.NoisyObservation(env, noise_std=cfg.obs_noise_std)
+    if cfg.action_noise_std > 0:
+        env = kinder.NoisyAction(env, noise_std=cfg.action_noise_std)
+
     # Record videos.
     if cfg.make_videos:
         video_path = Path(cfg.video_folder)
@@ -138,15 +144,17 @@ def _run_single_episode_evaluation(
     seed = sample_seed_from_rng(rng)
     obs, info = env.reset(seed=seed)
     planning_time = 0.0  # time spent generating plans (abstract + skill planning)
-    execution_time = 0.0  # time spent executing the policy (getting actions)
+    execution_time = 0.0  # time spent in agent.step() + agent.update()
+    env_step_time = 0.0   # time spent in env.step() (physics + rendering)
     planning_failed = False
     with timer() as result:
         try:
             agent.reset(obs, info)
-        except AgentFailure:
-            logging.info("Agent failed during reset().")
+        except (Exception, AgentFailure) as e:  # pylint: disable=broad-except
+            logging.info(f"Agent failed during reset(): {e}")
             planning_failed = True
     planning_time += result["time"]
+    logging.debug(f"Planning took {result['time']:.2f}s")
     if planning_failed:
         return {
             "success": False,
@@ -160,8 +168,8 @@ def _run_single_episode_evaluation(
         with timer() as result:
             try:
                 action = agent.step()
-            except AgentFailure:
-                logging.info("Agent failed during step().")
+            except (Exception, AgentFailure) as e:  # pylint: disable=broad-except
+                logging.info(f"Agent failed during step(): {e}")
                 step_failed = True
         execution_time += result["time"]
         if step_failed:
@@ -172,18 +180,27 @@ def _run_single_episode_evaluation(
                 "execution_time": execution_time,
                 "reward": total_reward,
             }
-        obs, rew, done, truncated, info = env.step(action)
+        with timer() as result:
+            obs, rew, done, truncated, info = env.step(action)
+        env_step_time += result["time"]
         reward = float(rew)
         total_reward += reward
         assert not truncated
         with timer() as result:
-            agent.update(obs, reward, done, info)
+            try:
+                agent.update(obs, reward, done, info)
+            except (Exception, AgentFailure) as e:  # pylint: disable=broad-except
+                logging.info(f"Agent failed during update(): {e}")
+                break
         execution_time += result["time"]
         if done:
             success = True
             break
         steps += 1
-    logging.info(f"Success result: {success}")
+    logging.info(f"Success result: {success}, steps={steps}")
+    logging.debug(
+        f"Timing: policy={execution_time:.2f}s, env.step={env_step_time:.2f}s"
+    )
     return {
         "success": success,
         "steps": steps,

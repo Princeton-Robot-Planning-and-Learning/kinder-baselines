@@ -33,15 +33,15 @@ This is the entry point for both imitation learning and VLA baselines, and that 
 1: Using a PS5 controller to collect demonstrations for 2D environments. 
 
 ```bash
-cd prpl-mono/kinder/scripts
+cd kinder-baselines/kinder/scripts
 python collect_demos.py $ENV_ID
 ```
 
 2: Using an iPhone web app to collect demonstrations for 3D environments. 
 
 ```bash
-cd prpl-mono/kinder-models/scripts
-python teleop_dynamics3d_prbench.py --env-name $ENV_ID --show-images
+cd kinder-baselines/kinder-models/scripts
+python teleop.py --env-name $ENV_ID --show-images
 ```
 
 Specific Steps:
@@ -57,21 +57,21 @@ Specific Steps:
 3: Using a VR headset to collect demonstrations for 3D environments. 
 
 ```bash
-cd prpl-mono/kinder-models/scripts
-python teleop_dynamics3d_prbench.py --teleop-device vr --env-name $ENV_ID --show-images
+cd kinder-baselines/kinder-models/scripts
+python teleop.py --teleop-device vr --env-name $ENV_ID --show-images
 ```
 
 4: Using bilevel planning and parameterized skills to collect demonstrations. 
 
 ```bash
-cd prpl-mono/kinder-ds-policies/experiments
+cd kinder-baselines/kinder-ds-policies/experiments
 python experiments/collect_demos_ds.py env=base_motion3d seed=0
 ```
 
 ### Data Format Transfer to hdf5
 
 ```bash
-cd prpl-mono/kinder-models/scripts
+cd kinder-baselines/kinder-models/scripts
 python demos_to_hdf5.py --teleop_data_dir $YOUR_DATA_DIR --output_path $OUTPUT_HDF5_PATH --render_images
 ```
 
@@ -111,8 +111,8 @@ python policy_server.py --ckpt-path $Checkpoint_path
 3: Start environment
 
 ```bash
-cd prpl-mono/kinder-models/scripts
-python inference_geom2d.py --env-name $ENV_ID --save-videos --num-seeds 1 --num-episodes 5 --max-steps 200
+cd kinder-baselines/kinder-models/scripts
+python inference.py --env-name $ENV_ID --save-videos --num-seeds 1 --num-episodes 5 --max-steps 200
 ```
 
 ### Vision-language-action Models
@@ -147,8 +147,8 @@ python scripts/eval.py --use_overview_image
 4: Start environment
 
 ```bash
-cd prpl-mono/kinder-models/scripts
-python inference_geom2d.py --env-name $ENV_ID --save-videos --num-seeds 1 --num-episodes 5 --max-steps 200
+cd kinder-baselines/kinder-models/scripts
+python inference.py --env-name $ENV_ID --save-videos --num-seeds 1 --num-episodes 5 --max-steps 200
 ```
 
 ### Troubleshooting
