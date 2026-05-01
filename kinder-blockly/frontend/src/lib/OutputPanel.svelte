@@ -21,73 +21,70 @@
   let targetCanvas;
   let hoverCanvas;
   let trailCanvas;
+  let hoverTrailCanvas;
   let targetLabel;
   let trailLabel;
   let canvasSize = 220;
   let targetLabelPad = 0;
 
-  let dragOriginCanvas = null;
-  let dragOriginWorld  = null;
-  let isDragging       = false;
-
-  function canvasPos(e) {
-    const r  = hoverCanvas.getBoundingClientRect();
-    const sx = hoverCanvas.width  / r.width;
-    const sy = hoverCanvas.height / r.height;
-    return [(e.clientX - r.left) * sx, (e.clientY - r.top) * sy];
-  }
-
-  function getSnapped(e) {
-    const [px, py] = canvasPos(e);
-    const [wx, wy] = canvasToWorld(px, py, hoverCanvas.width, hoverCanvas.height);
+  function makeInteraction(getCanvas) {
+    let originCanvas = null, originWorld = null, dragging = false;
     const snap = v => Math.round(Math.max(-2, Math.min(2, v)) * 10) / 10;
-    return [snap(wx), snap(wy)];
-  }
-
-  function onMouseDown(e) {
-    const [px, py] = canvasPos(e);
-    const [wx, wy] = canvasToWorld(px, py, hoverCanvas.width, hoverCanvas.height);
-    const snap = v => Math.round(Math.max(-2, Math.min(2, v)) * 10) / 10;
-    dragOriginCanvas = { px, py };
-    dragOriginWorld  = { wx: snap(wx), wy: snap(wy) };
-    isDragging = false;
-  }
-
-  function onMouseMove(e) {
-    if (dragOriginCanvas) {
-      const [px, py] = canvasPos(e);
-      if (Math.hypot(px - dragOriginCanvas.px, py - dragOriginCanvas.py) > 5) {
-        isDragging = true;
-        const [wx, wy] = canvasToWorld(px, py, hoverCanvas.width, hoverCanvas.height);
-        const snap = v => Math.round(Math.max(-2, Math.min(2, v)) * 10) / 10;
-        drawVectorDrag(hoverCanvas, dragOriginWorld.wx, dragOriginWorld.wy, snap(wx), snap(wy));
-        return;
-      }
+    function pos(e) {
+      const cvs = getCanvas();
+      const r = cvs.getBoundingClientRect();
+      return [(e.clientX - r.left) * cvs.width / r.width,
+              (e.clientY - r.top)  * cvs.height / r.height];
     }
-    const [wx, wy] = getSnapped(e);
-    drawHoverMarker(hoverCanvas, wx, wy);
-  }
-
-  function onMouseUp(e) {
-    if (isDragging && dragOriginWorld) {
-      const [wx, wy] = getSnapped(e);
-      // Swap to UI convention: UI X = horizontal = robot Y (wy), UI Y = vertical = robot X (wx)
-      dispatch('gridDrag', { dx: wy - dragOriginWorld.wy, dy: wx - dragOriginWorld.wx });
-    } else if (dragOriginWorld) {
-      const [wx, wy] = getSnapped(e);
-      dispatch('gridClick', { x: wy, y: wx });
+    function snapped(e) {
+      const cvs = getCanvas();
+      const [px, py] = pos(e);
+      const [wx, wy] = canvasToWorld(px, py, cvs.width, cvs.height);
+      return [snap(wx), snap(wy)];
     }
-    dragOriginCanvas = null;
-    dragOriginWorld  = null;
-    isDragging       = false;
+    return {
+      down(e) {
+        const cvs = getCanvas();
+        const [px, py] = pos(e);
+        const [wx, wy] = canvasToWorld(px, py, cvs.width, cvs.height);
+        originCanvas = { px, py };
+        originWorld  = { wx: snap(wx), wy: snap(wy) };
+        dragging = false;
+      },
+      move(e) {
+        const cvs = getCanvas();
+        if (originCanvas) {
+          const [px, py] = pos(e);
+          if (Math.hypot(px - originCanvas.px, py - originCanvas.py) > 5) {
+            dragging = true;
+            const [wx, wy] = canvasToWorld(px, py, cvs.width, cvs.height);
+            drawVectorDrag(cvs, originWorld.wx, originWorld.wy, snap(wx), snap(wy));
+            return;
+          }
+        }
+        const [wx, wy] = snapped(e);
+        drawHoverMarker(cvs, wx, wy);
+      },
+      up(e) {
+        if (dragging && originWorld) {
+          const [wx, wy] = snapped(e);
+          dispatch('gridDrag', { dx: wy - originWorld.wy, dy: wx - originWorld.wx });
+        } else if (originWorld) {
+          const [wx, wy] = snapped(e);
+          dispatch('gridClick', { x: wy, y: wx });
+        }
+        originCanvas = null; originWorld = null; dragging = false;
+      },
+      leave() {
+        originCanvas = null; originWorld = null; dragging = false;
+        const cvs = getCanvas();
+        cvs.getContext('2d').clearRect(0, 0, cvs.width, cvs.height);
+      },
+    };
   }
 
-  function onMouseLeave() {
-    dragOriginCanvas = null;
-    dragOriginWorld  = null;
-    isDragging       = false;
-    hoverCanvas.getContext('2d').clearRect(0, 0, hoverCanvas.width, hoverCanvas.height);
-  }
+  const ti = makeInteraction(() => hoverCanvas);
+  const di = makeInteraction(() => hoverTrailCanvas);
 
   $: scoreClass = score == null ? '' : score.score >= 70 ? 'good' : score.score >= 40 ? 'ok' : 'poor';
 
@@ -136,17 +133,21 @@
         <div class="canvas-wrapper">
           <canvas bind:this={targetCanvas} class="retro-border" width="220" height="220" style="width:{canvasSize}px;height:{canvasSize}px"></canvas>
           <canvas bind:this={hoverCanvas} class="hover-overlay" width="220" height="220"
-            on:mousedown={onMouseDown}
-            on:mousemove={onMouseMove}
-            on:mouseup={onMouseUp}
-            on:mouseleave={onMouseLeave}
+            on:mousedown={ti.down} on:mousemove={ti.move}
+            on:mouseup={ti.up} on:mouseleave={ti.leave}
           ></canvas>
         </div>
       </div>
       {/if}
       <div class="canvas-col">
         <span class="panel-label" bind:this={trailLabel}>// YOUR DRAWING</span>
-        <canvas bind:this={trailCanvas} class="retro-border" width="220" height="220" style="width:{canvasSize}px;height:{canvasSize}px"></canvas>
+        <div class="canvas-wrapper">
+          <canvas bind:this={trailCanvas} class="retro-border" width="220" height="220" style="width:{canvasSize}px;height:{canvasSize}px"></canvas>
+          <canvas bind:this={hoverTrailCanvas} class="hover-overlay" width="220" height="220"
+            on:mousedown={di.down} on:mousemove={di.move}
+            on:mouseup={di.up} on:mouseleave={di.leave}
+          ></canvas>
+        </div>
       </div>
     </div>
   </div>

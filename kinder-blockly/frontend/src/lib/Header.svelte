@@ -14,6 +14,9 @@
 <header>
   <h1>KinDER Blockly</h1>
   <button id="run-btn" on:click={() => dispatch('run')} disabled={isRunning}>&#9654; RUN</button>
+  {#if isRunning}
+    <button id="stop-btn" on:click={() => dispatch('stop')}>&#9632; STOP</button>
+  {/if}
   <select id="challenge-select" bind:value={selectedId} on:change={onChallengeChange}>
     <option value="">FREE DRAW</option>
     {#each challenges as c}
@@ -43,6 +46,16 @@
   #run-btn:hover  { transform: translate(-1px, -1px); }
   #run-btn:active { transform: translate(var(--px), var(--px)); box-shadow: none; }
   #run-btn:disabled { background: #2a1d4e; border-color: #1e1040; box-shadow: none; cursor: not-allowed; }
+  #stop-btn {
+    font-family: 'Silkscreen', monospace;
+    background: #7f1d1d; color: #fca5a5;
+    border: var(--px) solid #991b1b;
+    padding: 8px 18px; font-size: 26px; cursor: pointer;
+    box-shadow: var(--px) var(--px) 0 #450a0a;
+    transition: transform 0.05s;
+  }
+  #stop-btn:hover  { transform: translate(-1px, -1px); }
+  #stop-btn:active { transform: translate(var(--px), var(--px)); box-shadow: none; }
   #challenge-select {
     font-family: 'Silkscreen', monospace;
     padding: 6px 8px; font-size: 24px;

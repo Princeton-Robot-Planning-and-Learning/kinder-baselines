@@ -93,6 +93,17 @@
     }
   }
 
+  class KinderConstantProvider extends Blockly.zelos.ConstantProvider {
+    shapeFor(connection) {
+      if (connection.getCheck()?.includes('Condition')) return this.HEXAGONAL;
+      return super.shapeFor(connection);
+    }
+  }
+  class KinderRenderer extends Blockly.zelos.Renderer {
+    makeConstants_() { return new KinderConstantProvider(); }
+  }
+  Blockly.blockRendering.register('kinder', KinderRenderer);
+
   const retroTheme = Blockly.Theme.defineTheme('retro', {
     base: Blockly.Themes.Classic,
     blockStyles: {
@@ -100,6 +111,11 @@
         colourPrimary:   '#fef9c3',
         colourSecondary: '#fde047',
         colourTertiary:  '#ca8a04',
+      },
+      condition_style: {
+        colourPrimary:   '#ffedd5',
+        colourSecondary: '#fed7aa',
+        colourTertiary:  '#ea580c',
       },
     },
     componentStyles: {
@@ -135,7 +151,7 @@
   }
 
   const SEQUENCE_HEADS = new Set(['start', 'define_skill']);
-  const CUSTOM_COLLAPSE = new Set(['define_skill', 'use_skill', 'set_pen_color', 'move_base_to_target', 'move_base_by']);
+  const CUSTOM_COLLAPSE = new Set(['start', 'define_skill', 'use_skill', 'set_pen_color', 'move_base_to_target', 'move_base_by', 'repeat', 'repeat_while', 'pen_up', 'pen_down']);
 
   function isUseSkillValid(block) {
     const skillName = block.getFieldValue('SKILL');
@@ -172,19 +188,25 @@
     return false;
   }
 
+  function markReachable(block, reachable) {
+    while (block) {
+      reachable.add(block.id);
+      if (block.type === 'repeat' || block.type === 'repeat_while') markReachable(block.getInputTargetBlock('BODY'), reachable);
+      block = block.getNextBlock();
+    }
+  }
+
   function updateEnabledStates() {
     if (!workspace) return;
     const reachable = new Set();
     for (const top of workspace.getTopBlocks(false)) {
-      if (SEQUENCE_HEADS.has(top.type)) {
-        let b = top.getNextBlock();
-        while (b) { reachable.add(b.id); b = b.getNextBlock(); }
-      }
+      if (SEQUENCE_HEADS.has(top.type)) markReachable(top.getInputTargetBlock('BODY'), reachable);
     }
     for (const block of workspace.getAllBlocks(false)) {
       if (SEQUENCE_HEADS.has(block.type)) continue;
       if (block.isShadow()) continue;
       if (block.type === 'param_ref') continue; // always connectable; dropdown handles invalid context
+      if (block.type === 'condition') continue;  // value block; parent repeat_while handles state
       let should = reachable.has(block.id);
       if (should && block.type === 'use_skill') should = isUseSkillValid(block);
       if (should) should = !hasInvalidParamRef(block);
@@ -192,14 +214,25 @@
     }
   }
 
+  export function selectBlock(blockId) {
+    if (!blockId || !workspace) return;
+    const block = workspace.getBlockById(blockId);
+    if (!block) return;
+    Blockly.common.setSelected(block);
+  }
+
   export function hasParamErrors() {
-    for (const top of workspace.getTopBlocks(false)) {
-      if (top.type !== 'start') continue;
-      let block = top.getNextBlock();
+    function walkErrors(block) {
       while (block) {
         if (block.type === 'use_skill' && !block.isEnabled()) return true;
+        if ((block.type === 'repeat' || block.type === 'repeat_while') && walkErrors(block.getInputTargetBlock('BODY'))) return true;
         block = block.getNextBlock();
       }
+      return false;
+    }
+    for (const top of workspace.getTopBlocks(false)) {
+      if (top.type !== 'start') continue;
+      if (walkErrors(top.getInputTargetBlock('BODY'))) return true;
     }
     return false;
   }
@@ -212,7 +245,7 @@
     for (const top of workspace.getTopBlocks(false)) {
       if (top.type === 'define_skill') {
         const name = top.getFieldValue('NAME');
-        if (name) skillBodies[name] = top.getNextBlock();
+        if (name) skillBodies[name] = top.getInputTargetBlock('BODY');
       }
     }
 
@@ -226,14 +259,40 @@
       return Number(connected.getFieldValue('NUM') ?? 0);
     }
 
-    // Inline-expand a chain of blocks, substituting skill calls recursively.
-    // `params` maps param name → value for the current call frame.
-    function expandChain(block, params, depth) {
-      if (depth > 20) return; // guard against infinite recursion
+    // Inline-expand a chain of blocks into `output`, substituting skill calls recursively.
+    // repeat_while is sent as a nested structure; repeat is pre-expanded inline.
+    function expandChain(block, params, depth, output) {
+      if (depth > 20) return;
       while (block) {
         if (!block.isEnabled()) { block = block.getNextBlock(); continue; }
 
-        if (block.type === 'use_skill') {
+        if (block.type === 'repeat') {
+          const count = Math.max(0, Math.min(100, Math.round(getNumFromInput(block, 'INPUT_COUNT', params))));
+          const body = block.getInputTargetBlock('BODY');
+          if (body) for (let i = 0; i < count; i++) expandChain(body, params, depth + 1, output);
+        } else if (block.type === 'repeat_while') {
+          const condBlock = block.getInput('CONDITION')?.connection?.targetBlock();
+          if (condBlock?.type === 'condition') {
+            const varField = condBlock.getFieldValue('VAR') || 'X';
+            let serializedVar;
+            if (varField === 'X' || varField === 'Y') {
+              serializedVar = varField;
+            } else {
+              const paramVal = params?.[varField];
+              serializedVar = (paramVal != null && !isNaN(Number(paramVal))) ? String(paramVal) : '0';
+            }
+            const entry = {
+              type: 'repeat_while',
+              blockId: block.id,
+              var:  serializedVar,
+              op:   condBlock.getFieldValue('OP')  || '>',
+              threshold: getNumFromInput(condBlock, 'THRESHOLD', params),
+              body: [],
+            };
+            expandChain(block.getInputTargetBlock('BODY'), params, depth + 1, entry.body);
+            output.push(entry);
+          }
+        } else if (block.type === 'use_skill') {
           const skillName = block.getFieldValue('SKILL');
           const bodyStart = skillBodies[skillName];
           if (bodyStart) {
@@ -249,10 +308,10 @@
                 callParams[name] = (raw == null || String(raw).toUpperCase() === 'NULL') ? null : Number(raw);
               }
             }
-            expandChain(bodyStart, callParams, depth + 1);
+            expandChain(bodyStart, callParams, depth + 1, output);
           }
         } else {
-          const entry = { type: block.type };
+          const entry = { type: block.type, blockId: block.id };
           if (block.type === 'move_base_to_target') {
             entry.x = getNumFromInput(block, 'INPUT_X', params);
             entry.y = getNumFromInput(block, 'INPUT_Y', params);
@@ -272,7 +331,7 @@
               entry.b = Number(block.getFieldValue('B'));
             }
           }
-          blocks.push(entry);
+          output.push(entry);
         }
         block = block.getNextBlock();
       }
@@ -280,7 +339,7 @@
 
     for (const top of workspace.getTopBlocks(true)) {
       if (top.type !== 'start') continue;
-      expandChain(top.getNextBlock(), {}, 0);
+      expandChain(top.getInputTargetBlock('BODY'), {}, 0, blocks);
       break;
     }
     return { blocks };
@@ -314,6 +373,17 @@
 
   let pendingDeleteStartId = null;
   let saveTimer = null;
+  const WS_KEY = 'kinder-blockly-ws-v3';
+
+  function saveWorkspace() {
+    if (!workspace) return;
+    try {
+      const next = JSON.stringify(Blockly.serialization.workspaces.save(workspace));
+      const prev = localStorage.getItem(WS_KEY);
+      if (prev) localStorage.setItem(WS_KEY + '-backup', prev);
+      localStorage.setItem(WS_KEY, next);
+    } catch {}
+  }
 
   function onPointerUp() {
     if (!pendingDeleteStartId) return;
@@ -328,15 +398,16 @@
       theme: retroTheme,
       trashcan: true,
       scrollbars: true,
-      renderer: 'zelos',
+      renderer: 'kinder',
       grid: { spacing: 25, length: 3, colour: '#5b21b6', snap: true },
       zoom: { controls: false, wheel: false, startScale: 1.5, maxScale: 4, minScale: 0.2, scaleSpeed: 1.2 },
       plugins: { metricsManager: FixedSizeMetricsManager },
     });
 
-    try { Blockly.ContextMenuRegistry.registry.unregister('blockDisable'); } catch (_) {}
-    try { Blockly.ContextMenuRegistry.registry.unregister('blockCollapse'); } catch (_) {}
-    try { Blockly.ContextMenuRegistry.registry.unregister('blockCollapseExpand'); } catch (_) {}
+    for (const id of ['blockDisable', 'blockCollapse', 'blockCollapseExpand',
+                       'collapseWorkspace', 'expandWorkspace', 'cleanWorkspace']) {
+      try { Blockly.ContextMenuRegistry.registry.unregister(id); } catch (_) {}
+    }
 
     try { Blockly.ContextMenuRegistry.registry.unregister('duplicateFromHere'); } catch (_) {}
     Blockly.ContextMenuRegistry.registry.register({
@@ -353,8 +424,15 @@
         state.x = xy.x + 40;
         state.y = xy.y + 40;
         const newBlock = Blockly.serialization.blocks.append(state, ws);
-        let b = newBlock;
-        while (b) { if (!b.isCollapsed()) b.setCollapsed(true); b = b.getNextBlock(); }
+        function collapseChain(b) {
+          while (b) {
+            if (CUSTOM_COLLAPSE.has(b.type)) b.customCollapse_?.();
+            else if (!b.isCollapsed() && !b.outputConnection) b.setCollapsed(true);
+            if (b.type === 'repeat' || b.type === 'repeat_while') collapseChain(b.getInputTargetBlock('BODY'));
+            b = b.getNextBlock();
+          }
+        }
+        collapseChain(newBlock);
       },
     });
 
@@ -460,12 +538,10 @@
     });
 
     // Persist workspace across hot reloads (v2: movement blocks use value inputs)
-    const WS_KEY = 'kinder-blockly-ws-v2';
+
     workspace.addChangeListener(() => {
       clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => {
-        try { localStorage.setItem(WS_KEY, JSON.stringify(Blockly.serialization.workspaces.save(workspace))); } catch {}
-      }, 400);
+      saveTimer = setTimeout(saveWorkspace, 400);
     });
 
     // Recalculate flyout position after CSS and layout have settled, then centre on origin
@@ -473,8 +549,55 @@
       Blockly.svgResize(workspace);
       const saved = localStorage.getItem(WS_KEY);
       if (saved) {
-        try { Blockly.serialization.workspaces.load(JSON.parse(saved), workspace); } catch { localStorage.removeItem(WS_KEY); }
+        try {
+          Blockly.serialization.workspaces.load(JSON.parse(saved), workspace);
+          // Refresh use_skill blocks now that all define_skill blocks are loaded.
+          // (During deserialization the SKILL field change fires before define_skill
+          // blocks exist, so updateParamInputs_ may have had nothing to look up.)
+          for (const block of workspace.getAllBlocks(false)) {
+            if (block.type === 'use_skill') block.updateParamInputs_?.();
+          }
+          for (const block of workspace.getAllBlocks(false)) {
+            if (block.isShadow() || block.outputConnection) continue;
+            if (CUSTOM_COLLAPSE.has(block.type)) block.customCollapse_?.();
+            else if (!block.isCollapsed()) block.setCollapsed(true);
+          }
+        } catch { localStorage.removeItem(WS_KEY); }
       }
+      // One-time migration from v2 (next connections) → v3 (BODY statement input).
+      if (!saved) {
+        const v2 = localStorage.getItem('kinder-blockly-ws-v2');
+        if (v2) {
+          try {
+            const ws = JSON.parse(v2);
+            function migrateBlock(blk) {
+              if (!blk) return;
+              for (const inp of Object.values(blk.inputs || {})) {
+                if (inp.block) migrateBlock(inp.block);
+                if (inp.shadow) migrateBlock(inp.shadow);
+              }
+              if (blk.next?.block) migrateBlock(blk.next.block);
+              if ((blk.type === 'start' || blk.type === 'define_skill') && blk.next) {
+                blk.inputs = blk.inputs || {};
+                blk.inputs['BODY'] = blk.next;
+                delete blk.next;
+              }
+            }
+            for (const blk of ws.blocks?.blocks || []) migrateBlock(blk);
+            localStorage.setItem(WS_KEY, JSON.stringify(ws));
+            Blockly.serialization.workspaces.load(ws, workspace);
+            for (const block of workspace.getAllBlocks(false)) {
+              if (block.type === 'use_skill') block.updateParamInputs_?.();
+            }
+            for (const block of workspace.getAllBlocks(false)) {
+              if (block.isShadow() || block.outputConnection) continue;
+              if (CUSTOM_COLLAPSE.has(block.type)) block.customCollapse_?.();
+              else if (!block.isCollapsed()) block.setCollapsed(true);
+            }
+          } catch {}
+        }
+      }
+
       workspace.setScale(1.5);
       workspace.scroll(blocklyDiv.clientWidth / 2, blocklyDiv.clientHeight / 2);
       updateEnabledStates();
@@ -487,14 +610,16 @@
   });
 
   onDestroy(() => {
+    clearTimeout(saveTimer);
+    if (workspace) saveWorkspace();
     blocklyDiv?.removeEventListener('wheel', onWheel);
     blocklyDiv?.removeEventListener('dblclick', onDblClick);
     document.removeEventListener('pointerup', onPointerUp);
     document.removeEventListener('keydown', onKeyDown);
     workspace?.dispose();
+    clearTimeout(saveTimer); // kill any timer re-armed by dispose's change events
     document.getElementById('blockly-silkscreen')?.remove();
     try { Blockly.ContextMenuRegistry.registry.unregister('duplicateFromHere'); } catch (_) {}
-    clearTimeout(saveTimer);
   });
 </script>
 

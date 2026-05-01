@@ -1,5 +1,30 @@
 # Changelog
 
+## [Unreleased] — 2026-05-01
+
+### Executor
+
+- **Out-of-bounds detection** — `_run_move_base_to` checks `abs(x) > 2 or abs(y) > 2` after each waypoint and raises a descriptive `RuntimeError` if the robot leaves the grid. TidyBot delivers the message in character.
+- **Fast abstract pre-validator** — new `validate_program()` in `executor.py` symbolically simulates the block list (position arithmetic only, no physics) before any kinder environment is created. Catches out-of-bounds `move_base_to_target` targets and `repeat_while` infinite loops (≥ 100 iterations without condition breaking) in microseconds. Called at the top of `/run` before `execute_program`.
+- **Stop signal** — `execute_program` and `_run_move_base_to` both accept a `stop_event: threading.Event` parameter and check it between blocks / between waypoints so execution exits cleanly when the frontend requests a stop.
+- **Execution timeout** — `generate()` in `server.py` tracks a monotonic deadline (`EXECUTION_TIMEOUT_S`, currently `5.0` s for testing; change to `120.0` for production). After each frame, if the deadline has passed, the stop event is set and a lighthearted timeout message is sent to TidyBot.
+
+### Server
+
+- **NDJSON streaming** — `/run` now uses `stream_with_context(generate())` and `mimetype="application/x-ndjson"`. Each rendered frame is streamed immediately as `{"type":"frame","frame":"...","index":N,"label":{...}}\n`; a final `{"type":"done",...}\n` carries trail, pen events, and any error.
+- **`/stop` endpoint** — new `POST /stop` sets `_stop_event`, causing the running generator to exit after the current block.
+- **`error_block_id` propagation** — validation errors include the Blockly block ID of the offending block; the frontend uses it to select and scroll to that block.
+
+### Frontend
+
+- **Real-time frame display** — `runProgram` in `App.svelte` reads the NDJSON stream with `response.body.getReader()`. Each `"frame"` chunk appends to `allFrames` and updates `currentFrameIndex` immediately, so the 3D view updates live as the robot moves. Status shows `RUNNING... (frame N)`.
+- **Stop button** — a red `■ STOP` button appears in the header while running. Clicking it calls `AbortController.abort()` (cancels the fetch), sends `POST /stop`, and sets `isStopped`. The animation loop also checks `isStopped` to break early.
+- **3D view preserved on error** — when a validation error returns no frames, `allFrames` is not cleared so the last valid frame stays visible. `frameInfo` shows `CHECK BLOCKS` or `INFINITE LOOP` instead of `NO FRAMES`.
+- **Block highlighting** — `BlocklyWorkspace` exports `selectBlock(blockId)` which calls `Blockly.common.setSelected` without moving the viewport. On a validation error, `App.svelte` calls it with `data.error_block_id` to expand and highlight the offending block.
+- **Lighthearted error messages** — OOB and timeout messages are written in TidyBot's voice. The "Nice drawing!" message is suppressed when there is an error, infinite loop, or the run was stopped. Error `tamaSay` duration extended to 7 s.
+
+---
+
 ## [Unreleased] — 2026-04-30 (continued 7)
 
 ### UI

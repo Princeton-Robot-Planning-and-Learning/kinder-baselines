@@ -11,6 +11,8 @@
   let challenges = [];
   let currentChallenge = null;
   let isRunning = false;
+  let isStopped = false;
+  let runAbortController = null;
   let status = '';
   let hint = '';
   let allFrames = [];
@@ -115,43 +117,93 @@
     } catch { hint = 'FAILED TO LOAD.'; }
   }
 
+  async function stopProgram() {
+    isStopped = true;
+    runAbortController?.abort();
+    fetch('/stop', { method: 'POST' }).catch(() => {});
+    tamaSay("OK OK, brakes applied! I'll stop after this move.", 4000);
+  }
+
   async function runProgram() {
     if (blocklyWorkspace.hasParamErrors()) { status = 'ERRORS!'; tamaSay("Oh no, the skills are broken! Fix the red params first.", 4000); return; }
     const program = blocklyWorkspace.getProgram();
     if (program.blocks.length === 0) { status = 'NO BLOCKS!'; tamaSay("Drag some blocks first!", 3000); return; }
 
-    isRunning = true; status = 'RUNNING...'; frameInfo = ''; scoreData = null; studentTrail = []; studentPenEvents = []; allFrameLabels = [];
+    isStopped = false;
+    runAbortController = new AbortController();
+    isRunning = true; status = 'RUNNING...'; frameInfo = 'STARTING...';
+    scoreData = null; studentTrail = []; studentPenEvents = [];
+    allFrames = []; allFrameLabels = [];
     tamaSay("Let's go! Executing program...", 3000);
 
     try {
       const r = await fetch('/run', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ program, seed: 0 }),
+        signal: runAbortController.signal,
       });
-      const data = await r.json();
 
-      status = data.error ? 'ERROR!' : 'DONE!';
-      if (data.error) tamaSay("Oops! " + data.error, 5000);
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let doneMsg = null;
 
-      const frames = data.frames || [];
-      allFrames = frames;
-      allFrameLabels = data.frame_labels || [];
-      for (let i = 0; i < frames.length; i++) {
-        currentFrameIndex = i;
-        frameInfo = `FRAME ${i+1}/${frames.length}`;
-        await new Promise(r => setTimeout(r, 100));
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop(); // keep trailing incomplete line
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const msg = JSON.parse(line);
+          if (msg.type === 'frame') {
+            allFrames = [...allFrames, msg.frame];
+            allFrameLabels = [...allFrameLabels, msg.label];
+            currentFrameIndex = allFrames.length - 1;
+            const n = allFrames.length;
+            frameInfo = `FRAME ${n}`;
+            status = `RUNNING... (frame ${n})`;
+          } else if (msg.type === 'done') {
+            doneMsg = msg;
+          }
+        }
       }
-      if (!frames.length) frameInfo = 'NO FRAMES';
 
-      studentTrail = data.trail || [];
-      studentPenEvents = data.pen_events || [];
+      if (doneMsg) {
+        if (doneMsg.error_block_id) blocklyWorkspace.selectBlock(doneMsg.error_block_id);
 
-      if (currentChallenge && studentTrail.length > 0) {
-        await requestScore(currentChallenge.id, studentTrail);
-      } else if (!currentChallenge) {
-        tamaSay("Nice drawing! Pick a challenge to get scored!", 4000);
+        if (doneMsg.error) {
+          status = 'ERROR!';
+          tamaSay(doneMsg.error, 7000);
+        } else if (doneMsg.infinite_loop) {
+          status = 'LOOP!';
+          tamaSay("I'm going in circles!! My while loop ran 100 times and never stopped — I think I'm stuck forever. Could you check that condition?", 7000);
+        } else if (!isStopped) {
+          status = 'DONE!';
+        }
+
+        if (!allFrames.length) {
+          frameInfo = doneMsg.error ? 'CHECK BLOCKS' : (doneMsg.infinite_loop ? 'INFINITE LOOP' : 'NO FRAMES');
+        } else {
+          frameInfo = `FRAME ${currentFrameIndex + 1}/${allFrames.length}`;
+        }
+
+        studentTrail = doneMsg.trail || [];
+        studentPenEvents = doneMsg.pen_events || [];
+
+        if (currentChallenge && studentTrail.length > 0) {
+          await requestScore(currentChallenge.id, studentTrail);
+        } else if (!currentChallenge && !doneMsg.error && !doneMsg.infinite_loop && !isStopped) {
+          tamaSay("Nice drawing! Pick a challenge to get scored!", 4000);
+        }
       }
-    } catch { status = 'ERROR!'; tamaSay("Connection error! Is the server running?", 4000); }
+    } catch (e) {
+      if (e?.name === 'AbortError') {
+        status = 'STOPPED';
+        frameInfo = allFrames.length ? `FRAME ${currentFrameIndex + 1}/${allFrames.length}` : 'STOPPED';
+      } else { status = 'ERROR!'; tamaSay("Connection error! Is the server running?", 4000); }
+    }
     finally { isRunning = false; }
   }
 
@@ -173,6 +225,7 @@
 
 <Header {challenges} {isRunning} {status} {hint}
   on:run={runProgram}
+  on:stop={stopProgram}
   on:challengeChange={e => onChallengeChange(e.detail)}
 />
 
