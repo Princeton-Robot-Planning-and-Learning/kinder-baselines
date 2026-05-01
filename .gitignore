@@ -1,4 +1,6 @@
 .DS_Store
+**/node_modules/
+**/CHANGELOG.md
 .python-version
 MUJOCO_LOG.TXT
 **/auto_*.xml
