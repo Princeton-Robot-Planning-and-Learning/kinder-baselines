@@ -258,9 +258,7 @@ def main() -> None:
     obs_results_per_env: dict[str, list[dict | None]] = {}
     for env in args.envs:
         obs_results_per_env[env] = [
-            _load_sweep_results(
-                base_log_dir / env / _config_dir_name(obs_std, 0.0)
-            )
+            _load_sweep_results(base_log_dir / env / _config_dir_name(obs_std, 0.0))
             for obs_std in args.obs_noise_stds
         ]
 
@@ -275,9 +273,7 @@ def main() -> None:
     action_results_per_env: dict[str, list[dict | None]] = {}
     for env in args.envs:
         action_results_per_env[env] = [
-            _load_sweep_results(
-                base_log_dir / env / _config_dir_name(0.0, act_std)
-            )
+            _load_sweep_results(base_log_dir / env / _config_dir_name(0.0, act_std))
             for act_std in args.action_noise_stds
         ]
 

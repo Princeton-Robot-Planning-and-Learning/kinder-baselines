@@ -16,7 +16,9 @@ TrailSegment = dict[str, float]
 # ---------------------------------------------------------------------------
 def _segments_from_waypoints(
     waypoints: list[tuple[float, float]],
-    r: int, g: int, b: int,
+    r: int,
+    g: int,
+    b: int,
     closed: bool = False,
 ) -> list[TrailSegment]:
     pts = list(waypoints)
@@ -24,11 +26,17 @@ def _segments_from_waypoints(
         pts.append(pts[0])
     segs: list[TrailSegment] = []
     for i in range(len(pts) - 1):
-        segs.append({
-            "x1": pts[i][0], "y1": pts[i][1],
-            "x2": pts[i + 1][0], "y2": pts[i + 1][1],
-            "r": r, "g": g, "b": b,
-        })
+        segs.append(
+            {
+                "x1": pts[i][0],
+                "y1": pts[i][1],
+                "x2": pts[i + 1][0],
+                "y2": pts[i + 1][1],
+                "r": r,
+                "g": g,
+                "b": b,
+            }
+        )
     return segs
 
 
@@ -42,13 +50,16 @@ CHALLENGES: list[dict] = [
         "difficulty": "easy",
         "description": "Draw a red square (side length 1, centered at the origin).",
         "hint": "Find the red paint bucket and dip your arm in first, "
-                "then move to a corner, pen down, and trace the four sides!",
+        "then move to a corner, pen down, and trace the four sides!",
         "paint_buckets": [
             {"id": "red_bucket", "x": 1.5, "y": 1.5, "r": 255, "g": 0, "b": 0},
         ],
         "target_trail": _segments_from_waypoints(
             [(-0.5, 0.5), (-0.5, -0.5), (0.5, -0.5), (0.5, 0.5)],
-            r=255, g=0, b=0, closed=True,
+            r=255,
+            g=0,
+            b=0,
+            closed=True,
         ),
     },
     {
@@ -56,13 +67,17 @@ CHALLENGES: list[dict] = [
         "name": "Triangle",
         "difficulty": "easy",
         "description": "Draw a blue triangle.",
-        "hint": "Grab the blue paint bucket first, then connect three points to close the shape!",
+        "hint": "Grab the blue paint bucket first, "
+        "then connect three points to close the shape!",
         "paint_buckets": [
             {"id": "blue_bucket", "x": 1.5, "y": -1.5, "r": 0, "g": 80, "b": 255},
         ],
         "target_trail": _segments_from_waypoints(
             [(0.0, 1.0), (1.0, -0.5), (-1.0, -0.5)],
-            r=0, g=80, b=255, closed=True,
+            r=0,
+            g=80,
+            b=255,
+            closed=True,
         ),
     },
     {
@@ -70,13 +85,17 @@ CHALLENGES: list[dict] = [
         "name": "Letter L",
         "difficulty": "easy",
         "description": "Draw a green letter L.",
-        "hint": "Fetch the green paint, then two straight lines: one going down, one going right.",
+        "hint": "Fetch the green paint, then two straight lines: "
+        "one going down, one going right.",
         "paint_buckets": [
             {"id": "green_bucket", "x": 1.5, "y": 1.5, "r": 0, "g": 200, "b": 0},
         ],
         "target_trail": _segments_from_waypoints(
             [(0.5, 1.0), (0.5, -0.5), (-0.5, -0.5)],
-            r=0, g=200, b=0, closed=False,
+            r=0,
+            g=200,
+            b=0,
+            closed=False,
         ),
     },
     {
@@ -85,13 +104,16 @@ CHALLENGES: list[dict] = [
         "difficulty": "medium",
         "description": "Draw a red diamond (rotated square).",
         "hint": "Dip into the red paint first, then make four diagonal moves "
-                "connecting top, right, bottom, and left.",
+        "connecting top, right, bottom, and left.",
         "paint_buckets": [
             {"id": "red_bucket", "x": 1.5, "y": -1.5, "r": 255, "g": 0, "b": 0},
         ],
         "target_trail": _segments_from_waypoints(
             [(0.0, 1.0), (-1.0, 0.0), (0.0, -1.0), (1.0, 0.0)],
-            r=255, g=0, b=0, closed=True,
+            r=255,
+            g=0,
+            b=0,
+            closed=True,
         ),
     },
     {
@@ -99,16 +121,23 @@ CHALLENGES: list[dict] = [
         "name": "Zigzag",
         "difficulty": "medium",
         "description": "Draw an orange zigzag line from left to right.",
-        "hint": "Pick up the orange paint, then alternate between moving up-right and down-right.",
+        "hint": "Pick up the orange paint, then alternate "
+        "between moving up-right and down-right.",
         "paint_buckets": [
             {"id": "orange_bucket", "x": 1.5, "y": 1.5, "r": 255, "g": 140, "b": 0},
         ],
         "target_trail": _segments_from_waypoints(
             [
-                (1.0, 0.0), (0.5, 0.5), (0.0, 0.0),
-                (-0.5, 0.5), (-1.0, 0.0),
+                (1.0, 0.0),
+                (0.5, 0.5),
+                (0.0, 0.0),
+                (-0.5, 0.5),
+                (-1.0, 0.0),
             ],
-            r=255, g=140, b=0, closed=False,
+            r=255,
+            g=140,
+            b=0,
+            closed=False,
         ),
     },
     {
@@ -117,24 +146,30 @@ CHALLENGES: list[dict] = [
         "difficulty": "hard",
         "description": "Draw a house: red square base with a blue triangle roof.",
         "hint": "Find the red paint bucket first, dip your arm in, then draw the square "
-                "base. Next, find the blue bucket, dip again, and draw the triangle roof!",
+        "base. Next, find the blue bucket, dip again, and draw the triangle roof!",
         # Two paint buckets in the lower corners of the world (robot coords),
         # clear of the house drawing which occupies the upper-centre region.
         "paint_buckets": [
-            {"id": "red_bucket",  "x": 1.5, "y": -1.5, "r": 255, "g": 0,  "b": 0},
-            {"id": "blue_bucket", "x": 1.5, "y":  1.5, "r": 0,   "g": 80, "b": 255},
+            {"id": "red_bucket", "x": 1.5, "y": -1.5, "r": 255, "g": 0, "b": 0},
+            {"id": "blue_bucket", "x": 1.5, "y": 1.5, "r": 0, "g": 80, "b": 255},
         ],
         "target_trail": (
             # base (red square)
             _segments_from_waypoints(
                 [(0.5, -0.5), (0.5, 0.5), (0.0, 0.5), (0.0, -0.5)],
-                r=255, g=0, b=0, closed=True,
+                r=255,
+                g=0,
+                b=0,
+                closed=True,
             )
             +
             # roof (blue triangle)
             _segments_from_waypoints(
                 [(0.0, -0.5), (-1.0, 0.0), (0.0, 0.5)],
-                r=0, g=80, b=255, closed=False,
+                r=0,
+                g=80,
+                b=255,
+                closed=False,
             )
         ),
     },
@@ -144,7 +179,7 @@ CHALLENGES: list[dict] = [
         "difficulty": "hard",
         "description": "Draw a yellow five-pointed star.",
         "hint": "Get the yellow paint first, then connect every other vertex "
-                "of a regular pentagon to draw the star.",
+        "of a regular pentagon to draw the star.",
         "paint_buckets": [
             {"id": "yellow_bucket", "x": 1.5, "y": -1.5, "r": 220, "g": 180, "b": 0},
         ],
@@ -156,7 +191,10 @@ CHALLENGES: list[dict] = [
                 (-1.0, 0.5),
                 (0.5, -0.5),
             ],
-            r=220, g=180, b=0, closed=True,
+            r=220,
+            g=180,
+            b=0,
+            closed=True,
         ),
     },
 ]
@@ -187,6 +225,7 @@ def list_challenges() -> list[dict]:
 # Scoring
 # ---------------------------------------------------------------------------
 
+
 def _sample_points(
     trail: list[TrailSegment], spacing: float = 0.02
 ) -> list[tuple[float, float, int, int, int]]:
@@ -199,11 +238,15 @@ def _sample_points(
         n = max(int(length / spacing), 1)
         for i in range(n + 1):
             t = i / n
-            pts.append((
-                seg["x1"] + t * dx,
-                seg["y1"] + t * dy,
-                int(seg["r"]), int(seg["g"]), int(seg["b"]),
-            ))
+            pts.append(
+                (
+                    seg["x1"] + t * dx,
+                    seg["y1"] + t * dy,
+                    int(seg["r"]),
+                    int(seg["g"]),
+                    int(seg["b"]),
+                )
+            )
     return pts
 
 
@@ -220,11 +263,12 @@ def score_trail(
     student_pts = _sample_points(student_trail)
 
     if not target_pts:
-        return {"score": 100 if not student_pts else 0,
-                "breakdown": {"coverage": 100, "precision": 100, "color": 100}}
+        return {
+            "score": 100 if not student_pts else 0,
+            "breakdown": {"coverage": 100, "precision": 100, "color": 100},
+        }
     if not student_pts:
-        return {"score": 0,
-                "breakdown": {"coverage": 0, "precision": 0, "color": 0}}
+        return {"score": 0, "breakdown": {"coverage": 0, "precision": 0, "color": 0}}
 
     # Build simple arrays for distance calc.
     t_xy = [(p[0], p[1]) for p in target_pts]
@@ -244,9 +288,9 @@ def score_trail(
         if best_dist <= tolerance:
             covered += 1
             sp = student_pts[best_j]
-            cdiff = (
-                abs(tp[2] - sp[2]) + abs(tp[3] - sp[3]) + abs(tp[4] - sp[4])
-            ) / (3.0 * 255.0)
+            cdiff = (abs(tp[2] - sp[2]) + abs(tp[3] - sp[3]) + abs(tp[4] - sp[4])) / (
+                3.0 * 255.0
+            )
             color_diffs.append(1.0 - cdiff)
 
     coverage = covered / len(target_pts)

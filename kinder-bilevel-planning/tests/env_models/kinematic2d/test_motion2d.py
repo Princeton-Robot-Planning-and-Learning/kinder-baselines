@@ -388,8 +388,8 @@ def test_motion2d_plan_and_replay_controllers():
     # --- Step 4: verify goal reached ---
     abstract_state = env_models.state_abstractor(state)
     goal_atoms = goal.atoms
-    assert goal_atoms.issubset(abstract_state.atoms), (
-        f"Goal not reached. Expected {goal_atoms} ⊆ {abstract_state.atoms}"
-    )
+    assert goal_atoms.issubset(
+        abstract_state.atoms
+    ), f"Goal not reached. Expected {goal_atoms} ⊆ {abstract_state.atoms}"
 
     env.close()

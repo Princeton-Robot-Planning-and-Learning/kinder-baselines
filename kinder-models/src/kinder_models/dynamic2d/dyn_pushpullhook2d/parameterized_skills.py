@@ -112,9 +112,10 @@ class GroundGraspHookController(Dynamic2dRobotController):
         )
         # desired_arm_length = cast(float, self._current_params) * \
         #     (max_arm_length - min_arm_length) + min_arm_length
-        desired_arm_length = cast(float, self._current_params[0]) * \
-            (max_arm_length - min_arm_length) + min_arm_length
-
+        desired_arm_length = (
+            cast(float, self._current_params[0]) * (max_arm_length - min_arm_length)
+            + min_arm_length
+        )
 
         robot_x = state.get(self._robot, "x")
         robot_y = state.get(self._robot, "y")

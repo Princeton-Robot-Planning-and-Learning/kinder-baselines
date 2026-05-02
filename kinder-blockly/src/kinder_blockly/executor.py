@@ -1,11 +1,10 @@
 """Execute Blockly programs in KinDER environments."""
 
+import math
+import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
-
-import math
-import threading
 
 import kinder
 import numpy as np
@@ -37,12 +36,12 @@ TRAIL_HALF_THICKNESS = 0.001  # half-height — paper-thin
 
 # Camera — same perspective as the original (yaw 90, pitch -30) but pulled back
 # slightly so the paint buckets near the corners remain in frame.
-_CAM_DISTANCE = 4.0   # original was 2.8; 4.0 gives ~40% more world coverage
-_CAM_PITCH    = -35   # original was -30; 5° steeper keeps the floor in frame
-_CAM_YAW      = 90
-_CAM_TARGET   = (0.0, 0.0, 0.0)
-_RENDER_W     = 640
-_RENDER_H     = 360
+_CAM_DISTANCE = 4.0  # original was 2.8; 4.0 gives ~40% more world coverage
+_CAM_PITCH = -35  # original was -30; 5° steeper keeps the floor in frame
+_CAM_YAW = 90
+_CAM_TARGET = (0.0, 0.0, 0.0)
+_RENDER_W = 640
+_RENDER_H = 360
 
 
 def _render(client_id: int) -> NDArray[np.uint8]:
@@ -76,12 +75,15 @@ PaintBucket = dict[str, Any]  # keys: id str, x float, y float, r int, g int, b 
 BUCKET_RADIUS = 0.35
 
 # Paint bucket 3-D visual dimensions.
-BUCKET_VIS_RADIUS = 0.10   # cylinder radius (metres)
-BUCKET_VIS_HEIGHT = 0.20   # cylinder height (metres)
+BUCKET_VIS_RADIUS = 0.10  # cylinder radius (metres)
+BUCKET_VIS_HEIGHT = 0.20  # cylinder height (metres)
 
 
 def _add_trail_box(
-    x1: float, y1: float, x2: float, y2: float,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
     color_01: tuple[float, float, float],
     client_id: int,
 ) -> None:
@@ -111,7 +113,8 @@ def _add_trail_box(
 
 
 def _add_paint_bucket_visual(
-    x: float, y: float,
+    x: float,
+    y: float,
     color_01: tuple[float, float, float],
     client_id: int,
 ) -> int:
@@ -165,10 +168,16 @@ class _PenState:
         if self.prev_xy is None:
             return
         r, g, b = self.color_rgb
-        self.events.append({
-            "x": float(self.prev_xy[0]), "y": float(self.prev_xy[1]),
-            "type": event_type, "r": r, "g": g, "b": b,
-        })
+        self.events.append(
+            {
+                "x": float(self.prev_xy[0]),
+                "y": float(self.prev_xy[1]),
+                "type": event_type,
+                "r": r,
+                "g": g,
+                "b": b,
+            }
+        )
 
     @property
     def color_01(self) -> tuple[float, float, float]:
@@ -203,10 +212,10 @@ def validate_program(program: dict[str, Any]) -> dict[str, Any]:
         return {}
 
     _OP_FNS: dict[str, Callable[[float, float], bool]] = {
-        ">":  lambda a, b: a > b,
+        ">": lambda a, b: a > b,
         ">=": lambda a, b: a >= b,
-        "=":  lambda a, b: abs(a - b) < 0.05,
-        "<":  lambda a, b: a < b,
+        "=": lambda a, b: abs(a - b) < 0.05,
+        "<": lambda a, b: a < b,
         "<=": lambda a, b: a <= b,
     }
 
@@ -227,12 +236,12 @@ def validate_program(program: dict[str, Any]) -> dict[str, Any]:
         if depth > 20:
             return None
         for blk in blks:
-            btype    = blk["type"]
+            btype = blk["type"]
             block_id = blk.get("blockId")
 
             if btype == "move_base_to_target":
                 rx = -float(blk.get("y", 0.0))
-                ry =  float(blk.get("x", 0.0))
+                ry = float(blk.get("x", 0.0))
                 err = _oob_error(rx, ry)
                 if err:
                     return {"error": err, "error_block_id": block_id}
@@ -244,18 +253,18 @@ def validate_program(program: dict[str, Any]) -> dict[str, Any]:
                 pos[1] = max(-2.0, min(2.0, pos[1] + float(blk.get("dx", 0.0))))
 
             elif btype == "repeat_while":
-                var       = blk.get("var", "X")
-                op        = blk.get("op", ">")
+                var = blk.get("var", "X")
+                op = blk.get("op", ">")
                 threshold = float(blk.get("threshold", 0.0))
-                body      = blk.get("body", [])
+                body = blk.get("body", [])
                 _default: Callable[[float, float], bool] = lambda a, b: False
                 op_fn = _OP_FNS.get(op, _default)
                 for _ in range(100):
                     cur: float
                     if var == "X":
-                        cur = pos[1]        # UI X = robot_y
+                        cur = pos[1]  # UI X = robot_y
                     elif var == "Y":
-                        cur = -pos[0]       # UI Y = -robot_x
+                        cur = -pos[0]  # UI Y = -robot_x
                     else:
                         try:
                             cur = float(var)
@@ -285,7 +294,8 @@ def render_initial_frame(seed: int = 0) -> NDArray[np.uint8]:
     try:
         env.reset(seed=seed)
         cid = _get_physics_client_id(env)
-        return _render(cid) if cid is not None else env.render()  # type: ignore[return-value]
+        frame = _render(cid) if cid is not None else env.render()
+        return frame  # type: ignore[return-value]
     finally:
         env.close()  # type: ignore[no-untyped-call]
 
@@ -336,7 +346,9 @@ def execute_program(
         pen.prev_xy = [state.base_pose.x, state.base_pose.y]
 
         # Track which paint bucket IDs the robot has dipped into this run.
-        visited_set: set[str] = visited_buckets_out if visited_buckets_out is not None else set()
+        visited_set: set[str] = (
+            visited_buckets_out if visited_buckets_out is not None else set()
+        )
         buckets: list[PaintBucket] = paint_buckets or []
 
         # Spawn paint bucket cylinders in the 3-D simulation before the first render.
@@ -347,12 +359,17 @@ def execute_program(
                 _g = int(_bucket["g"]) / 255.0
                 _b = int(_bucket["b"]) / 255.0
                 _bid = _add_paint_bucket_visual(
-                    float(_bucket["x"]), float(_bucket["y"]),
-                    (_r, _g, _b), client_id,
+                    float(_bucket["x"]),
+                    float(_bucket["y"]),
+                    (_r, _g, _b),
+                    client_id,
                 )
                 bucket_body_ids[str(_bucket["id"])] = _bid
 
-        frame: NDArray[np.uint8] = _render(client_id) if client_id is not None else env.render()  # type: ignore[assignment]
+        if client_id is not None:
+            frame: NDArray[np.uint8] = _render(client_id)
+        else:
+            frame = env.render()  # type: ignore[assignment]
         if frame_labels_out is not None:
             frame_labels_out.append(None)
         yield frame
@@ -360,15 +377,16 @@ def execute_program(
         state_box = [state]
 
         _OP_FNS = {
-            ">":  lambda a, b: a > b,
+            ">": lambda a, b: a > b,
             ">=": lambda a, b: a >= b,
-            "=":  lambda a, b: abs(a - b) < 0.05,
-            "<":  lambda a, b: a < b,
+            "=": lambda a, b: abs(a - b) < 0.05,
+            "<": lambda a, b: a < b,
             "<=": lambda a, b: a <= b,
         }
 
         def run_blocks(  # pylint: disable=too-many-branches
-            blks: list[dict[str, Any]], depth: int = 0,
+            blks: list[dict[str, Any]],
+            depth: int = 0,
         ) -> Iterator[NDArray[np.uint8]]:
             if depth > 20:
                 return
@@ -417,7 +435,8 @@ def execute_program(
                             bid = bucket_body_ids.get(str(nearest["id"]))
                             if bid is not None:
                                 p.changeVisualShape(
-                                    bid, -1,
+                                    bid,
+                                    -1,
                                     rgbaColor=[0.22, 0.22, 0.22, 0.55],
                                     physicsClientId=client_id,
                                 )
@@ -427,7 +446,10 @@ def execute_program(
                             "g": int(nearest["g"]),
                             "b": int(nearest["b"]),
                         }
-                        frame: NDArray[np.uint8] = _render(client_id) if client_id is not None else env.render()  # type: ignore[assignment]
+                        if client_id is not None:
+                            frame: NDArray[np.uint8] = _render(client_id)
+                        else:
+                            frame = env.render()  # type: ignore[assignment]
                         if frame_labels_out is not None:
                             frame_labels_out.append(dip_lbl)
                         yield frame
@@ -456,11 +478,19 @@ def execute_program(
                     ui_y = float(blk.get("y", 0.0))
                     lbl: FrameLabel = {
                         "text": f"Move to ({ui_x:.1f}, {ui_y:.1f})",
-                        "r": 116, "g": 91, "b": 166,
+                        "r": 116,
+                        "g": 91,
+                        "b": 166,
                     }
                     new_state, frames = _run_move_base_to(
-                        env, state_box[0], sim, target_x, target_y,
-                        pen=pen, client_id=client_id, stop_event=stop_event,
+                        env,
+                        state_box[0],
+                        sim,
+                        target_x,
+                        target_y,
+                        pen=pen,
+                        client_id=client_id,
+                        stop_event=stop_event,
                     )
                     state_box[0] = new_state
                     for f in frames:
@@ -479,11 +509,19 @@ def execute_program(
                     ui_dy = float(blk.get("dy", 0.0))
                     by_lbl: FrameLabel = {
                         "text": f"Move by ({ui_dx:+.1f}, {ui_dy:+.1f})",
-                        "r": 168, "g": 143, "b": 224,
+                        "r": 168,
+                        "g": 143,
+                        "b": 224,
                     }
                     new_state, frames = _run_move_base_to(
-                        env, state_box[0], sim, target_x, target_y,
-                        pen=pen, client_id=client_id, stop_event=stop_event,
+                        env,
+                        state_box[0],
+                        sim,
+                        target_x,
+                        target_y,
+                        pen=pen,
+                        client_id=client_id,
+                        stop_event=stop_event,
                     )
                     state_box[0] = new_state
                     for f in frames:
@@ -493,7 +531,7 @@ def execute_program(
 
                 elif btype == "repeat_while":
                     var = blk.get("var", "X")
-                    op  = blk.get("op", ">")
+                    op = blk.get("op", ">")
                     threshold = float(blk.get("threshold", 0.0))
                     body = blk.get("body", [])
                     _default: Callable[[float, float], bool] = lambda a, b: False
@@ -588,24 +626,35 @@ def _run_move_base_to(
             r, g, b = pen.color_rgb
 
             # Record for the top-down canvas (plain floats for JSON).
-            pen.trail.append({
-                "x1": float(pen.prev_xy[0]), "y1": float(pen.prev_xy[1]),
-                "x2": float(cur_xy[0]),      "y2": float(cur_xy[1]),
-                "r": r, "g": g, "b": b,
-            })
+            pen.trail.append(
+                {
+                    "x1": float(pen.prev_xy[0]),
+                    "y1": float(pen.prev_xy[1]),
+                    "x2": float(cur_xy[0]),
+                    "y2": float(cur_xy[1]),
+                    "r": r,
+                    "g": g,
+                    "b": b,
+                }
+            )
 
             # Place a thin flat box on the floor so it shows in renders.
             if client_id is not None:
                 _add_trail_box(
-                    pen.prev_xy[0], pen.prev_xy[1],
-                    cur_xy[0], cur_xy[1],
-                    pen.color_01, client_id,
+                    pen.prev_xy[0],
+                    pen.prev_xy[1],
+                    cur_xy[0],
+                    cur_xy[1],
+                    pen.color_01,
+                    client_id,
                 )
 
         pen.prev_xy = cur_xy
 
         if step_i % FRAME_SKIP == 0 or step_i == len(plan) - 1:
-            frame: NDArray[np.uint8] = _render(client_id) if client_id is not None else env.render()  # type: ignore[assignment]
+            frame: NDArray[np.uint8] = (  # type: ignore[assignment]
+                _render(client_id) if client_id is not None else env.render()
+            )
             frames.append(frame)
 
     return state, frames

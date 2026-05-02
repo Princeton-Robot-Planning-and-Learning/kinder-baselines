@@ -15,8 +15,13 @@ from PIL import Image
 
 from kinder_blockly.challenges import get_challenge, list_challenges, score_trail
 from kinder_blockly.executor import (
-    FrameLabel, PaintBucket, PenEvent, TrailSegment,
-    execute_program, render_initial_frame, validate_program,
+    FrameLabel,
+    PaintBucket,
+    PenEvent,
+    TrailSegment,
+    execute_program,
+    render_initial_frame,
+    validate_program,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -72,9 +77,18 @@ def run_program() -> Response:
     data = request.get_json()
     if data is None:
         return Response(
-            json.dumps({"type": "done", "error": "Invalid JSON",
-                        "trail": [], "pen_events": [], "infinite_loop": False}) + "\n",
-            status=400, mimetype="application/x-ndjson",
+            json.dumps(
+                {
+                    "type": "done",
+                    "error": "Invalid JSON",
+                    "trail": [],
+                    "pen_events": [],
+                    "infinite_loop": False,
+                }
+            )
+            + "\n",
+            status=400,
+            mimetype="application/x-ndjson",
         )
 
     program = data.get("program", {})
@@ -85,12 +99,19 @@ def run_program() -> Response:
     validation = validate_program(program)
     if validation.get("error") or validation.get("infinite_loop"):
         return Response(
-            json.dumps({"type": "done",
-                        "error": validation.get("error"),
-                        "infinite_loop": validation.get("infinite_loop", False),
-                        "error_block_id": validation.get("error_block_id"),
-                        "trail": [], "pen_events": []}) + "\n",
-            status=200, mimetype="application/x-ndjson",
+            json.dumps(
+                {
+                    "type": "done",
+                    "error": validation.get("error"),
+                    "infinite_loop": validation.get("infinite_loop", False),
+                    "error_block_id": validation.get("error_block_id"),
+                    "trail": [],
+                    "pen_events": [],
+                }
+            )
+            + "\n",
+            status=200,
+            mimetype="application/x-ndjson",
         )
 
     _stop_event.clear()
@@ -107,21 +128,26 @@ def run_program() -> Response:
 
         try:
             for frame in execute_program(
-                program, seed=seed,
-                trail_out=trail, pen_events_out=pen_events,
-                frame_labels_out=frame_labels, infinite_loop_out=infinite_loop,
+                program,
+                seed=seed,
+                trail_out=trail,
+                pen_events_out=pen_events,
+                frame_labels_out=frame_labels,
+                infinite_loop_out=infinite_loop,
                 stop_event=_stop_event,
                 paint_buckets=paint_buckets,
                 visited_buckets_out=visited_buckets,
             ):
                 idx = frame_index
                 label = frame_labels[idx] if idx < len(frame_labels) else None
-                yield json.dumps({
-                    "type": "frame",
-                    "frame": _encode_frame(frame),
-                    "index": frame_index,
-                    "label": label,
-                }) + "\n"
+                yield json.dumps(
+                    {
+                        "type": "frame",
+                        "frame": _encode_frame(frame),
+                        "index": frame_index,
+                        "label": label,
+                    }
+                ) + "\n"
                 frame_index += 1
                 if time.monotonic() > deadline:
                     _stop_event.set()
@@ -133,14 +159,16 @@ def run_program() -> Response:
         except Exception as exc:  # pylint: disable=broad-except
             error = str(exc)
 
-        yield json.dumps({
-            "type": "done",
-            "error": error,
-            "infinite_loop": infinite_loop[0],
-            "trail": trail,
-            "pen_events": pen_events,
-            "visited_buckets": list(visited_buckets),
-        }) + "\n"
+        yield json.dumps(
+            {
+                "type": "done",
+                "error": error,
+                "infinite_loop": infinite_loop[0],
+                "trail": trail,
+                "pen_events": pen_events,
+                "visited_buckets": list(visited_buckets),
+            }
+        ) + "\n"
 
     return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
 
