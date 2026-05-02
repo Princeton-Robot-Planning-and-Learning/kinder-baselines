@@ -151,7 +151,7 @@
   }
 
   const SEQUENCE_HEADS = new Set(['start', 'define_skill']);
-  const CUSTOM_COLLAPSE = new Set(['start', 'define_skill', 'use_skill', 'set_pen_color', 'move_base_to_target', 'move_base_by', 'repeat', 'repeat_while', 'pen_up', 'pen_down']);
+  const CUSTOM_COLLAPSE = new Set(['start', 'define_skill', 'use_skill', 'set_pen_color', 'move_base_to_target', 'move_base_by', 'repeat', 'repeat_while', 'pen_up', 'pen_down', 'dip_arm']);
 
   function isUseSkillValid(block) {
     const skillName = block.getFieldValue('SKILL');

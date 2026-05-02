@@ -41,10 +41,11 @@ CHALLENGES: list[dict] = [
         "name": "Square",
         "difficulty": "easy",
         "description": "Draw a red square (side length 1, centered at the origin).",
-        "hint": (
-            "Move to one corner, put the pen down, "
-            "then visit the other three corners and come back."
-        ),
+        "hint": "Find the red paint bucket and dip your arm in first, "
+                "then move to a corner, pen down, and trace the four sides!",
+        "paint_buckets": [
+            {"id": "red_bucket", "x": 1.5, "y": 1.5, "r": 255, "g": 0, "b": 0},
+        ],
         "target_trail": _segments_from_waypoints(
             [(-0.5, 0.5), (-0.5, -0.5), (0.5, -0.5), (0.5, 0.5)],
             r=255, g=0, b=0, closed=True,
@@ -55,7 +56,10 @@ CHALLENGES: list[dict] = [
         "name": "Triangle",
         "difficulty": "easy",
         "description": "Draw a blue triangle.",
-        "hint": "Three points, three moves, close the shape!",
+        "hint": "Grab the blue paint bucket first, then connect three points to close the shape!",
+        "paint_buckets": [
+            {"id": "blue_bucket", "x": 1.5, "y": -1.5, "r": 0, "g": 80, "b": 255},
+        ],
         "target_trail": _segments_from_waypoints(
             [(0.0, 1.0), (1.0, -0.5), (-1.0, -0.5)],
             r=0, g=80, b=255, closed=True,
@@ -66,7 +70,10 @@ CHALLENGES: list[dict] = [
         "name": "Letter L",
         "difficulty": "easy",
         "description": "Draw a green letter L.",
-        "hint": "Two straight lines: one going down, one going right.",
+        "hint": "Fetch the green paint, then two straight lines: one going down, one going right.",
+        "paint_buckets": [
+            {"id": "green_bucket", "x": 1.5, "y": 1.5, "r": 0, "g": 200, "b": 0},
+        ],
         "target_trail": _segments_from_waypoints(
             [(0.5, 1.0), (0.5, -0.5), (-0.5, -0.5)],
             r=0, g=200, b=0, closed=False,
@@ -77,7 +84,11 @@ CHALLENGES: list[dict] = [
         "name": "Diamond",
         "difficulty": "medium",
         "description": "Draw a red diamond (rotated square).",
-        "hint": "Four diagonal moves connecting top, right, bottom, left.",
+        "hint": "Dip into the red paint first, then make four diagonal moves "
+                "connecting top, right, bottom, and left.",
+        "paint_buckets": [
+            {"id": "red_bucket", "x": 1.5, "y": -1.5, "r": 255, "g": 0, "b": 0},
+        ],
         "target_trail": _segments_from_waypoints(
             [(0.0, 1.0), (-1.0, 0.0), (0.0, -1.0), (1.0, 0.0)],
             r=255, g=0, b=0, closed=True,
@@ -88,7 +99,10 @@ CHALLENGES: list[dict] = [
         "name": "Zigzag",
         "difficulty": "medium",
         "description": "Draw an orange zigzag line from left to right.",
-        "hint": "Alternate between moving up-right and down-right.",
+        "hint": "Pick up the orange paint, then alternate between moving up-right and down-right.",
+        "paint_buckets": [
+            {"id": "orange_bucket", "x": 1.5, "y": 1.5, "r": 255, "g": 140, "b": 0},
+        ],
         "target_trail": _segments_from_waypoints(
             [
                 (1.0, 0.0), (0.5, 0.5), (0.0, 0.0),
@@ -102,9 +116,14 @@ CHALLENGES: list[dict] = [
         "name": "House",
         "difficulty": "hard",
         "description": "Draw a house: red square base with a blue triangle roof.",
-        "hint": "You will need to change pen colour halfway through. "
-                "Draw the square first, then pen up, move to the roof start, "
-                "change to blue, and draw the triangle.",
+        "hint": "Find the red paint bucket first, dip your arm in, then draw the square "
+                "base. Next, find the blue bucket, dip again, and draw the triangle roof!",
+        # Two paint buckets in the lower corners of the world (robot coords),
+        # clear of the house drawing which occupies the upper-centre region.
+        "paint_buckets": [
+            {"id": "red_bucket",  "x": 1.5, "y": -1.5, "r": 255, "g": 0,  "b": 0},
+            {"id": "blue_bucket", "x": 1.5, "y":  1.5, "r": 0,   "g": 80, "b": 255},
+        ],
         "target_trail": (
             # base (red square)
             _segments_from_waypoints(
@@ -124,9 +143,11 @@ CHALLENGES: list[dict] = [
         "name": "Star",
         "difficulty": "hard",
         "description": "Draw a yellow five-pointed star.",
-        "hint": (
-            "A star is drawn by connecting every other vertex of a regular pentagon."
-        ),
+        "hint": "Get the yellow paint first, then connect every other vertex "
+                "of a regular pentagon to draw the star.",
+        "paint_buckets": [
+            {"id": "yellow_bucket", "x": 1.5, "y": -1.5, "r": 220, "g": 180, "b": 0},
+        ],
         "target_trail": _segments_from_waypoints(
             [
                 (0.0, 1.0),

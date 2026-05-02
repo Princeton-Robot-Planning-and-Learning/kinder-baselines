@@ -15,7 +15,7 @@ from PIL import Image
 
 from kinder_blockly.challenges import get_challenge, list_challenges, score_trail
 from kinder_blockly.executor import (
-    FrameLabel, PenEvent, TrailSegment,
+    FrameLabel, PaintBucket, PenEvent, TrailSegment,
     execute_program, render_initial_frame, validate_program,
 )
 
@@ -79,6 +79,7 @@ def run_program() -> Response:
 
     program = data.get("program", {})
     seed = data.get("seed", 0)
+    paint_buckets: list[PaintBucket] = data.get("paint_buckets", [])
 
     # Fast abstract pre-check — no physics needed.
     validation = validate_program(program)
@@ -99,6 +100,7 @@ def run_program() -> Response:
         pen_events: list[PenEvent] = []
         frame_labels: list[FrameLabel] = []
         infinite_loop: list[bool] = [False]
+        visited_buckets: set[str] = set()
         frame_index = 0
         error: str | None = None
         deadline = time.monotonic() + EXECUTION_TIMEOUT_S
@@ -109,6 +111,8 @@ def run_program() -> Response:
                 trail_out=trail, pen_events_out=pen_events,
                 frame_labels_out=frame_labels, infinite_loop_out=infinite_loop,
                 stop_event=_stop_event,
+                paint_buckets=paint_buckets,
+                visited_buckets_out=visited_buckets,
             ):
                 idx = frame_index
                 label = frame_labels[idx] if idx < len(frame_labels) else None
@@ -135,6 +139,7 @@ def run_program() -> Response:
             "infinite_loop": infinite_loop[0],
             "trail": trail,
             "pen_events": pen_events,
+            "visited_buckets": list(visited_buckets),
         }) + "\n"
 
     return Response(stream_with_context(generate()), mimetype="application/x-ndjson")

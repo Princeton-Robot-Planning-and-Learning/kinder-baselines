@@ -16,6 +16,7 @@ from kinder.envs.kinematic3d.base_motion3d import (
     ObjectCentricBaseMotion3DEnv,
 )
 from numpy.typing import NDArray
+from pybullet_helpers.camera import capture_image
 from pybullet_helpers.geometry import SE2Pose
 from pybullet_helpers.motion_planning import (
     run_single_arm_mobile_base_motion_planning,
@@ -34,6 +35,28 @@ TRAIL_HEIGHT = 0.005  # z-centre of the flat box (just above the floor)
 TRAIL_HALF_WIDTH = 0.030  # half-width of the line
 TRAIL_HALF_THICKNESS = 0.001  # half-height — paper-thin
 
+# Camera — same perspective as the original (yaw 90, pitch -30) but pulled back
+# slightly so the paint buckets near the corners remain in frame.
+_CAM_DISTANCE = 4.0   # original was 2.8; 4.0 gives ~40% more world coverage
+_CAM_PITCH    = -35   # original was -30; 5° steeper keeps the floor in frame
+_CAM_YAW      = 90
+_CAM_TARGET   = (0.0, 0.0, 0.0)
+_RENDER_W     = 640
+_RENDER_H     = 360
+
+
+def _render(client_id: int) -> NDArray[np.uint8]:
+    """Render an overview frame using our wider camera settings."""
+    return capture_image(  # type: ignore[return-value]
+        physics_client_id=client_id,
+        camera_distance=_CAM_DISTANCE,
+        camera_yaw=_CAM_YAW,
+        camera_pitch=_CAM_PITCH,
+        camera_target=_CAM_TARGET,
+        image_width=_RENDER_W,
+        image_height=_RENDER_H,
+    )
+
 
 # Trail segment returned to the frontend for the top-down canvas.
 TrailSegment = dict[str, float]  # keys: x1 y1 x2 y2 r g b
@@ -44,6 +67,17 @@ PenEvent = dict[str, Any]  # keys: x y type('up'|'down') r g b
 # Per-frame action label shown as an overlay in the 3-D view.
 # None for frames with no associated block (e.g. the initial reset frame).
 FrameLabel = dict[str, Any] | None  # keys: text str, r int, g int, b int
+
+# A coloured paint bucket placed in the world at a specific (x, y) position
+# in robot coordinates (same convention as TrailSegment x/y values).
+PaintBucket = dict[str, Any]  # keys: id str, x float, y float, r int, g int, b int
+
+# Proximity radius within which dip_arm can pick up a bucket's colour.
+BUCKET_RADIUS = 0.35
+
+# Paint bucket 3-D visual dimensions.
+BUCKET_VIS_RADIUS = 0.10   # cylinder radius (metres)
+BUCKET_VIS_HEIGHT = 0.20   # cylinder height (metres)
 
 
 def _add_trail_box(
@@ -74,6 +108,46 @@ def _add_trail_box(
         baseOrientation=p.getQuaternionFromEuler([0, 0, angle]),
         physicsClientId=client_id,
     )
+
+
+def _add_paint_bucket_visual(
+    x: float, y: float,
+    color_01: tuple[float, float, float],
+    client_id: int,
+) -> int:
+    """Spawn a coloured cylinder in the simulation representing a paint bucket.
+
+    Returns the PyBullet body id so the caller can later update its colour.
+    """
+    body_vis = p.createVisualShape(
+        p.GEOM_CYLINDER,
+        radius=BUCKET_VIS_RADIUS,
+        length=BUCKET_VIS_HEIGHT,
+        rgbaColor=[*color_01, 1.0],
+        physicsClientId=client_id,
+    )
+    body_id: int = p.createMultiBody(
+        baseMass=0,
+        baseVisualShapeIndex=body_vis,
+        basePosition=[x, y, BUCKET_VIS_HEIGHT / 2.0 + 0.001],
+        physicsClientId=client_id,
+    )
+    # Brighter paint-surface disk sitting on top of the cylinder.
+    bright = tuple(min(1.0, c * 1.6) for c in color_01)
+    cap_vis = p.createVisualShape(
+        p.GEOM_CYLINDER,
+        radius=BUCKET_VIS_RADIUS * 0.75,
+        length=0.012,
+        rgbaColor=[*bright, 1.0],
+        physicsClientId=client_id,
+    )
+    p.createMultiBody(
+        baseMass=0,
+        baseVisualShapeIndex=cap_vis,
+        basePosition=[x, y, BUCKET_VIS_HEIGHT + 0.007],
+        physicsClientId=client_id,
+    )
+    return body_id
 
 
 @dataclass
@@ -210,8 +284,8 @@ def render_initial_frame(seed: int = 0) -> NDArray[np.uint8]:
     )
     try:
         env.reset(seed=seed)
-        frame: NDArray[np.uint8] = env.render()  # type: ignore[assignment]
-        return frame
+        cid = _get_physics_client_id(env)
+        return _render(cid) if cid is not None else env.render()  # type: ignore[return-value]
     finally:
         env.close()  # type: ignore[no-untyped-call]
 
@@ -224,6 +298,8 @@ def execute_program(
     frame_labels_out: list[FrameLabel] | None = None,
     infinite_loop_out: list[bool] | None = None,
     stop_event: threading.Event | None = None,
+    paint_buckets: list[PaintBucket] | None = None,
+    visited_buckets_out: set[str] | None = None,
 ) -> Iterator[NDArray[np.uint8]]:
     """Execute a Blockly program and yield rendered frames.
 
@@ -259,7 +335,24 @@ def execute_program(
         assert isinstance(state, BaseMotion3DObjectCentricState)
         pen.prev_xy = [state.base_pose.x, state.base_pose.y]
 
-        frame: NDArray[np.uint8] = env.render()  # type: ignore[assignment]
+        # Track which paint bucket IDs the robot has dipped into this run.
+        visited_set: set[str] = visited_buckets_out if visited_buckets_out is not None else set()
+        buckets: list[PaintBucket] = paint_buckets or []
+
+        # Spawn paint bucket cylinders in the 3-D simulation before the first render.
+        bucket_body_ids: dict[str, int] = {}
+        if client_id is not None:
+            for _bucket in buckets:
+                _r = int(_bucket["r"]) / 255.0
+                _g = int(_bucket["g"]) / 255.0
+                _b = int(_bucket["b"]) / 255.0
+                _bid = _add_paint_bucket_visual(
+                    float(_bucket["x"]), float(_bucket["y"]),
+                    (_r, _g, _b), client_id,
+                )
+                bucket_body_ids[str(_bucket["id"])] = _bid
+
+        frame: NDArray[np.uint8] = _render(client_id) if client_id is not None else env.render()  # type: ignore[assignment]
         if frame_labels_out is not None:
             frame_labels_out.append(None)
         yield frame
@@ -285,11 +378,64 @@ def execute_program(
                 btype = blk["type"]
 
                 if btype == "set_pen_color":
+                    if buckets:
+                        raise RuntimeError(
+                            "Whoops! This challenge uses paint buckets. "
+                            "Move to a paint bucket and use 'Dip arm in paint' "
+                            "to load a colour — you can't set it directly here!"
+                        )
                     pen.color_rgb = (
                         int(blk.get("r", 255)),
                         int(blk.get("g", 0)),
                         int(blk.get("b", 0)),
                     )
+
+                elif btype == "dip_arm":
+                    s = state_box[0]
+                    assert isinstance(s, BaseMotion3DObjectCentricState)
+                    cur_x = s.base_pose.x
+                    cur_y = s.base_pose.y
+                    nearest: PaintBucket | None = None
+                    nearest_dist = float("inf")
+                    for bucket in buckets:
+                        dist = math.sqrt(
+                            (cur_x - float(bucket["x"])) ** 2
+                            + (cur_y - float(bucket["y"])) ** 2
+                        )
+                        if dist < nearest_dist:
+                            nearest_dist = dist
+                            nearest = bucket
+                    if nearest is not None and nearest_dist <= BUCKET_RADIUS:
+                        pen.color_rgb = (
+                            int(nearest["r"]),
+                            int(nearest["g"]),
+                            int(nearest["b"]),
+                        )
+                        visited_set.add(str(nearest["id"]))
+                        # Dim the bucket cylinder in the 3-D view so it looks used-up.
+                        if client_id is not None:
+                            bid = bucket_body_ids.get(str(nearest["id"]))
+                            if bid is not None:
+                                p.changeVisualShape(
+                                    bid, -1,
+                                    rgbaColor=[0.22, 0.22, 0.22, 0.55],
+                                    physicsClientId=client_id,
+                                )
+                        dip_lbl: FrameLabel = {
+                            "text": "Dipped! Color loaded",
+                            "r": int(nearest["r"]),
+                            "g": int(nearest["g"]),
+                            "b": int(nearest["b"]),
+                        }
+                        frame: NDArray[np.uint8] = _render(client_id) if client_id is not None else env.render()  # type: ignore[assignment]
+                        if frame_labels_out is not None:
+                            frame_labels_out.append(dip_lbl)
+                        yield frame
+                    else:
+                        raise RuntimeError(
+                            "Dip arm missed! There's no paint bucket nearby. "
+                            "Move closer to a bucket and try again!"
+                        )
 
                 elif btype == "pen_down":
                     was_down = pen.down
@@ -459,7 +605,7 @@ def _run_move_base_to(
         pen.prev_xy = cur_xy
 
         if step_i % FRAME_SKIP == 0 or step_i == len(plan) - 1:
-            frame: NDArray[np.uint8] = env.render()  # type: ignore[assignment]
+            frame: NDArray[np.uint8] = _render(client_id) if client_id is not None else env.render()  # type: ignore[assignment]
             frames.append(frame)
 
     return state, frames
