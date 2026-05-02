@@ -225,15 +225,11 @@ class GroundPickController(
         if self._closed_gripper and not self._lifted:
             if self._current_retract_plan is None:
                 self._sim.set_state(self._current_state)
-                grasped_id = (
-                    self._sim._grasped_object_id
-                )  # pylint: disable=protected-access
-                grasped_tf = (
-                    self._sim._grasped_object_transform
-                )  # pylint: disable=protected-access
-                all_ids = (
-                    self._sim._get_collision_object_ids()
-                )  # pylint: disable=protected-access
+                # pylint: disable=protected-access
+                grasped_id = self._sim._grasped_object_id
+                grasped_tf = self._sim._grasped_object_transform
+                all_ids = self._sim._get_collision_object_ids()
+                # pylint: enable=protected-access
                 raw_plan = run_motion_planning(
                     self._sim.robot.arm,
                     initial_positions=self._sim.robot.arm.get_joint_positions(),
@@ -315,12 +311,10 @@ class GroundPlaceController(BasePlaceController):
         if self._current_plan is None:
             self._sim.set_state(self._current_state)
 
-            grasped_object_id = (
-                self._sim._grasped_object_id
-            )  # pylint: disable=protected-access
-            grasped_object_transform = (
-                self._sim._grasped_object_transform
-            )  # pylint: disable=protected-access
+            # pylint: disable=protected-access
+            grasped_object_id = self._sim._grasped_object_id
+            grasped_object_transform = self._sim._grasped_object_transform
+            # pylint: enable=protected-access
             if grasped_object_transform is None:
                 raise TrajectorySamplingFailure("Nothing grasped at place time")
             assert grasped_object_transform is not None
@@ -338,9 +332,9 @@ class GroundPlaceController(BasePlaceController):
                 + self._current_params[1]
             )
             block_half_z = self._sim.config.block_half_extents[2]
-            target_z = (
-                self._sim._counter_top_z + block_half_z
-            )  # pylint: disable=protected-access
+            # pylint: disable=protected-access
+            target_z = self._sim._counter_top_z + block_half_z
+            # pylint: enable=protected-access
 
             desired_object_pose = Pose((target_x, target_y, target_z), (0, 0, 0, 1))
 
@@ -364,9 +358,9 @@ class GroundPlaceController(BasePlaceController):
             target_base_pose = get_target_robot_pose_from_parameters(
                 SE2Pose(target_x, target_y, 0.0), 0.9, np.pi / 2
             )
-            all_collision_ids = (
-                self._sim._get_collision_object_ids()
-            )  # pylint: disable=protected-access
+            # pylint: disable=protected-access
+            all_collision_ids = self._sim._get_collision_object_ids()
+            # pylint: enable=protected-access
             base_plan = run_single_arm_mobile_base_motion_planning(
                 self._sim.robot,
                 self._sim.robot.base.get_pose(),
