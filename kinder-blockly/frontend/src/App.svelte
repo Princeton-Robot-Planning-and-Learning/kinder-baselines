@@ -107,6 +107,7 @@
     scoreData = null;
     if (!id) {
       currentChallenge = null; hint = ''; targetTrail = []; paintBuckets = []; visitedBuckets = [];
+      blocklyWorkspace.setPenColorEnabled(true);
       tamaSay("FREE DRAW! No rules, no limits! Just me and the canvas. *chef's kiss*", 4000);
       return;
     }
@@ -116,6 +117,7 @@
       const c = await r.json();
       currentChallenge = c; hint = c.description || ''; targetTrail = c.target_trail || [];
       paintBuckets = c.paint_buckets || []; visitedBuckets = [];
+      blocklyWorkspace.setPenColorEnabled((c.paint_buckets?.length ?? 0) === 0);
       tamaSay(c.hint || c.description || 'Good luck!', 5000);
     } catch { hint = 'FAILED TO LOAD.'; }
   }

@@ -201,6 +201,56 @@ def _get_physics_client_id(env: Any) -> int | None:
     return None
 
 
+def _get_robot_arm(env: Any) -> Any | None:
+    """Return the robot arm object from the environment, or None."""
+    unwrapped = env.unwrapped
+    for attr in ("_object_centric_env", "_env"):
+        inner = getattr(unwrapped, attr, None)
+        if inner is not None:
+            robot = getattr(inner, "robot", None)
+            if robot is not None:
+                return getattr(robot, "arm", None)
+    robot = getattr(unwrapped, "robot", None)
+    return getattr(robot, "arm", None) if robot is not None else None
+
+
+# Arm joint positions for the dip animation (Kinova Gen3, 7 DOF).
+# Retract: arm folded close to the body (environment default).
+# Dip: shoulder (j2) and elbow (j3) extend to reach toward the floor.
+_DIP_FRAME_COUNT = 5
+_RETRACT_ARM_JOINTS: list[float] = [0.0, -0.35, -math.pi, -2.5, 0.0, -0.87, math.pi / 2]
+_DIP_ARM_JOINTS: list[float] = [0.0, 0.8, -math.pi + 1.2, -2.5, 0.0, -0.87, math.pi / 2]
+
+
+def _yield_dip_frames(
+    arm: Any,
+    client_id: int,
+    frame_labels_out: list[FrameLabel] | None,
+    label: FrameLabel,
+) -> Iterator[NDArray[np.uint8]]:
+    """Interpolate arm down to dip position and back, yielding frames."""
+    try:
+        start: list[float] = list(arm.get_joint_positions())
+    except AttributeError:
+        start = list(_RETRACT_ARM_JOINTS)
+    # Build the dip target from start so finger joints stay unchanged.
+    # Only the first 7 positions (arm joints) are modified.
+    dip = list(start)
+    for i, val in enumerate(_DIP_ARM_JOINTS):
+        if i < len(dip):
+            dip[i] = val
+    for phase_end in (dip, start):
+        for i in range(_DIP_FRAME_COUNT + 1):
+            t = i / _DIP_FRAME_COUNT
+            joints = [s + t * (e - s) for s, e in zip(start, phase_end)]
+            arm.set_joints(joints)
+            frame: NDArray[np.uint8] = _render(client_id)
+            if frame_labels_out is not None:
+                frame_labels_out.append(label)
+            yield frame
+        start = list(phase_end)
+
+
 def validate_program(program: dict[str, Any]) -> dict[str, Any]:
     """Abstract validator — catches OOB and infinite loops without physics.
 
@@ -335,8 +385,9 @@ def execute_program(
 
         sim = ObjectCentricBaseMotion3DEnv(allow_state_access=True)
 
-        # Resolve pybullet client for 3-D debug lines.
+        # Resolve pybullet client for 3-D debug lines and arm animation.
         client_id = _get_physics_client_id(env)
+        robot_arm = _get_robot_arm(env)
 
         # Pen starts UP — students must use set_pen_color or pen_down first.
         pen = _PenState()
@@ -424,13 +475,35 @@ def execute_program(
                             nearest_dist = dist
                             nearest = bucket
                     if nearest is not None and nearest_dist <= BUCKET_RADIUS:
+                        dip_lbl: FrameLabel = {
+                            "text": "Dipped! Color loaded",
+                            "r": int(nearest["r"]),
+                            "g": int(nearest["g"]),
+                            "b": int(nearest["b"]),
+                        }
+                        # Animate the arm dipping into the bucket.
+                        if robot_arm is not None and client_id is not None:
+                            yield from _yield_dip_frames(
+                                robot_arm,
+                                client_id,
+                                frame_labels_out,
+                                dip_lbl,
+                            )
+                        else:
+                            if client_id is not None:
+                                frm: NDArray[np.uint8] = _render(client_id)
+                            else:
+                                frm = env.render()  # type: ignore[assignment]
+                            if frame_labels_out is not None:
+                                frame_labels_out.append(dip_lbl)
+                            yield frm
+                        # Load colour and mark the bucket used-up after the dip.
                         pen.color_rgb = (
                             int(nearest["r"]),
                             int(nearest["g"]),
                             int(nearest["b"]),
                         )
                         visited_set.add(str(nearest["id"]))
-                        # Dim the bucket cylinder in the 3-D view so it looks used-up.
                         if client_id is not None:
                             bid = bucket_body_ids.get(str(nearest["id"]))
                             if bid is not None:
@@ -440,19 +513,6 @@ def execute_program(
                                     rgbaColor=[0.22, 0.22, 0.22, 0.55],
                                     physicsClientId=client_id,
                                 )
-                        dip_lbl: FrameLabel = {
-                            "text": "Dipped! Color loaded",
-                            "r": int(nearest["r"]),
-                            "g": int(nearest["g"]),
-                            "b": int(nearest["b"]),
-                        }
-                        if client_id is not None:
-                            frame: NDArray[np.uint8] = _render(client_id)
-                        else:
-                            frame = env.render()  # type: ignore[assignment]
-                        if frame_labels_out is not None:
-                            frame_labels_out.append(dip_lbl)
-                        yield frame
                     else:
                         raise RuntimeError(
                             "Dip arm missed! There's no paint bucket nearby. "
