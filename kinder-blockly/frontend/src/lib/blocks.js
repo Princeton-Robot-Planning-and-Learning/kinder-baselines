@@ -742,40 +742,61 @@ export function registerBlocks() {
     customCollapse_: function() { this.isCustomCollapsed_ = true;  this.setFieldValue('pen down ()', 'LABEL'); },
     customExpand_:   function() { this.isCustomCollapsed_ = false; this.setFieldValue('Pen down',    'LABEL'); },
   };
+
+  Blockly.Blocks['dip_arm'] = {
+    init: function() {
+      this.isCustomCollapsed_ = false;
+      this.appendDummyInput('MAIN').appendField(new Blockly.FieldLabel('Dip arm in paint'), 'LABEL');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setColour(310);
+      this.setTooltip(
+        'Dip the robot arm into the nearest paint bucket to load its colour. ' +
+        'Move to a bucket first, then use this block!'
+      );
+    },
+    customCollapse_: function() { this.isCustomCollapsed_ = true;  this.setFieldValue('dip arm ()',        'LABEL'); },
+    customExpand_:   function() { this.isCustomCollapsed_ = false; this.setFieldValue('Dip arm in paint', 'LABEL'); },
+  };
 }
 
-export const toolbox = {
-  kind: 'categoryToolbox',
-  contents: [
-    { kind: 'category', name: 'Program', colour: '120', contents: [
-      { kind: 'block', type: 'start' },
-      { kind: 'block', type: 'repeat', inputs: {
-          INPUT_COUNT: { shadow: { type: 'kinder_num', fields: { NUM: 3 } } },
-      }},
-      { kind: 'block', type: 'repeat_while' },
-      { kind: 'block', type: 'condition', inputs: {
-          THRESHOLD: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
-      }},
-    ]},
-    { kind: 'category', name: 'Movement', colour: '260', contents: [
-      { kind: 'block', type: 'move_base_to_target', inputs: {
-          INPUT_X: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
-          INPUT_Y: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
-      }},
-      { kind: 'block', type: 'move_base_by', inputs: {
-          INPUT_DX: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
-          INPUT_DY: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
-      }},
-    ]},
-    { kind: 'category', name: 'Pen', colour: '310', contents: [
-      { kind: 'block', type: 'set_pen_color' },
-      { kind: 'block', type: 'pen_down' },
-      { kind: 'block', type: 'pen_up' },
-    ]},
-    { kind: 'category', name: 'Abstraction', colour: '#1e3a8a', contents: [
-      { kind: 'block', type: 'define_skill' },
-      { kind: 'block', type: 'use_skill' },
-      { kind: 'block', type: 'param_ref' },
-    ]},
-  ]
-};
+export function buildToolbox(penColorEnabled = true) {
+  return {
+    kind: 'categoryToolbox',
+    contents: [
+      { kind: 'category', name: 'Program', colour: '120', contents: [
+        { kind: 'block', type: 'start' },
+        { kind: 'block', type: 'repeat', inputs: {
+            INPUT_COUNT: { shadow: { type: 'kinder_num', fields: { NUM: 3 } } },
+        }},
+        { kind: 'block', type: 'repeat_while' },
+        { kind: 'block', type: 'condition', inputs: {
+            THRESHOLD: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
+        }},
+      ]},
+      { kind: 'category', name: 'Movement', colour: '260', contents: [
+        { kind: 'block', type: 'move_base_to_target', inputs: {
+            INPUT_X: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
+            INPUT_Y: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
+        }},
+        { kind: 'block', type: 'move_base_by', inputs: {
+            INPUT_DX: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
+            INPUT_DY: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
+        }},
+      ]},
+      { kind: 'category', name: 'Pen', colour: '310', contents: [
+        { kind: 'block', type: 'set_pen_color', disabled: !penColorEnabled },
+        { kind: 'block', type: 'pen_down' },
+        { kind: 'block', type: 'pen_up' },
+        { kind: 'block', type: 'dip_arm' },
+      ]},
+      { kind: 'category', name: 'Abstraction', colour: '#1e3a8a', contents: [
+        { kind: 'block', type: 'define_skill' },
+        { kind: 'block', type: 'use_skill' },
+        { kind: 'block', type: 'param_ref' },
+      ]},
+    ]
+  };
+}
+
+export const toolbox = buildToolbox(true);

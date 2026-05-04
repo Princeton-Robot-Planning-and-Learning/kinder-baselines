@@ -48,11 +48,11 @@ def find_all_dependents(package: str, reverse_graph: dict[str, set[str]]) -> set
 
 def is_infrastructure_file(file_path: str) -> bool:
     """Check if a file is infrastructure that affects all packages."""
-    if file_path.startswith('.github/'):
+    if file_path.startswith(".github/"):
         return True
-    if file_path.startswith('scripts/'):
+    if file_path.startswith("scripts/"):
         return True
-    if file_path.startswith('run_') and file_path.endswith('.sh'):
+    if file_path.startswith("run_") and file_path.endswith(".sh"):
         return True
     return False
 
@@ -69,12 +69,12 @@ def get_changed_files(base_ref: str) -> list[str]:
     """Get list of changed files using git diff."""
     try:
         result = subprocess.run(
-            ['git', 'diff', '--name-only', f'{base_ref}..HEAD'],
+            ["git", "diff", "--name-only", f"{base_ref}..HEAD"],
             capture_output=True,
             text=True,
-            check=True
+            check=True,
         )
-        files = [f.strip() for f in result.stdout.strip().split('\n') if f.strip()]
+        files = [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
         return files
     except subprocess.CalledProcessError as e:
         print(f"Error running git diff: {e}", file=sys.stderr)
@@ -87,15 +87,15 @@ def main():
         description="Determine which packages need testing based on changed files"
     )
     parser.add_argument(
-        'base_ref',
-        nargs='?',
-        help='Base git ref to compare against (e.g., commit SHA or branch name)'
+        "base_ref",
+        nargs="?",
+        help="Base git ref to compare against (e.g., commit SHA or branch name)",
     )
 
     args = parser.parse_args()
 
     # Determine base ref: from args, environment, or default
-    base_ref = args.base_ref or os.environ.get('CI_BASE_SHA')
+    base_ref = args.base_ref or os.environ.get("CI_BASE_SHA")
 
     if not base_ref:
         print(f"Error: No base ref provided", file=sys.stderr)
@@ -116,7 +116,7 @@ def main():
 
     # Handle empty changed files - safety fallback
     if not changed_files:
-        print(' '.join(packages))
+        print(" ".join(packages))
         sys.exit(0)
 
     # Check if any infrastructure files changed
@@ -124,7 +124,7 @@ def main():
 
     if infrastructure_changed:
         # Infrastructure changes affect all packages
-        print(' '.join(packages))
+        print(" ".join(packages))
         sys.exit(0)
 
     # Map changed files to packages
@@ -141,12 +141,12 @@ def main():
 
     # If files changed outside packages, run all tests as safety measure
     if files_outside_packages:
-        print(' '.join(packages))
+        print(" ".join(packages))
         sys.exit(0)
 
     # If no packages changed (shouldn't happen but handle it), run all
     if not changed_packages:
-        print(' '.join(packages))
+        print(" ".join(packages))
         sys.exit(0)
 
     # Build dependency graph
@@ -156,7 +156,7 @@ def main():
     except Exception as e:
         print(f"Error building dependency graph: {e}", file=sys.stderr)
         # Fall back to all packages on error
-        print(' '.join(packages))
+        print(" ".join(packages))
         sys.exit(0)
 
     # Find all affected packages: changed packages + their dependents
@@ -167,7 +167,7 @@ def main():
         affected_packages.update(dependents)
 
     # Output affected packages as space-separated list
-    print(' '.join(sorted(affected_packages)))
+    print(" ".join(sorted(affected_packages)))
 
 
 if __name__ == "__main__":

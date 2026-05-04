@@ -12,7 +12,7 @@ def install_package(package_path: Path) -> bool:
     """Install a single package quickly with minimal output."""
     if not package_path.exists() or not (package_path / "pyproject.toml").exists():
         return True  # Skip missing packages silently
-    
+
     try:
         # Install the package in development mode
         subprocess.run(
@@ -22,7 +22,7 @@ def install_package(package_path: Path) -> bool:
             capture_output=True,
         )
         return True
-        
+
     except subprocess.CalledProcessError as e:
         print(f"❌ Failed to install {package_path.name}", file=sys.stderr)
         print(f"   Command: {' '.join(e.cmd)}", file=sys.stderr)
@@ -38,19 +38,19 @@ def main():
     """Install all packages in the correct order."""
     repo_root = Path(__file__).parents[1]
     install_order = get_topological_order(repo_root)
-    
+
     print(f"Installing {len(install_order)} packages...")
-    
+
     for package_name in install_order:
         package_path = repo_root / package_name
         print(f"Installing {package_name}...", end=" ", flush=True)
-        
+
         if install_package(package_path):
             print("✅")
         else:
             print("❌")
             sys.exit(1)
-    
+
     print("🎉 All packages installed successfully!")
 
 

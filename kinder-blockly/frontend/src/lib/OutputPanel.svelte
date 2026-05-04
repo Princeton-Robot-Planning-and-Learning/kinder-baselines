@@ -1,6 +1,6 @@
 <script>
   import { onMount, createEventDispatcher } from 'svelte';
-  import { drawCanvasTrail, drawPenMarkers, canvasToWorld, drawHoverMarker, drawVectorDrag } from './canvas.js';
+  import { drawCanvasTrail, drawPaintBuckets, drawPenMarkers, canvasToWorld, drawHoverMarker, drawVectorDrag } from './canvas.js';
 
   const dispatch = createEventDispatcher();
 
@@ -11,6 +11,8 @@
   export let targetTrail = [];
   export let score = null;
   export let studentPenEvents = [];
+  export let paintBuckets = [];
+  export let visitedBuckets = [];
   export let panelWidth = 0;
   export let canGoPrev = false;
   export let canGoNext = false;
@@ -88,8 +90,8 @@
 
   $: scoreClass = score == null ? '' : score.score >= 70 ? 'good' : score.score >= 40 ? 'ok' : 'poor';
 
-  $: if (targetCanvas) drawCanvasTrail(targetCanvas, targetTrail);
-  $: if (trailCanvas)  { drawCanvasTrail(trailCanvas, studentTrail); drawPenMarkers(trailCanvas, studentPenEvents); }
+  $: if (targetCanvas) { drawCanvasTrail(targetCanvas, targetTrail); drawPaintBuckets(targetCanvas, paintBuckets, []); }
+  $: if (trailCanvas)  { drawCanvasTrail(trailCanvas, studentTrail); drawPaintBuckets(trailCanvas, paintBuckets, visitedBuckets); drawPenMarkers(trailCanvas, studentPenEvents); }
 
   onMount(() => {
     const panelRo = new ResizeObserver(([entry]) => { panelWidth = entry.contentRect.width; });

@@ -40,7 +40,10 @@ def test_shelf_state_abstraction():
     sim = ObjectCentricTidyBot3DEnv(
         task_config_path=str(
             Path(kinder.__file__).parent
-            / "envs" / "dynamic3d" / "tasks" / "Shelf3D"
+            / "envs"
+            / "dynamic3d"
+            / "tasks"
+            / "Shelf3D"
             / f"Shelf3D-o{num_objects}.json"
         ),
         num_objects=num_objects,

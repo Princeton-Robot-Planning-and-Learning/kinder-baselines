@@ -105,10 +105,7 @@ def create_bilevel_planning_models(
         # OnFixture: cube is on the countertop (z > 0.5, not grasped).
         for target in target_objects:
             for fixture in target_fixtures:
-                if (
-                    target.name != x.grasped_object
-                    and x.get(target, "pose_z") > 0.5
-                ):
+                if target.name != x.grasped_object and x.get(target, "pose_z") > 0.5:
                     atoms.add(GroundAtom(OnFixture, [target, fixture]))
 
         objects = {robot} | set(target_objects) | set(target_fixtures)

@@ -3,7 +3,7 @@
 
   const dispatch = createEventDispatcher();
   import * as Blockly from 'blockly';
-  import { registerBlocks, toolbox } from './blocks.js';
+  import { registerBlocks, toolbox, buildToolbox } from './blocks.js';
   import ColorPicker from './ColorPicker.svelte';
 
   registerBlocks();
@@ -150,8 +150,16 @@
     setShadowNum(lastMoveByBlock, 'INPUT_DY', snap(dy));
   }
 
+  let penColorEnabled = true;
+
+  export function setPenColorEnabled(enabled) {
+    penColorEnabled = enabled;
+    if (workspace) workspace.updateToolbox(buildToolbox(enabled));
+    updateEnabledStates();
+  }
+
   const SEQUENCE_HEADS = new Set(['start', 'define_skill']);
-  const CUSTOM_COLLAPSE = new Set(['start', 'define_skill', 'use_skill', 'set_pen_color', 'move_base_to_target', 'move_base_by', 'repeat', 'repeat_while', 'pen_up', 'pen_down']);
+  const CUSTOM_COLLAPSE = new Set(['start', 'define_skill', 'use_skill', 'set_pen_color', 'move_base_to_target', 'move_base_by', 'repeat', 'repeat_while', 'pen_up', 'pen_down', 'dip_arm']);
 
   function isUseSkillValid(block) {
     const skillName = block.getFieldValue('SKILL');
@@ -210,6 +218,7 @@
       let should = reachable.has(block.id);
       if (should && block.type === 'use_skill') should = isUseSkillValid(block);
       if (should) should = !hasInvalidParamRef(block);
+      if (!penColorEnabled && block.type === 'set_pen_color') should = false;
       if (block.isEnabled() !== should) block.setEnabled(should);
     }
   }

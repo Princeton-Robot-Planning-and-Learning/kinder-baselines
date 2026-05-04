@@ -36,6 +36,8 @@
   let studentTrail = [];
   let studentPenEvents = [];
   let targetTrail = [];
+  let paintBuckets = [];
+  let visitedBuckets = [];
   let scoreData = null;
   let tamaMsg = '';
   let tamaVisible = false;
@@ -104,7 +106,8 @@
   async function onChallengeChange(id) {
     scoreData = null;
     if (!id) {
-      currentChallenge = null; hint = ''; targetTrail = [];
+      currentChallenge = null; hint = ''; targetTrail = []; paintBuckets = []; visitedBuckets = [];
+      blocklyWorkspace.setPenColorEnabled(true);
       tamaSay("FREE DRAW! No rules, no limits! Just me and the canvas. *chef's kiss*", 4000);
       return;
     }
@@ -113,6 +116,8 @@
       const r = await fetch('/challenges/' + id);
       const c = await r.json();
       currentChallenge = c; hint = c.description || ''; targetTrail = c.target_trail || [];
+      paintBuckets = c.paint_buckets || []; visitedBuckets = [];
+      blocklyWorkspace.setPenColorEnabled((c.paint_buckets?.length ?? 0) === 0);
       tamaSay(c.hint || c.description || 'Good luck!', 5000);
     } catch { hint = 'FAILED TO LOAD.'; }
   }
@@ -132,14 +137,14 @@
     isStopped = false;
     runAbortController = new AbortController();
     isRunning = true; status = 'RUNNING...'; frameInfo = 'STARTING...';
-    scoreData = null; studentTrail = []; studentPenEvents = [];
+    scoreData = null; studentTrail = []; studentPenEvents = []; visitedBuckets = [];
     allFrames = []; allFrameLabels = [];
     tamaSay("Let's go! Executing program...", 3000);
 
     try {
       const r = await fetch('/run', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ program, seed: 0 }),
+        body: JSON.stringify({ program, seed: 0, paint_buckets: paintBuckets }),
         signal: runAbortController.signal,
       });
 
@@ -191,6 +196,7 @@
 
         studentTrail = doneMsg.trail || [];
         studentPenEvents = doneMsg.pen_events || [];
+        visitedBuckets = doneMsg.visited_buckets || [];
 
         if (currentChallenge && studentTrail.length > 0) {
           await requestScore(currentChallenge.id, studentTrail);
@@ -233,6 +239,7 @@
   <BlocklyWorkspace bind:this={blocklyWorkspace} on:message={e => tamaSay(e.detail, 4000)} />
   <OutputPanel
     {frameDataUrl} {frameInfo} {frameLabel} {studentTrail} {studentPenEvents} {targetTrail} score={scoreData}
+    {paintBuckets} {visitedBuckets}
     showTarget={currentChallenge !== null}
     {canGoPrev} {canGoNext}
     bind:panelWidth={outputPanelWidth}

@@ -279,8 +279,8 @@ def test_dynobstruction2d_replay_demo_controllers():
 
     # Verify goal reached
     abstract_state = env_models.state_abstractor(state)
-    assert goal.atoms.issubset(abstract_state.atoms), (
-        f"Goal not reached. Expected {goal.atoms} ⊆ {abstract_state.atoms}"
-    )
+    assert goal.atoms.issubset(
+        abstract_state.atoms
+    ), f"Goal not reached. Expected {goal.atoms} ⊆ {abstract_state.atoms}"
 
     env.close()

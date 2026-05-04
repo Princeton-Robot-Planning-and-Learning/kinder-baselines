@@ -109,6 +109,63 @@ export function drawPenMarkers(canvas, events) {
   }
 }
 
+// Draw paint buckets as glowing circles on top of the trail canvas.
+// paintBuckets: array of { id, x, y, r, g, b } in robot coords.
+// visitedIds: array/Set of ids whose paint has been picked up (shown dimmed).
+export function drawPaintBuckets(canvas, paintBuckets, visitedIds) {
+  if (!paintBuckets || paintBuckets.length === 0) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+  const visited = new Set(visitedIds || []);
+  const R = 9; // bucket circle radius in canvas pixels
+
+  for (const bucket of paintBuckets) {
+    // Same coord transform as trail segments: negate robot_x for worldToCanvas wx arg.
+    const [px, py] = worldToCanvas(-bucket.x, bucket.y, w, h);
+    const color = `rgb(${bucket.r},${bucket.g},${bucket.b})`;
+    const isVisited = visited.has(bucket.id);
+
+    if (!isVisited) {
+      // Glowing filled circle.
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 22;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(px, py, R, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Bright white rim.
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(px, py, R, 0, 2 * Math.PI);
+      ctx.stroke();
+
+      // Small highlight dot (suggests liquid surface).
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+      ctx.beginPath();
+      ctx.arc(px - R * 0.25, py - R * 0.25, R * 0.3, 0, 2 * Math.PI);
+      ctx.fill();
+    } else {
+      // Dimmed — paint has been used.
+      ctx.fillStyle = 'rgba(15, 6, 28, 0.88)';
+      ctx.beginPath();
+      ctx.arc(px, py, R, 0, 2 * Math.PI);
+      ctx.fill();
+
+      ctx.strokeStyle = `rgba(${bucket.r},${bucket.g},${bucket.b},0.35)`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(px, py, R, 0, 2 * Math.PI);
+      ctx.stroke();
+    }
+  }
+
+  ctx.shadowBlur = 0;
+}
+
 export function drawCanvasTrail(canvas, trail) {
   const ctx = canvas.getContext('2d');
   const w = canvas.width;

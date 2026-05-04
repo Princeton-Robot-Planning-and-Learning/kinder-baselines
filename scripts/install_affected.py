@@ -42,12 +42,13 @@ def main():
     repo_root = Path(__file__).parents[1]
 
     # Check if we should do selective installation
-    base_sha = os.environ.get('CI_BASE_SHA')
+    base_sha = os.environ.get("CI_BASE_SHA")
 
     if not base_sha:
         print("▶ No CI_BASE_SHA set - installing all packages")
         # Fall back to install_all.py
         from install_all import main as install_all_main
+
         install_all_main()
         return
 
@@ -56,23 +57,25 @@ def main():
     # Get affected packages by calling get_affected_packages.py
     try:
         result = subprocess.run(
-            [sys.executable, 'scripts/get_affected_packages.py', base_sha],
+            [sys.executable, "scripts/get_affected_packages.py", base_sha],
             capture_output=True,
             text=True,
             check=True,
-            cwd=repo_root
+            cwd=repo_root,
         )
         affected_packages = result.stdout.strip().split()
     except subprocess.CalledProcessError as e:
         print(f"⚠ Error detecting affected packages: {e}", file=sys.stderr)
         print("⚠ Falling back to installing all packages", file=sys.stderr)
         from install_all import main as install_all_main
+
         install_all_main()
         return
 
     if not affected_packages:
         print("⚠ No affected packages detected, falling back to all packages")
         from install_all import main as install_all_main
+
         install_all_main()
         return
 
@@ -84,6 +87,7 @@ def main():
     if set(affected_packages) == set(all_packages):
         print("▶ Infrastructure change detected - installing all packages")
         from install_all import main as install_all_main
+
         install_all_main()
         return
 

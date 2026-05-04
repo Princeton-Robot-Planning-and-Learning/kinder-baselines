@@ -145,7 +145,7 @@ def _run_single_episode_evaluation(
     obs, info = env.reset(seed=seed)
     planning_time = 0.0  # time spent generating plans (abstract + skill planning)
     execution_time = 0.0  # time spent in agent.step() + agent.update()
-    env_step_time = 0.0   # time spent in env.step() (physics + rendering)
+    env_step_time = 0.0  # time spent in env.step() (physics + rendering)
     planning_failed = False
     with timer() as result:
         try:

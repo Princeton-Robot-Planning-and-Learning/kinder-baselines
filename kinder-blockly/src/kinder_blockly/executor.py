@@ -1,11 +1,10 @@
 """Execute Blockly programs in KinDER environments."""
 
+import math
+import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
-
-import math
-import threading
 
 import kinder
 import numpy as np
@@ -16,6 +15,7 @@ from kinder.envs.kinematic3d.base_motion3d import (
     ObjectCentricBaseMotion3DEnv,
 )
 from numpy.typing import NDArray
+from pybullet_helpers.camera import capture_image
 from pybullet_helpers.geometry import SE2Pose
 from pybullet_helpers.motion_planning import (
     run_single_arm_mobile_base_motion_planning,
@@ -34,6 +34,28 @@ TRAIL_HEIGHT = 0.005  # z-centre of the flat box (just above the floor)
 TRAIL_HALF_WIDTH = 0.030  # half-width of the line
 TRAIL_HALF_THICKNESS = 0.001  # half-height — paper-thin
 
+# Camera — same perspective as the original (yaw 90, pitch -30) but pulled back
+# slightly so the paint buckets near the corners remain in frame.
+_CAM_DISTANCE = 4.0  # original was 2.8; 4.0 gives ~40% more world coverage
+_CAM_PITCH = -35  # original was -30; 5° steeper keeps the floor in frame
+_CAM_YAW = 90
+_CAM_TARGET = (0.0, 0.0, 0.0)
+_RENDER_W = 640
+_RENDER_H = 360
+
+
+def _render(client_id: int) -> NDArray[np.uint8]:
+    """Render an overview frame using our wider camera settings."""
+    return capture_image(  # type: ignore[return-value]
+        physics_client_id=client_id,
+        camera_distance=_CAM_DISTANCE,
+        camera_yaw=_CAM_YAW,
+        camera_pitch=_CAM_PITCH,
+        camera_target=_CAM_TARGET,
+        image_width=_RENDER_W,
+        image_height=_RENDER_H,
+    )
+
 
 # Trail segment returned to the frontend for the top-down canvas.
 TrailSegment = dict[str, float]  # keys: x1 y1 x2 y2 r g b
@@ -45,9 +67,23 @@ PenEvent = dict[str, Any]  # keys: x y type('up'|'down') r g b
 # None for frames with no associated block (e.g. the initial reset frame).
 FrameLabel = dict[str, Any] | None  # keys: text str, r int, g int, b int
 
+# A coloured paint bucket placed in the world at a specific (x, y) position
+# in robot coordinates (same convention as TrailSegment x/y values).
+PaintBucket = dict[str, Any]  # keys: id str, x float, y float, r int, g int, b int
+
+# Proximity radius within which dip_arm can pick up a bucket's colour.
+BUCKET_RADIUS = 0.35
+
+# Paint bucket 3-D visual dimensions.
+BUCKET_VIS_RADIUS = 0.10  # cylinder radius (metres)
+BUCKET_VIS_HEIGHT = 0.20  # cylinder height (metres)
+
 
 def _add_trail_box(
-    x1: float, y1: float, x2: float, y2: float,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
     color_01: tuple[float, float, float],
     client_id: int,
 ) -> None:
@@ -76,6 +112,47 @@ def _add_trail_box(
     )
 
 
+def _add_paint_bucket_visual(
+    x: float,
+    y: float,
+    color_01: tuple[float, float, float],
+    client_id: int,
+) -> int:
+    """Spawn a coloured cylinder in the simulation representing a paint bucket.
+
+    Returns the PyBullet body id so the caller can later update its colour.
+    """
+    body_vis = p.createVisualShape(
+        p.GEOM_CYLINDER,
+        radius=BUCKET_VIS_RADIUS,
+        length=BUCKET_VIS_HEIGHT,
+        rgbaColor=[*color_01, 1.0],
+        physicsClientId=client_id,
+    )
+    body_id: int = p.createMultiBody(
+        baseMass=0,
+        baseVisualShapeIndex=body_vis,
+        basePosition=[x, y, BUCKET_VIS_HEIGHT / 2.0 + 0.001],
+        physicsClientId=client_id,
+    )
+    # Brighter paint-surface disk sitting on top of the cylinder.
+    bright = tuple(min(1.0, c * 1.6) for c in color_01)
+    cap_vis = p.createVisualShape(
+        p.GEOM_CYLINDER,
+        radius=BUCKET_VIS_RADIUS * 0.75,
+        length=0.012,
+        rgbaColor=[*bright, 1.0],
+        physicsClientId=client_id,
+    )
+    p.createMultiBody(
+        baseMass=0,
+        baseVisualShapeIndex=cap_vis,
+        basePosition=[x, y, BUCKET_VIS_HEIGHT + 0.007],
+        physicsClientId=client_id,
+    )
+    return body_id
+
+
 @dataclass
 class _PenState:
     """Mutable pen state threaded through block execution."""
@@ -91,10 +168,16 @@ class _PenState:
         if self.prev_xy is None:
             return
         r, g, b = self.color_rgb
-        self.events.append({
-            "x": float(self.prev_xy[0]), "y": float(self.prev_xy[1]),
-            "type": event_type, "r": r, "g": g, "b": b,
-        })
+        self.events.append(
+            {
+                "x": float(self.prev_xy[0]),
+                "y": float(self.prev_xy[1]),
+                "type": event_type,
+                "r": r,
+                "g": g,
+                "b": b,
+            }
+        )
 
     @property
     def color_01(self) -> tuple[float, float, float]:
@@ -118,6 +201,56 @@ def _get_physics_client_id(env: Any) -> int | None:
     return None
 
 
+def _get_robot_arm(env: Any) -> Any | None:
+    """Return the robot arm object from the environment, or None."""
+    unwrapped = env.unwrapped
+    for attr in ("_object_centric_env", "_env"):
+        inner = getattr(unwrapped, attr, None)
+        if inner is not None:
+            robot = getattr(inner, "robot", None)
+            if robot is not None:
+                return getattr(robot, "arm", None)
+    robot = getattr(unwrapped, "robot", None)
+    return getattr(robot, "arm", None) if robot is not None else None
+
+
+# Arm joint positions for the dip animation (Kinova Gen3, 7 DOF).
+# Retract: arm folded close to the body (environment default).
+# Dip: shoulder (j2) and elbow (j3) extend to reach toward the floor.
+_DIP_FRAME_COUNT = 5
+_RETRACT_ARM_JOINTS: list[float] = [0.0, -0.35, -math.pi, -2.5, 0.0, -0.87, math.pi / 2]
+_DIP_ARM_JOINTS: list[float] = [0.0, 0.8, -math.pi + 1.2, -2.5, 0.0, -0.87, math.pi / 2]
+
+
+def _yield_dip_frames(
+    arm: Any,
+    client_id: int,
+    frame_labels_out: list[FrameLabel] | None,
+    label: FrameLabel,
+) -> Iterator[NDArray[np.uint8]]:
+    """Interpolate arm down to dip position and back, yielding frames."""
+    try:
+        start: list[float] = list(arm.get_joint_positions())
+    except AttributeError:
+        start = list(_RETRACT_ARM_JOINTS)
+    # Build the dip target from start so finger joints stay unchanged.
+    # Only the first 7 positions (arm joints) are modified.
+    dip = list(start)
+    for i, val in enumerate(_DIP_ARM_JOINTS):
+        if i < len(dip):
+            dip[i] = val
+    for phase_end in (dip, start):
+        for i in range(_DIP_FRAME_COUNT + 1):
+            t = i / _DIP_FRAME_COUNT
+            joints = [s + t * (e - s) for s, e in zip(start, phase_end)]
+            arm.set_joints(joints)
+            frame: NDArray[np.uint8] = _render(client_id)
+            if frame_labels_out is not None:
+                frame_labels_out.append(label)
+            yield frame
+        start = list(phase_end)
+
+
 def validate_program(program: dict[str, Any]) -> dict[str, Any]:
     """Abstract validator — catches OOB and infinite loops without physics.
 
@@ -129,10 +262,10 @@ def validate_program(program: dict[str, Any]) -> dict[str, Any]:
         return {}
 
     _OP_FNS: dict[str, Callable[[float, float], bool]] = {
-        ">":  lambda a, b: a > b,
+        ">": lambda a, b: a > b,
         ">=": lambda a, b: a >= b,
-        "=":  lambda a, b: abs(a - b) < 0.05,
-        "<":  lambda a, b: a < b,
+        "=": lambda a, b: abs(a - b) < 0.05,
+        "<": lambda a, b: a < b,
         "<=": lambda a, b: a <= b,
     }
 
@@ -153,12 +286,12 @@ def validate_program(program: dict[str, Any]) -> dict[str, Any]:
         if depth > 20:
             return None
         for blk in blks:
-            btype    = blk["type"]
+            btype = blk["type"]
             block_id = blk.get("blockId")
 
             if btype == "move_base_to_target":
                 rx = -float(blk.get("y", 0.0))
-                ry =  float(blk.get("x", 0.0))
+                ry = float(blk.get("x", 0.0))
                 err = _oob_error(rx, ry)
                 if err:
                     return {"error": err, "error_block_id": block_id}
@@ -170,18 +303,18 @@ def validate_program(program: dict[str, Any]) -> dict[str, Any]:
                 pos[1] = max(-2.0, min(2.0, pos[1] + float(blk.get("dx", 0.0))))
 
             elif btype == "repeat_while":
-                var       = blk.get("var", "X")
-                op        = blk.get("op", ">")
+                var = blk.get("var", "X")
+                op = blk.get("op", ">")
                 threshold = float(blk.get("threshold", 0.0))
-                body      = blk.get("body", [])
+                body = blk.get("body", [])
                 _default: Callable[[float, float], bool] = lambda a, b: False
                 op_fn = _OP_FNS.get(op, _default)
                 for _ in range(100):
                     cur: float
                     if var == "X":
-                        cur = pos[1]        # UI X = robot_y
+                        cur = pos[1]  # UI X = robot_y
                     elif var == "Y":
-                        cur = -pos[0]       # UI Y = -robot_x
+                        cur = -pos[0]  # UI Y = -robot_x
                     else:
                         try:
                             cur = float(var)
@@ -210,8 +343,9 @@ def render_initial_frame(seed: int = 0) -> NDArray[np.uint8]:
     )
     try:
         env.reset(seed=seed)
-        frame: NDArray[np.uint8] = env.render()  # type: ignore[assignment]
-        return frame
+        cid = _get_physics_client_id(env)
+        frame = _render(cid) if cid is not None else env.render()
+        return frame  # type: ignore[return-value]
     finally:
         env.close()  # type: ignore[no-untyped-call]
 
@@ -224,6 +358,8 @@ def execute_program(
     frame_labels_out: list[FrameLabel] | None = None,
     infinite_loop_out: list[bool] | None = None,
     stop_event: threading.Event | None = None,
+    paint_buckets: list[PaintBucket] | None = None,
+    visited_buckets_out: set[str] | None = None,
 ) -> Iterator[NDArray[np.uint8]]:
     """Execute a Blockly program and yield rendered frames.
 
@@ -249,8 +385,9 @@ def execute_program(
 
         sim = ObjectCentricBaseMotion3DEnv(allow_state_access=True)
 
-        # Resolve pybullet client for 3-D debug lines.
+        # Resolve pybullet client for 3-D debug lines and arm animation.
         client_id = _get_physics_client_id(env)
+        robot_arm = _get_robot_arm(env)
 
         # Pen starts UP — students must use set_pen_color or pen_down first.
         pen = _PenState()
@@ -259,7 +396,31 @@ def execute_program(
         assert isinstance(state, BaseMotion3DObjectCentricState)
         pen.prev_xy = [state.base_pose.x, state.base_pose.y]
 
-        frame: NDArray[np.uint8] = env.render()  # type: ignore[assignment]
+        # Track which paint bucket IDs the robot has dipped into this run.
+        visited_set: set[str] = (
+            visited_buckets_out if visited_buckets_out is not None else set()
+        )
+        buckets: list[PaintBucket] = paint_buckets or []
+
+        # Spawn paint bucket cylinders in the 3-D simulation before the first render.
+        bucket_body_ids: dict[str, int] = {}
+        if client_id is not None:
+            for _bucket in buckets:
+                _r = int(_bucket["r"]) / 255.0
+                _g = int(_bucket["g"]) / 255.0
+                _b = int(_bucket["b"]) / 255.0
+                _bid = _add_paint_bucket_visual(
+                    float(_bucket["x"]),
+                    float(_bucket["y"]),
+                    (_r, _g, _b),
+                    client_id,
+                )
+                bucket_body_ids[str(_bucket["id"])] = _bid
+
+        if client_id is not None:
+            frame: NDArray[np.uint8] = _render(client_id)
+        else:
+            frame = env.render()  # type: ignore[assignment]
         if frame_labels_out is not None:
             frame_labels_out.append(None)
         yield frame
@@ -267,15 +428,16 @@ def execute_program(
         state_box = [state]
 
         _OP_FNS = {
-            ">":  lambda a, b: a > b,
+            ">": lambda a, b: a > b,
             ">=": lambda a, b: a >= b,
-            "=":  lambda a, b: abs(a - b) < 0.05,
-            "<":  lambda a, b: a < b,
+            "=": lambda a, b: abs(a - b) < 0.05,
+            "<": lambda a, b: a < b,
             "<=": lambda a, b: a <= b,
         }
 
         def run_blocks(  # pylint: disable=too-many-branches
-            blks: list[dict[str, Any]], depth: int = 0,
+            blks: list[dict[str, Any]],
+            depth: int = 0,
         ) -> Iterator[NDArray[np.uint8]]:
             if depth > 20:
                 return
@@ -285,11 +447,77 @@ def execute_program(
                 btype = blk["type"]
 
                 if btype == "set_pen_color":
+                    if buckets:
+                        raise RuntimeError(
+                            "Whoops! This challenge uses paint buckets. "
+                            "Move to a paint bucket and use 'Dip arm in paint' "
+                            "to load a colour — you can't set it directly here!"
+                        )
                     pen.color_rgb = (
                         int(blk.get("r", 255)),
                         int(blk.get("g", 0)),
                         int(blk.get("b", 0)),
                     )
+
+                elif btype == "dip_arm":
+                    s = state_box[0]
+                    assert isinstance(s, BaseMotion3DObjectCentricState)
+                    cur_x = s.base_pose.x
+                    cur_y = s.base_pose.y
+                    nearest: PaintBucket | None = None
+                    nearest_dist = float("inf")
+                    for bucket in buckets:
+                        dist = math.sqrt(
+                            (cur_x - float(bucket["x"])) ** 2
+                            + (cur_y - float(bucket["y"])) ** 2
+                        )
+                        if dist < nearest_dist:
+                            nearest_dist = dist
+                            nearest = bucket
+                    if nearest is not None and nearest_dist <= BUCKET_RADIUS:
+                        dip_lbl: FrameLabel = {
+                            "text": "Dipped! Color loaded",
+                            "r": int(nearest["r"]),
+                            "g": int(nearest["g"]),
+                            "b": int(nearest["b"]),
+                        }
+                        # Animate the arm dipping into the bucket.
+                        if robot_arm is not None and client_id is not None:
+                            yield from _yield_dip_frames(
+                                robot_arm,
+                                client_id,
+                                frame_labels_out,
+                                dip_lbl,
+                            )
+                        else:
+                            if client_id is not None:
+                                frm: NDArray[np.uint8] = _render(client_id)
+                            else:
+                                frm = env.render()  # type: ignore[assignment]
+                            if frame_labels_out is not None:
+                                frame_labels_out.append(dip_lbl)
+                            yield frm
+                        # Load colour and mark the bucket used-up after the dip.
+                        pen.color_rgb = (
+                            int(nearest["r"]),
+                            int(nearest["g"]),
+                            int(nearest["b"]),
+                        )
+                        visited_set.add(str(nearest["id"]))
+                        if client_id is not None:
+                            bid = bucket_body_ids.get(str(nearest["id"]))
+                            if bid is not None:
+                                p.changeVisualShape(
+                                    bid,
+                                    -1,
+                                    rgbaColor=[0.22, 0.22, 0.22, 0.55],
+                                    physicsClientId=client_id,
+                                )
+                    else:
+                        raise RuntimeError(
+                            "Dip arm missed! There's no paint bucket nearby. "
+                            "Move closer to a bucket and try again!"
+                        )
 
                 elif btype == "pen_down":
                     was_down = pen.down
@@ -310,11 +538,19 @@ def execute_program(
                     ui_y = float(blk.get("y", 0.0))
                     lbl: FrameLabel = {
                         "text": f"Move to ({ui_x:.1f}, {ui_y:.1f})",
-                        "r": 116, "g": 91, "b": 166,
+                        "r": 116,
+                        "g": 91,
+                        "b": 166,
                     }
                     new_state, frames = _run_move_base_to(
-                        env, state_box[0], sim, target_x, target_y,
-                        pen=pen, client_id=client_id, stop_event=stop_event,
+                        env,
+                        state_box[0],
+                        sim,
+                        target_x,
+                        target_y,
+                        pen=pen,
+                        client_id=client_id,
+                        stop_event=stop_event,
                     )
                     state_box[0] = new_state
                     for f in frames:
@@ -333,11 +569,19 @@ def execute_program(
                     ui_dy = float(blk.get("dy", 0.0))
                     by_lbl: FrameLabel = {
                         "text": f"Move by ({ui_dx:+.1f}, {ui_dy:+.1f})",
-                        "r": 168, "g": 143, "b": 224,
+                        "r": 168,
+                        "g": 143,
+                        "b": 224,
                     }
                     new_state, frames = _run_move_base_to(
-                        env, state_box[0], sim, target_x, target_y,
-                        pen=pen, client_id=client_id, stop_event=stop_event,
+                        env,
+                        state_box[0],
+                        sim,
+                        target_x,
+                        target_y,
+                        pen=pen,
+                        client_id=client_id,
+                        stop_event=stop_event,
                     )
                     state_box[0] = new_state
                     for f in frames:
@@ -347,7 +591,7 @@ def execute_program(
 
                 elif btype == "repeat_while":
                     var = blk.get("var", "X")
-                    op  = blk.get("op", ">")
+                    op = blk.get("op", ">")
                     threshold = float(blk.get("threshold", 0.0))
                     body = blk.get("body", [])
                     _default: Callable[[float, float], bool] = lambda a, b: False
@@ -442,24 +686,35 @@ def _run_move_base_to(
             r, g, b = pen.color_rgb
 
             # Record for the top-down canvas (plain floats for JSON).
-            pen.trail.append({
-                "x1": float(pen.prev_xy[0]), "y1": float(pen.prev_xy[1]),
-                "x2": float(cur_xy[0]),      "y2": float(cur_xy[1]),
-                "r": r, "g": g, "b": b,
-            })
+            pen.trail.append(
+                {
+                    "x1": float(pen.prev_xy[0]),
+                    "y1": float(pen.prev_xy[1]),
+                    "x2": float(cur_xy[0]),
+                    "y2": float(cur_xy[1]),
+                    "r": r,
+                    "g": g,
+                    "b": b,
+                }
+            )
 
             # Place a thin flat box on the floor so it shows in renders.
             if client_id is not None:
                 _add_trail_box(
-                    pen.prev_xy[0], pen.prev_xy[1],
-                    cur_xy[0], cur_xy[1],
-                    pen.color_01, client_id,
+                    pen.prev_xy[0],
+                    pen.prev_xy[1],
+                    cur_xy[0],
+                    cur_xy[1],
+                    pen.color_01,
+                    client_id,
                 )
 
         pen.prev_xy = cur_xy
 
         if step_i % FRAME_SKIP == 0 or step_i == len(plan) - 1:
-            frame: NDArray[np.uint8] = env.render()  # type: ignore[assignment]
+            frame: NDArray[np.uint8] = (  # type: ignore[assignment]
+                _render(client_id) if client_id is not None else env.render()
+            )
             frames.append(frame)
 
     return state, frames

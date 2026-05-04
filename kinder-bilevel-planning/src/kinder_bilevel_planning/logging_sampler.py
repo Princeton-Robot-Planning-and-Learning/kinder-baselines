@@ -67,7 +67,8 @@ class LoggingParameterizedControllerTrajectorySampler(
         self._all_records.clear()
 
     def extract_plan_records(
-        self, plan: Plan,
+        self,
+        plan: Plan,
     ) -> list[SkillExecutionRecord]:
         """Match logged records to the final successful plan.
 
