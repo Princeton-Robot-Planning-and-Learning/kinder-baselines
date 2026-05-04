@@ -2,14 +2,11 @@
   export let message = '';
   export let visible = false;
   export let onPoke = () => {};
-  export let outputPanelWidth = 0;
-
-  $: bubbleMaxWidth = (outputPanelWidth ? outputPanelWidth - 32 : 240) + 'px';
 </script>
 
 <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
 <div id="tama-container">
-  <div id="tama-bubble" class:visible style="max-width:{bubbleMaxWidth}" on:click={onPoke}>{message}</div>
+  <div id="tama-bubble" class:visible on:click={onPoke}>{message}</div>
   <div id="tama-bot" on:click={onPoke} title="Click me!">
     <div id="tama-pixel"></div>
   </div>
@@ -17,28 +14,33 @@
 
 <style>
   #tama-container {
-    position: fixed; bottom: 16px; right: 16px; z-index: 1000;
-    display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+    display: flex; flex-direction: row; align-items: flex-end; gap: 6px;
+    padding: 8px 10px 10px;
     pointer-events: none;
+    width: 100%;
+    box-sizing: border-box;
   }
   #tama-bubble {
+    flex: 1; min-width: 0;
     background: var(--surface); color: var(--text);
     border: var(--px) solid var(--accent);
     box-shadow: var(--px) var(--px) 0 rgba(145,96,238,.35);
-    padding: 10px 14px; font-size: 26px; line-height: 1.6;
+    padding: 10px 14px; font-size: 20px; line-height: 1.5;
     position: relative;
-    opacity: 0; transform: translateY(8px);
+    opacity: 0; transform: translateX(-6px);
     transition: opacity 0.3s, transform 0.3s;
     pointer-events: auto; cursor: pointer;
+    box-sizing: border-box;
   }
-  #tama-bubble.visible { opacity: 1; transform: translateY(0); }
+  #tama-bubble.visible { opacity: 1; transform: translateX(0); }
   #tama-bubble::after {
-    content: ''; position: absolute; bottom: -8px; right: 20px;
+    content: ''; position: absolute; right: -8px; bottom: 28px;
     width: 0; height: 0;
-    border-left: 8px solid transparent; border-right: 8px solid transparent;
-    border-top: 8px solid var(--accent);
+    border-top: 8px solid transparent; border-bottom: 8px solid transparent;
+    border-left: 8px solid var(--accent);
   }
   #tama-bot {
+    flex-shrink: 0;
     width: 96px; height: 108px; position: relative;
     pointer-events: auto; cursor: pointer;
     animation: tama-bounce 1.2s ease-in-out infinite;

@@ -159,7 +159,7 @@
   }
 
   const SEQUENCE_HEADS = new Set(['start', 'define_skill']);
-  const CUSTOM_COLLAPSE = new Set(['start', 'define_skill', 'use_skill', 'set_pen_color', 'move_base_to_target', 'move_base_by', 'repeat', 'repeat_while', 'pen_up', 'pen_down', 'dip_arm']);
+  const CUSTOM_COLLAPSE = new Set(['start', 'define_skill', 'use_skill', 'set_pen_color', 'move_base_to_target', 'move_base_by', 'repeat', 'repeat_while', 'pen_up', 'pen_down', 'dip_arm', 'spawn_paint_bucket', 'remove_paint_bucket']);
 
   function isUseSkillValid(block) {
     const skillName = block.getFieldValue('SKILL');
@@ -204,8 +204,11 @@
     }
   }
 
+  let _updatingEnabled = false;
   function updateEnabledStates() {
-    if (!workspace) return;
+    if (!workspace || _updatingEnabled) return;
+    _updatingEnabled = true;
+    try {
     const reachable = new Set();
     for (const top of workspace.getTopBlocks(false)) {
       if (SEQUENCE_HEADS.has(top.type)) markReachable(top.getInputTargetBlock('BODY'), reachable);
@@ -216,11 +219,14 @@
       if (block.type === 'param_ref') continue; // always connectable; dropdown handles invalid context
       if (block.type === 'condition') continue;  // value block; parent repeat_while handles state
       let should = reachable.has(block.id);
-      if (should && block.type === 'use_skill') should = isUseSkillValid(block);
+      if (should && block.type === 'use_skill') {
+        should = isUseSkillValid(block);
+      }
       if (should) should = !hasInvalidParamRef(block);
       if (!penColorEnabled && block.type === 'set_pen_color') should = false;
       if (block.isEnabled() !== should) block.setEnabled(should);
     }
+    } finally { _updatingEnabled = false; }
   }
 
   export function selectBlock(blockId) {
@@ -258,6 +264,24 @@
       }
     }
 
+    // Substitute param names (case-insensitive) into an expression and evaluate it.
+    // Only pure arithmetic is allowed after substitution — no arbitrary code execution.
+    function evalParamExpr(raw, params) {
+      let s = raw;
+      // Longest param names first to avoid partial substitutions (e.g. "ab" before "a")
+      const keys = Object.keys(params).sort((a, b) => b.length - a.length);
+      for (const key of keys) {
+        const val = params[key];
+        if (val == null || isNaN(Number(val))) continue;
+        const re = new RegExp('\\b' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi');
+        s = s.replace(re, String(Number(val)));
+      }
+      // Guard: after substitution only digits, operators, parens, dots and spaces may remain
+      if (!/^[\d+\-*/.() ]+$/.test(s)) return NaN;
+      try { return Function('"use strict"; return (' + s + ')')(); }
+      catch { return NaN; }
+    }
+
     function getNumFromInput(block, inputName, params) {
       const connected = block.getInput(inputName)?.connection?.targetBlock();
       if (!connected) return 0;
@@ -265,7 +289,12 @@
         const val = params?.[connected.getFieldValue('PARAM')];
         return (val != null && !isNaN(Number(val))) ? Number(val) : 0;
       }
-      return Number(connected.getFieldValue('NUM') ?? 0);
+      const raw = String(connected.getFieldValue('NUM') ?? '0').trim();
+      if (params) {
+        const result = evalParamExpr(raw, params);
+        if (isFinite(result)) return result;
+      }
+      return Number(raw) || 0;
     }
 
     // Inline-expand a chain of blocks into `output`, substituting skill calls recursively.
@@ -339,6 +368,13 @@
               entry.g = Number(block.getFieldValue('G'));
               entry.b = Number(block.getFieldValue('B'));
             }
+          } else if (block.type === 'spawn_paint_bucket') {
+            const f = block.getField('COLOR');
+            entry.x = getNumFromInput(block, 'INPUT_X', params);
+            entry.y = getNumFromInput(block, 'INPUT_Y', params);
+            entry.r = f?.r_ ?? 255;
+            entry.g = f?.g_ ?? 0;
+            entry.b = f?.b_ ?? 0;
           }
           output.push(entry);
         }
@@ -493,6 +529,13 @@
     workspace.addChangeListener(evt => {
       if (evt.type === Blockly.Events.BLOCK_CREATE) {
         const block = workspace.getBlockById(evt.blockId);
+        if (block?.type === 'use_skill') {
+          const blockId = evt.blockId;
+          setTimeout(() => {
+            const b = workspace?.getBlockById(blockId);
+            if (b && !b.isDisposed()) { b.updateParamInputs_?.(); updateEnabledStates(); }
+          }, 0);
+        }
         if (CUSTOM_COLLAPSE.has(block?.type)) block.customCollapse_?.();
         else if (block && !block.isCollapsed() && !block.outputConnection) block.setCollapsed(true);
         if (block?.type === 'start') {
@@ -514,6 +557,8 @@
           }
           updateEnabledStates();
         } else if (changed?.type === 'param_ref') {
+          updateEnabledStates();
+        } else if (changed?.type === 'use_skill') {
           updateEnabledStates();
         }
       }

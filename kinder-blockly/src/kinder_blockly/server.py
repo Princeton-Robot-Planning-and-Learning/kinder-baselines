@@ -56,8 +56,9 @@ def reset_env() -> Response:
     """Reset the environment and return the initial frame."""
     data = request.get_json() or {}
     seed = data.get("seed", 0)
+    paint_buckets = data.get("paint_buckets", [])
     try:
-        frame = render_initial_frame(seed=seed)
+        frame = render_initial_frame(seed=seed, paint_buckets=paint_buckets)
         return Response(
             json.dumps({"frame": _encode_frame(frame)}),
             status=200,
@@ -122,6 +123,7 @@ def run_program() -> Response:
         frame_labels: list[FrameLabel] = []
         infinite_loop: list[bool] = [False]
         visited_buckets: set[str] = set()
+        spawned_buckets: list[PaintBucket] = []
         frame_index = 0
         error: str | None = None
         deadline = time.monotonic() + EXECUTION_TIMEOUT_S
@@ -137,6 +139,7 @@ def run_program() -> Response:
                 stop_event=_stop_event,
                 paint_buckets=paint_buckets,
                 visited_buckets_out=visited_buckets,
+                spawned_buckets_out=spawned_buckets,
             ):
                 idx = frame_index
                 label = frame_labels[idx] if idx < len(frame_labels) else None
@@ -167,6 +170,7 @@ def run_program() -> Response:
                 "trail": trail,
                 "pen_events": pen_events,
                 "visited_buckets": list(visited_buckets),
+                "spawned_buckets": spawned_buckets,
             }
         ) + "\n"
 
