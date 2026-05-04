@@ -576,8 +576,10 @@ def execute_program(
                         )
 
                 elif btype == "spawn_paint_bucket":
-                    sx = float(blk.get("x", 0.0))
-                    sy = float(blk.get("y", 0.0))
+                    ux = float(blk.get("x", 0.0))
+                    uy = float(blk.get("y", 0.0))
+                    sx = -uy  # same axis mapping as move_base_to_target
+                    sy = ux
                     r_int = int(blk.get("r", 255))
                     g_int = int(blk.get("g", 0))
                     b_int = int(blk.get("b", 0))
@@ -594,7 +596,7 @@ def execute_program(
                         )
                         bucket_body_ids[bucket_id] = _bid
                     spawn_lbl: FrameLabel = {
-                        "text": f"Bucket spawned at ({sx:.1f}, {sy:.1f})",
+                        "text": f"Bucket spawned at ({ux:.1f}, {uy:.1f})",
                         "r": r_int, "g": g_int, "b": b_int,
                     }
                     if frame_labels_out is not None:
