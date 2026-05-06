@@ -3,10 +3,8 @@
   import Header from './lib/Header.svelte';
   import BlocklyWorkspace from './lib/BlocklyWorkspace.svelte';
   import OutputPanel from './lib/OutputPanel.svelte';
-  import TamaBot from './lib/TamaBot.svelte';
 
   let blocklyWorkspace;
-  let outputPanelWidth = 0;
 
   let challenges = [];
   let currentChallenge = null;
@@ -20,9 +18,10 @@
   let currentFrameIndex = -1;
   let frameInfo = 'DRAG BLOCKS AND CLICK RUN';
 
+  let lastFrameDataUrl = '';
   $: frameDataUrl = currentFrameIndex >= 0 && allFrames.length > 0
     ? 'data:image/jpeg;base64,' + allFrames[currentFrameIndex]
-    : '';
+    : lastFrameDataUrl;
   $: frameLabel = allFrameLabels[currentFrameIndex] ?? null;
   $: canGoPrev = currentFrameIndex > 0;
   $: canGoNext = currentFrameIndex >= 0 && currentFrameIndex < allFrames.length - 1;
@@ -37,7 +36,9 @@
   let studentPenEvents = [];
   let targetTrail = [];
   let paintBuckets = [];
+  let spawnedBuckets = [];
   let visitedBuckets = [];
+  $: allPaintBuckets = [...paintBuckets, ...spawnedBuckets];
   let scoreData = null;
   let tamaMsg = '';
   let tamaVisible = false;
@@ -94,10 +95,10 @@
     } catch {}
   }
 
-  async function loadInitialFrame() {
+  async function loadInitialFrame(buckets = []) {
     frameInfo = 'LOADING WORLD...';
     try {
-      const r = await fetch('/reset', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({seed:0}) });
+      const r = await fetch('/reset', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({seed:0, paint_buckets: buckets}) });
       const d = await r.json();
       if (d.frame) { allFrames = [d.frame]; currentFrameIndex = 0; frameInfo = 'READY!'; }
     } catch { frameInfo = 'LOAD FAILED'; }
@@ -109,6 +110,7 @@
       currentChallenge = null; hint = ''; targetTrail = []; paintBuckets = []; visitedBuckets = [];
       blocklyWorkspace.setPenColorEnabled(true);
       tamaSay("FREE DRAW! No rules, no limits! Just me and the canvas. *chef's kiss*", 4000);
+      await loadInitialFrame([]);
       return;
     }
     hint = 'LOADING...';
@@ -119,6 +121,7 @@
       paintBuckets = c.paint_buckets || []; visitedBuckets = [];
       blocklyWorkspace.setPenColorEnabled((c.paint_buckets?.length ?? 0) === 0);
       tamaSay(c.hint || c.description || 'Good luck!', 5000);
+      await loadInitialFrame(paintBuckets);
     } catch { hint = 'FAILED TO LOAD.'; }
   }
 
@@ -137,7 +140,8 @@
     isStopped = false;
     runAbortController = new AbortController();
     isRunning = true; status = 'RUNNING...'; frameInfo = 'STARTING...';
-    scoreData = null; studentTrail = []; studentPenEvents = []; visitedBuckets = [];
+    scoreData = null; studentTrail = []; studentPenEvents = []; visitedBuckets = []; spawnedBuckets = [];
+    if (allFrames.length > 0 && currentFrameIndex >= 0) lastFrameDataUrl = 'data:image/jpeg;base64,' + allFrames[currentFrameIndex];
     allFrames = []; allFrameLabels = [];
     tamaSay("Let's go! Executing program...", 3000);
 
@@ -197,6 +201,7 @@
         studentTrail = doneMsg.trail || [];
         studentPenEvents = doneMsg.pen_events || [];
         visitedBuckets = doneMsg.visited_buckets || [];
+        spawnedBuckets = doneMsg.spawned_buckets || [];
 
         if (currentChallenge && studentTrail.length > 0) {
           await requestScore(currentChallenge.id, studentTrail);
@@ -239,18 +244,16 @@
   <BlocklyWorkspace bind:this={blocklyWorkspace} on:message={e => tamaSay(e.detail, 4000)} />
   <OutputPanel
     {frameDataUrl} {frameInfo} {frameLabel} {studentTrail} {studentPenEvents} {targetTrail} score={scoreData}
-    {paintBuckets} {visitedBuckets}
+    paintBuckets={allPaintBuckets} {visitedBuckets}
     showTarget={currentChallenge !== null}
     {canGoPrev} {canGoNext}
-    bind:panelWidth={outputPanelWidth}
+    tamaMsg={tamaMsg} tamaVisible={tamaVisible} onTamaPoke={tamaPoke}
     on:gridClick={e => blocklyWorkspace.setMoveCoords(e.detail.x, e.detail.y)}
     on:gridDrag={e => blocklyWorkspace.setMoveDelta(e.detail.dx, e.detail.dy)}
     on:prevFrame={prevFrame}
     on:nextFrame={nextFrame}
   />
 </div>
-
-<TamaBot message={tamaMsg} visible={tamaVisible} onPoke={tamaPoke} {outputPanelWidth} />
 
 <style>
   .content { display: flex; flex: 1; overflow: hidden; }

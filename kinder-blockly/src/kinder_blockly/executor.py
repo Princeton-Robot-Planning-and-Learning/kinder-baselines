@@ -254,8 +254,8 @@ def _yield_dip_frames(
 def validate_program(program: dict[str, Any]) -> dict[str, Any]:
     """Abstract validator — catches OOB and infinite loops without physics.
 
-    Returns {} on success, {"error": str} for OOB, or {"infinite_loop": True}.
-    Runs in microseconds by tracking position symbolically.
+    Returns {} on success, {"error": str} for OOB, or {"infinite_loop": True}. Runs in
+    microseconds by tracking position symbolically.
     """
     blocks: list[dict[str, Any]] = program.get("blocks", [])
     if not blocks:
@@ -333,7 +333,10 @@ def validate_program(program: dict[str, Any]) -> dict[str, Any]:
     return _run(blocks) or {}
 
 
-def render_initial_frame(seed: int = 0) -> NDArray[np.uint8]:
+def render_initial_frame(
+    seed: int = 0,
+    paint_buckets: list[PaintBucket] | None = None,
+) -> NDArray[np.uint8]:
     """Reset the environment and return the first rendered frame."""
     env = kinder.make(
         "kinder/BaseMotion3D-v0",
@@ -344,6 +347,18 @@ def render_initial_frame(seed: int = 0) -> NDArray[np.uint8]:
     try:
         env.reset(seed=seed)
         cid = _get_physics_client_id(env)
+        if cid is not None and paint_buckets:
+            for bucket in paint_buckets:
+                _add_paint_bucket_visual(
+                    float(bucket["x"]),
+                    float(bucket["y"]),
+                    (
+                        int(bucket["r"]) / 255.0,
+                        int(bucket["g"]) / 255.0,
+                        int(bucket["b"]) / 255.0,
+                    ),
+                    cid,
+                )
         frame = _render(cid) if cid is not None else env.render()
         return frame  # type: ignore[return-value]
     finally:
@@ -360,14 +375,15 @@ def execute_program(
     stop_event: threading.Event | None = None,
     paint_buckets: list[PaintBucket] | None = None,
     visited_buckets_out: set[str] | None = None,
+    spawned_buckets_out: list[PaintBucket] | None = None,
 ) -> Iterator[NDArray[np.uint8]]:
     """Execute a Blockly program and yield rendered frames.
 
     Yields an initial frame after reset, then intermediate frames during skill
     execution.
 
-    If *trail_out* is provided it is populated (in-place) with the line
-    segments drawn by the pen so the caller can forward them to the frontend.
+    If *trail_out* is provided it is populated (in-place) with the line segments drawn
+    by the pen so the caller can forward them to the frontend.
     """
     blocks: list[dict[str, Any]] = program.get("blocks", [])
     if not blocks:
@@ -400,7 +416,8 @@ def execute_program(
         visited_set: set[str] = (
             visited_buckets_out if visited_buckets_out is not None else set()
         )
-        buckets: list[PaintBucket] = paint_buckets or []
+        buckets: list[PaintBucket] = list(paint_buckets or [])
+        runtime_buckets: list[PaintBucket] = []
 
         # Spawn paint bucket cylinders in the 3-D simulation before the first render.
         bucket_body_ids: dict[str, int] = {}
@@ -519,6 +536,95 @@ def execute_program(
                             "Move closer to a bucket and try again!"
                         )
 
+                elif btype == "remove_paint_bucket":
+                    s = state_box[0]
+                    assert isinstance(s, BaseMotion3DObjectCentricState)
+                    cur_x = s.base_pose.x
+                    cur_y = s.base_pose.y
+                    nearest_rem: PaintBucket | None = None
+                    nearest_rem_dist = float("inf")
+                    for bucket in buckets:
+                        dist = math.sqrt(
+                            (cur_x - float(bucket["x"])) ** 2
+                            + (cur_y - float(bucket["y"])) ** 2
+                        )
+                        if dist < nearest_rem_dist:
+                            nearest_rem_dist = dist
+                            nearest_rem = bucket
+                    if nearest_rem is not None and nearest_rem_dist <= BUCKET_RADIUS:
+                        buckets.remove(nearest_rem)
+                        # Also remove from runtime_buckets if it was spawned this run.
+                        if nearest_rem in runtime_buckets:
+                            runtime_buckets.remove(nearest_rem)
+                        bx = float(nearest_rem["x"])
+                        by = float(nearest_rem["y"])
+                        rem_lbl: FrameLabel = {
+                            "text": f"Bucket removed at ({bx:.1f}, {by:.1f})",
+                            "r": int(nearest_rem["r"]),
+                            "g": int(nearest_rem["g"]),
+                            "b": int(nearest_rem["b"]),
+                        }
+                        if client_id is not None:
+                            bid = bucket_body_ids.get(str(nearest_rem["id"]))
+                            if bid is not None:
+                                p.changeVisualShape(
+                                    bid,
+                                    -1,
+                                    rgbaColor=[0.0, 0.0, 0.0, 0.0],
+                                    physicsClientId=client_id,
+                                )
+                        if frame_labels_out is not None:
+                            frame_labels_out.append(rem_lbl)
+                        if client_id is not None:
+                            yield _render(client_id)
+                        else:
+                            yield env.render()  # type: ignore[misc]
+                    else:
+                        raise RuntimeError(
+                            "Remove bucket missed! There's no paint bucket nearby. "
+                            "Move closer to a bucket and try again!"
+                        )
+
+                elif btype == "spawn_paint_bucket":
+                    ux = float(blk.get("x", 0.0))
+                    uy = float(blk.get("y", 0.0))
+                    sx = -uy  # same axis mapping as move_base_to_target
+                    sy = ux
+                    r_int = int(blk.get("r", 255))
+                    g_int = int(blk.get("g", 0))
+                    b_int = int(blk.get("b", 0))
+                    bucket_id = f"runtime_{len(runtime_buckets)}"
+                    new_bucket: PaintBucket = {
+                        "id": bucket_id,
+                        "x": sx,
+                        "y": sy,
+                        "r": r_int,
+                        "g": g_int,
+                        "b": b_int,
+                    }
+                    buckets.append(new_bucket)
+                    runtime_buckets.append(new_bucket)
+                    if client_id is not None:
+                        _bid = _add_paint_bucket_visual(
+                            sx,
+                            sy,
+                            (r_int / 255.0, g_int / 255.0, b_int / 255.0),
+                            client_id,
+                        )
+                        bucket_body_ids[bucket_id] = _bid
+                    spawn_lbl: FrameLabel = {
+                        "text": f"Bucket spawned at ({ux:.1f}, {uy:.1f})",
+                        "r": r_int,
+                        "g": g_int,
+                        "b": b_int,
+                    }
+                    if frame_labels_out is not None:
+                        frame_labels_out.append(spawn_lbl)
+                    if client_id is not None:
+                        yield _render(client_id)
+                    else:
+                        yield env.render()  # type: ignore[misc]
+
                 elif btype == "pen_down":
                     was_down = pen.down
                     pen.down = True
@@ -622,11 +728,13 @@ def execute_program(
         if pen.down:
             pen.record_event("up")
 
-        # Copy accumulated trail and events to the caller's lists.
+        # Copy accumulated trail, events, and spawned buckets to caller's lists.
         if trail_out is not None:
             trail_out.extend(pen.trail)
         if pen_events_out is not None:
             pen_events_out.extend(pen.events)
+        if spawned_buckets_out is not None:
+            spawned_buckets_out.extend(runtime_buckets)
     finally:
         env.close()  # type: ignore[no-untyped-call]
 

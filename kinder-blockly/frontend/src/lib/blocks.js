@@ -99,14 +99,15 @@ function getChainHead(block) {
 }
 
 export function registerBlocks() {
-  // Inline number block used as a shadow inside movement value inputs.
+  // Inline number/param block used as a shadow inside movement value inputs.
+  // Accepts a plain number OR a parameter name (resolved at execution time).
   Blockly.Blocks['kinder_num'] = {
     init: function() {
       this.appendDummyInput()
-        .appendField(new Blockly.FieldNumber(0, null, null, 0.1), 'NUM');
+        .appendField(new Blockly.FieldTextInput('0'), 'NUM');
       this.setOutput(true, 'Number');
       this.setColour(260);
-      this.setTooltip('A number value.');
+      this.setTooltip('A number value or parameter name (e.g. "x", "count").');
     }
   };
 
@@ -153,7 +154,10 @@ export function registerBlocks() {
     const connected = block.getInput(inputName)?.connection?.targetBlock();
     if (!connected) return { text: '?', isParam: false };
     if (connected.type === 'param_ref') return { text: connected.getFieldValue('PARAM') || '?', isParam: true };
-    return { text: String(connected.getFieldValue('NUM') ?? '?'), isParam: false };
+    const raw = String(connected.getFieldValue('NUM') ?? '?').trim();
+    // Treat non-numeric text as a parameter name reference
+    const isParam = raw !== '?' && raw !== '' && isNaN(Number(raw));
+    return { text: raw, isParam };
   }
 
   Blockly.Blocks['move_base_to_target'] = {
@@ -758,6 +762,53 @@ export function registerBlocks() {
     customCollapse_: function() { this.isCustomCollapsed_ = true;  this.setFieldValue('dip arm ()',        'LABEL'); },
     customExpand_:   function() { this.isCustomCollapsed_ = false; this.setFieldValue('Dip arm in paint', 'LABEL'); },
   };
+
+  Blockly.Blocks['spawn_paint_bucket'] = {
+    init: function() {
+      this.isCustomCollapsed_ = false;
+      this.appendValueInput('INPUT_X').setCheck(['Number', 'Param']).appendField('Spawn bucket at x');
+      this.appendValueInput('INPUT_Y').setCheck(['Number', 'Param']).appendField('y');
+      this.appendDummyInput('COLOR_ROW').appendField('color').appendField(new FieldColorSwatch(), 'COLOR');
+      this.setInputsInline(true);
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setColour(310);
+      this.setTooltip('Spawn a paint bucket at (x, y) with the chosen colour.');
+    },
+    customCollapse_: function() {
+      this.isCustomCollapsed_ = true;
+      this.getInput('INPUT_X')?.setVisible(false);
+      this.getInput('INPUT_Y')?.setVisible(false);
+      this.getInput('COLOR_ROW')?.setVisible(false);
+      if (this.getInput('SUM')) this.removeInput('SUM');
+      const x = collapseValueInput(this, 'INPUT_X');
+      const y = collapseValueInput(this, 'INPUT_Y');
+      const f = this.getField('COLOR');
+      const r = f?.r_ ?? 255; const g = f?.g_ ?? 0; const b = f?.b_ ?? 0;
+      this.appendDummyInput('SUM')
+        .appendField(`spawn bucket (${x.text}, ${y.text}) rgb(${r},${g},${b})`);
+    },
+    customExpand_: function() {
+      this.isCustomCollapsed_ = false;
+      if (this.getInput('SUM')) this.removeInput('SUM');
+      this.getInput('INPUT_X')?.setVisible(true);
+      this.getInput('INPUT_Y')?.setVisible(true);
+      this.getInput('COLOR_ROW')?.setVisible(true);
+    },
+  };
+
+  Blockly.Blocks['remove_paint_bucket'] = {
+    init: function() {
+      this.isCustomCollapsed_ = false;
+      this.appendDummyInput('MAIN').appendField(new Blockly.FieldLabel('Remove nearest bucket'), 'LABEL');
+      this.setPreviousStatement(true, null);
+      this.setNextStatement(true, null);
+      this.setColour(310);
+      this.setTooltip('Remove the nearest paint bucket within reach.');
+    },
+    customCollapse_: function() { this.isCustomCollapsed_ = true;  this.setFieldValue('remove bucket ()', 'LABEL'); },
+    customExpand_:   function() { this.isCustomCollapsed_ = false; this.setFieldValue('Remove nearest bucket', 'LABEL'); },
+  };
 }
 
 export function buildToolbox(penColorEnabled = true) {
@@ -789,6 +840,11 @@ export function buildToolbox(penColorEnabled = true) {
         { kind: 'block', type: 'pen_down' },
         { kind: 'block', type: 'pen_up' },
         { kind: 'block', type: 'dip_arm' },
+        { kind: 'block', type: 'spawn_paint_bucket', inputs: {
+            INPUT_X: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
+            INPUT_Y: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
+        }},
+        { kind: 'block', type: 'remove_paint_bucket' },
       ]},
       { kind: 'category', name: 'Abstraction', colour: '#1e3a8a', contents: [
         { kind: 'block', type: 'define_skill' },
