@@ -254,8 +254,8 @@ def _yield_dip_frames(
 def validate_program(program: dict[str, Any]) -> dict[str, Any]:
     """Abstract validator — catches OOB and infinite loops without physics.
 
-    Returns {} on success, {"error": str} for OOB, or {"infinite_loop": True}.
-    Runs in microseconds by tracking position symbolically.
+    Returns {} on success, {"error": str} for OOB, or {"infinite_loop": True}. Runs in
+    microseconds by tracking position symbolically.
     """
     blocks: list[dict[str, Any]] = program.get("blocks", [])
     if not blocks:
@@ -352,7 +352,11 @@ def render_initial_frame(
                 _add_paint_bucket_visual(
                     float(bucket["x"]),
                     float(bucket["y"]),
-                    (int(bucket["r"]) / 255.0, int(bucket["g"]) / 255.0, int(bucket["b"]) / 255.0),
+                    (
+                        int(bucket["r"]) / 255.0,
+                        int(bucket["g"]) / 255.0,
+                        int(bucket["b"]) / 255.0,
+                    ),
                     cid,
                 )
         frame = _render(cid) if cid is not None else env.render()
@@ -378,8 +382,8 @@ def execute_program(
     Yields an initial frame after reset, then intermediate frames during skill
     execution.
 
-    If *trail_out* is provided it is populated (in-place) with the line
-    segments drawn by the pen so the caller can forward them to the frontend.
+    If *trail_out* is provided it is populated (in-place) with the line segments drawn
+    by the pen so the caller can forward them to the frontend.
     """
     blocks: list[dict[str, Any]] = program.get("blocks", [])
     if not blocks:
@@ -552,8 +556,10 @@ def execute_program(
                         # Also remove from runtime_buckets if it was spawned this run.
                         if nearest_rem in runtime_buckets:
                             runtime_buckets.remove(nearest_rem)
+                        bx = float(nearest_rem["x"])
+                        by = float(nearest_rem["y"])
                         rem_lbl: FrameLabel = {
-                            "text": f"Bucket removed at ({float(nearest_rem['x']):.1f}, {float(nearest_rem['y']):.1f})",
+                            "text": f"Bucket removed at ({bx:.1f}, {by:.1f})",
                             "r": int(nearest_rem["r"]),
                             "g": int(nearest_rem["g"]),
                             "b": int(nearest_rem["b"]),
@@ -562,13 +568,17 @@ def execute_program(
                             bid = bucket_body_ids.get(str(nearest_rem["id"]))
                             if bid is not None:
                                 p.changeVisualShape(
-                                    bid, -1,
+                                    bid,
+                                    -1,
                                     rgbaColor=[0.0, 0.0, 0.0, 0.0],
                                     physicsClientId=client_id,
                                 )
                         if frame_labels_out is not None:
                             frame_labels_out.append(rem_lbl)
-                        yield _render(client_id) if client_id is not None else env.render()  # type: ignore[misc]
+                        if client_id is not None:
+                            yield _render(client_id)
+                        else:
+                            yield env.render()  # type: ignore[misc]
                     else:
                         raise RuntimeError(
                             "Remove bucket missed! There's no paint bucket nearby. "
@@ -585,23 +595,35 @@ def execute_program(
                     b_int = int(blk.get("b", 0))
                     bucket_id = f"runtime_{len(runtime_buckets)}"
                     new_bucket: PaintBucket = {
-                        "id": bucket_id, "x": sx, "y": sy,
-                        "r": r_int, "g": g_int, "b": b_int,
+                        "id": bucket_id,
+                        "x": sx,
+                        "y": sy,
+                        "r": r_int,
+                        "g": g_int,
+                        "b": b_int,
                     }
                     buckets.append(new_bucket)
                     runtime_buckets.append(new_bucket)
                     if client_id is not None:
                         _bid = _add_paint_bucket_visual(
-                            sx, sy, (r_int / 255.0, g_int / 255.0, b_int / 255.0), client_id
+                            sx,
+                            sy,
+                            (r_int / 255.0, g_int / 255.0, b_int / 255.0),
+                            client_id,
                         )
                         bucket_body_ids[bucket_id] = _bid
                     spawn_lbl: FrameLabel = {
                         "text": f"Bucket spawned at ({ux:.1f}, {uy:.1f})",
-                        "r": r_int, "g": g_int, "b": b_int,
+                        "r": r_int,
+                        "g": g_int,
+                        "b": b_int,
                     }
                     if frame_labels_out is not None:
                         frame_labels_out.append(spawn_lbl)
-                    yield _render(client_id) if client_id is not None else env.render()  # type: ignore[misc]
+                    if client_id is not None:
+                        yield _render(client_id)
+                    else:
+                        yield env.render()  # type: ignore[misc]
 
                 elif btype == "pen_down":
                     was_down = pen.down
