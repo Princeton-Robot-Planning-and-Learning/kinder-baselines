@@ -3,6 +3,7 @@
 import gc
 import math
 import os
+import math
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -215,6 +216,47 @@ def _add_paint_bucket_visual(
     return body_id
 
 
+def _add_paint_bucket_visual(
+    x: float,
+    y: float,
+    color_01: tuple[float, float, float],
+    client_id: int,
+) -> int:
+    """Spawn a coloured cylinder in the simulation representing a paint bucket.
+
+    Returns the PyBullet body id so the caller can later update its colour.
+    """
+    body_vis = p.createVisualShape(
+        p.GEOM_CYLINDER,
+        radius=BUCKET_VIS_RADIUS,
+        length=BUCKET_VIS_HEIGHT,
+        rgbaColor=[*color_01, 1.0],
+        physicsClientId=client_id,
+    )
+    body_id: int = p.createMultiBody(
+        baseMass=0,
+        baseVisualShapeIndex=body_vis,
+        basePosition=[x, y, BUCKET_VIS_HEIGHT / 2.0 + 0.001],
+        physicsClientId=client_id,
+    )
+    # Brighter paint-surface disk sitting on top of the cylinder.
+    bright = tuple(min(1.0, c * 1.6) for c in color_01)
+    cap_vis = p.createVisualShape(
+        p.GEOM_CYLINDER,
+        radius=BUCKET_VIS_RADIUS * 0.75,
+        length=0.012,
+        rgbaColor=[*bright, 1.0],
+        physicsClientId=client_id,
+    )
+    p.createMultiBody(
+        baseMass=0,
+        baseVisualShapeIndex=cap_vis,
+        basePosition=[x, y, BUCKET_VIS_HEIGHT + 0.007],
+        physicsClientId=client_id,
+    )
+    return body_id
+
+
 @dataclass
 class _PenState:
     """Mutable pen state threaded through block execution."""
@@ -417,6 +459,32 @@ def render_initial_frame(
     return (  # type: ignore[return-value]
         _render(_W.client_id) if _W.client_id is not None else _W.env.render()
     )
+    """Reset the environment and return the first rendered frame."""
+    env = kinder.make(
+        "kinder/BaseMotion3D-v0",
+        render_mode="rgb_array",
+        use_gui=False,
+        config=_ENV_CONFIG,
+    )
+    try:
+        env.reset(seed=seed)
+        cid = _get_physics_client_id(env)
+        if cid is not None and paint_buckets:
+            for bucket in paint_buckets:
+                _add_paint_bucket_visual(
+                    float(bucket["x"]),
+                    float(bucket["y"]),
+                    (
+                        int(bucket["r"]) / 255.0,
+                        int(bucket["g"]) / 255.0,
+                        int(bucket["b"]) / 255.0,
+                    ),
+                    cid,
+                )
+        frame = _render(cid) if cid is not None else env.render()
+        return frame  # type: ignore[return-value]
+    finally:
+        env.close()  # type: ignore[no-untyped-call]
 
 
 def execute_program(
@@ -454,6 +522,9 @@ def execute_program(
         robot_arm = _W.robot_arm
 
         state = env.observation_space.devectorize(obs)  # type: ignore[attr-defined]
+        # Resolve pybullet client for 3-D debug lines and arm animation.
+        client_id = _get_physics_client_id(env)
+        robot_arm = _get_robot_arm(env)
 
         # Pen starts UP — students must use set_pen_color or pen_down first.
         pen = _PenState()
