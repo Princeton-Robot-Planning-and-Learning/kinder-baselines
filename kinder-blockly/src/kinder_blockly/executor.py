@@ -8,19 +8,9 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
-import psutil
-
-
-def _rss_mb() -> float:
-    """Return the current process RSS in MB via /proc/self/status."""
-    with open("/proc/self/status", "r") as f:
-        for line in f:
-            if line.startswith("VmRSS:"):
-                return int(line.split()[1]) / 1024.0
-    return 0.0
-
 import kinder
 import numpy as np
+import psutil
 import pybullet as p
 from kinder.envs.kinematic3d.base_motion3d import (
     BaseMotion3DEnvConfig,
@@ -35,6 +25,8 @@ from pybullet_helpers.motion_planning import (
 )
 
 kinder.register_all_environments()
+
+DEBUG = False
 
 MAX_STEPS = 500
 FRAME_SKIP = 5
@@ -91,6 +83,59 @@ BUCKET_RADIUS = 0.35
 BUCKET_VIS_RADIUS = 0.10  # cylinder radius (metres)
 BUCKET_VIS_HEIGHT = 0.20  # cylinder height (metres)
 
+# ---------------------------------------------------------------------------
+# Worker-level singleton state — initialised once per gunicorn worker process.
+# Each worker holds one pre-warmed env and one planning sim so requests only
+# pay the cost of env.reset(), not a full URDF/pybullet reconnect.
+# ---------------------------------------------------------------------------
+_worker_env: Any = None
+_worker_sim: "ObjectCentricBaseMotion3DEnv | None" = None
+_worker_client_id: int | None = None
+_worker_robot_arm: Any = None
+# PyBullet body IDs created during a run (trail boxes, bucket cylinders).
+# Cleared and removed from the physics world at the start of every new run.
+_worker_ephemeral_bodies: list[int] = []
+
+
+def _ensure_worker_initialized() -> None:
+    """Create the env and planning-sim once per worker process (lazy)."""
+    global _worker_env, _worker_sim, _worker_client_id, _worker_robot_arm
+    if _worker_env is not None:
+        return
+    _worker_env = kinder.make(
+        "kinder/BaseMotion3D-v0",
+        render_mode="rgb_array",
+        use_gui=False,
+        config=_ENV_CONFIG,
+    )
+    _worker_env.reset(seed=0)
+    _worker_sim = ObjectCentricBaseMotion3DEnv(allow_state_access=True)
+    _worker_client_id = _get_physics_client_id(_worker_env)
+    _worker_robot_arm = _get_robot_arm(_worker_env)
+    if DEBUG:
+        print(
+            f"[worker {os.getpid()}] pre-warmed "
+            f"(client_id={_worker_client_id})",
+            flush=True,
+        )
+
+
+def _reset_worker_scene(seed: int) -> Any:
+    """Remove ephemeral bodies from the previous run and reset the env.
+
+    Returns the initial observation.
+    """
+    global _worker_ephemeral_bodies
+    if _worker_client_id is not None:
+        for bid in _worker_ephemeral_bodies:
+            try:
+                p.removeBody(bid, physicsClientId=_worker_client_id)
+            except Exception:  # pylint: disable=broad-except
+                pass
+    _worker_ephemeral_bodies = []
+    obs, _ = _worker_env.reset(seed=seed)
+    return obs
+
 
 def _add_trail_box(
     x1: float,
@@ -116,13 +161,14 @@ def _add_trail_box(
         rgbaColor=[*color_01, 1.0],
         physicsClientId=client_id,
     )
-    p.createMultiBody(
+    bid = p.createMultiBody(
         baseMass=0,
         baseVisualShapeIndex=vis,
         basePosition=[cx, cy, TRAIL_HEIGHT],
         baseOrientation=p.getQuaternionFromEuler([0, 0, angle]),
         physicsClientId=client_id,
     )
+    _worker_ephemeral_bodies.append(bid)
 
 
 def _add_paint_bucket_visual(
@@ -148,6 +194,7 @@ def _add_paint_bucket_visual(
         basePosition=[x, y, BUCKET_VIS_HEIGHT / 2.0 + 0.001],
         physicsClientId=client_id,
     )
+    _worker_ephemeral_bodies.append(body_id)
     # Brighter paint-surface disk sitting on top of the cylinder.
     bright = tuple(min(1.0, c * 1.6) for c in color_01)
     cap_vis = p.createVisualShape(
@@ -157,12 +204,13 @@ def _add_paint_bucket_visual(
         rgbaColor=[*bright, 1.0],
         physicsClientId=client_id,
     )
-    p.createMultiBody(
+    cap_id = p.createMultiBody(
         baseMass=0,
         baseVisualShapeIndex=cap_vis,
         basePosition=[x, y, BUCKET_VIS_HEIGHT + 0.007],
         physicsClientId=client_id,
     )
+    _worker_ephemeral_bodies.append(cap_id)
     return body_id
 
 
@@ -350,34 +398,26 @@ def render_initial_frame(
     seed: int = 0,
     paint_buckets: list[PaintBucket] | None = None,
 ) -> NDArray[np.uint8]:
-    """Reset the environment and return the first rendered frame."""
-    env = kinder.make(
-        "kinder/BaseMotion3D-v0",
-        render_mode="rgb_array",
-        use_gui=False,
-        config=_ENV_CONFIG,
+    """Reset the worker env and return the first rendered frame."""
+    _ensure_worker_initialized()
+    _reset_worker_scene(seed=seed)
+    if _worker_client_id is not None and paint_buckets:
+        for bucket in paint_buckets:
+            _add_paint_bucket_visual(
+                float(bucket["x"]),
+                float(bucket["y"]),
+                (
+                    int(bucket["r"]) / 255.0,
+                    int(bucket["g"]) / 255.0,
+                    int(bucket["b"]) / 255.0,
+                ),
+                _worker_client_id,
+            )
+    return (  # type: ignore[return-value]
+        _render(_worker_client_id)
+        if _worker_client_id is not None
+        else _worker_env.render()
     )
-    try:
-        env.reset(seed=seed)
-        cid = _get_physics_client_id(env)
-        if cid is not None and paint_buckets:
-            for bucket in paint_buckets:
-                _add_paint_bucket_visual(
-                    float(bucket["x"]),
-                    float(bucket["y"]),
-                    (
-                        int(bucket["r"]) / 255.0,
-                        int(bucket["g"]) / 255.0,
-                        int(bucket["b"]) / 255.0,
-                    ),
-                    cid,
-                )
-        frame = _render(cid) if cid is not None else env.render()
-        return frame  # type: ignore[return-value]
-    finally:
-        env.close()  # type: ignore[no-untyped-call]
-        if cid is not None:
-            p.disconnect(cid)
 
 
 def execute_program(
@@ -404,26 +444,21 @@ def execute_program(
     if not blocks:
         return
 
-    _proc = psutil.Process(os.getpid())
-    _mem_before = _proc.memory_info().rss / 1024 ** 2
-    print(f"[worker {os.getpid()}] run START  | RSS before: {_mem_before:.1f} MB", flush=True)
+    _ensure_worker_initialized()
 
-    env = kinder.make(
-        "kinder/BaseMotion3D-v0",
-        render_mode="rgb_array",
-        use_gui=False,
-        config=_ENV_CONFIG,
-    )
-    sim: ObjectCentricBaseMotion3DEnv | None = None
+    if DEBUG:
+        _proc = psutil.Process(os.getpid())
+        _mem_before = _proc.memory_info().rss / 1024 ** 2
+        print(f"[worker {os.getpid()}] run START  | RSS before: {_mem_before:.1f} MB", flush=True)
+
     try:
-        obs, _ = env.reset(seed=seed)
+        obs = _reset_worker_scene(seed=seed)
+        env = _worker_env
+        sim = _worker_sim
+        client_id = _worker_client_id
+        robot_arm = _worker_robot_arm
+
         state = env.observation_space.devectorize(obs)  # type: ignore[attr-defined]
-
-        sim = ObjectCentricBaseMotion3DEnv(allow_state_access=True)
-
-        # Resolve pybullet client for 3-D debug lines and arm animation.
-        client_id = _get_physics_client_id(env)
-        robot_arm = _get_robot_arm(env)
 
         # Pen starts UP — students must use set_pen_color or pen_down first.
         pen = _PenState()
@@ -756,24 +791,14 @@ def execute_program(
         if spawned_buckets_out is not None:
             spawned_buckets_out.extend(runtime_buckets)
     finally:
-        env.close()  # type: ignore[no-untyped-call]
-        if sim is not None:
-            sim_client_id = getattr(sim, "physics_client_id", None)
-            sim.close()  # type: ignore[no-untyped-call]
-            if sim_client_id is not None:
-                try:
-                    p.disconnect(sim_client_id)
-                except Exception:  # pylint: disable=broad-except
-                    pass
-        if client_id is not None:
-            p.disconnect(client_id)
         gc.collect()
-        _mem_after = _proc.memory_info().rss / 1024 ** 2
-        print(
-            f"[worker {os.getpid()}] run END    | RSS after: {_mem_after:.1f} MB"
-            f"  |  delta: {_mem_after - _mem_before:+.1f} MB",
-            flush=True,
-        )
+        if DEBUG:
+            _mem_after = _proc.memory_info().rss / 1024 ** 2
+            print(
+                f"[worker {os.getpid()}] run END    | RSS after: {_mem_after:.1f} MB"
+                f"  |  delta: {_mem_after - _mem_before:+.1f} MB",
+                flush=True,
+            )
 
 
 def _run_move_base_to(
