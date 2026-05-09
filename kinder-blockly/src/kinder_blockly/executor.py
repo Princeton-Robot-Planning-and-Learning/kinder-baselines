@@ -1,6 +1,8 @@
 """Execute Blockly programs in KinDER environments."""
 
+import gc
 import math
+import os
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -22,6 +24,8 @@ from pybullet_helpers.motion_planning import (
 )
 
 kinder.register_all_environments()
+
+DEBUG = False
 
 MAX_STEPS = 500
 FRAME_SKIP = 5
@@ -79,6 +83,61 @@ BUCKET_VIS_RADIUS = 0.10  # cylinder radius (metres)
 BUCKET_VIS_HEIGHT = 0.20  # cylinder height (metres)
 
 
+# ---------------------------------------------------------------------------
+# Worker-level singleton state — initialised once per gunicorn worker process.
+# Each worker holds one pre-warmed env and one planning sim so requests only
+# pay the cost of env.reset(), not a full URDF/pybullet reconnect.
+# ---------------------------------------------------------------------------
+class _WorkerState:
+    env: Any = None
+    sim: "ObjectCentricBaseMotion3DEnv | None" = None
+    client_id: int | None = None
+    robot_arm: Any = None
+    # PyBullet body IDs created during a run (trail boxes, bucket cylinders).
+    # Cleared and removed from the physics world at the start of every new run.
+    ephemeral_bodies: list[int] = []
+
+
+_W = _WorkerState()
+
+
+def _ensure_worker_initialized() -> None:
+    """Create the env and planning-sim once per worker process (lazy)."""
+    if _W.env is not None:
+        return
+    _W.env = kinder.make(
+        "kinder/BaseMotion3D-v0",
+        render_mode="rgb_array",
+        use_gui=False,
+        config=_ENV_CONFIG,
+    )
+    _W.env.reset(seed=0)
+    _W.sim = ObjectCentricBaseMotion3DEnv(allow_state_access=True)
+    _W.client_id = _get_physics_client_id(_W.env)
+    _W.robot_arm = _get_robot_arm(_W.env)
+    if DEBUG:
+        print(
+            f"[worker {os.getpid()}] pre-warmed (client_id={_W.client_id})",
+            flush=True,
+        )
+
+
+def _reset_worker_scene(seed: int) -> Any:
+    """Remove ephemeral bodies from the previous run and reset the env.
+
+    Returns the initial observation.
+    """
+    if _W.client_id is not None:
+        for bid in _W.ephemeral_bodies:
+            try:
+                p.removeBody(bid, physicsClientId=_W.client_id)
+            except Exception:  # pylint: disable=broad-except
+                pass
+    _W.ephemeral_bodies = []
+    obs, _ = _W.env.reset(seed=seed)
+    return obs
+
+
 def _add_trail_box(
     x1: float,
     y1: float,
@@ -103,13 +162,14 @@ def _add_trail_box(
         rgbaColor=[*color_01, 1.0],
         physicsClientId=client_id,
     )
-    p.createMultiBody(
+    bid = p.createMultiBody(
         baseMass=0,
         baseVisualShapeIndex=vis,
         basePosition=[cx, cy, TRAIL_HEIGHT],
         baseOrientation=p.getQuaternionFromEuler([0, 0, angle]),
         physicsClientId=client_id,
     )
+    _W.ephemeral_bodies.append(bid)
 
 
 def _add_paint_bucket_visual(
@@ -135,6 +195,7 @@ def _add_paint_bucket_visual(
         basePosition=[x, y, BUCKET_VIS_HEIGHT / 2.0 + 0.001],
         physicsClientId=client_id,
     )
+    _W.ephemeral_bodies.append(body_id)
     # Brighter paint-surface disk sitting on top of the cylinder.
     bright = tuple(min(1.0, c * 1.6) for c in color_01)
     cap_vis = p.createVisualShape(
@@ -144,12 +205,13 @@ def _add_paint_bucket_visual(
         rgbaColor=[*bright, 1.0],
         physicsClientId=client_id,
     )
-    p.createMultiBody(
+    cap_id = p.createMultiBody(
         baseMass=0,
         baseVisualShapeIndex=cap_vis,
         basePosition=[x, y, BUCKET_VIS_HEIGHT + 0.007],
         physicsClientId=client_id,
     )
+    _W.ephemeral_bodies.append(cap_id)
     return body_id
 
 
@@ -337,32 +399,24 @@ def render_initial_frame(
     seed: int = 0,
     paint_buckets: list[PaintBucket] | None = None,
 ) -> NDArray[np.uint8]:
-    """Reset the environment and return the first rendered frame."""
-    env = kinder.make(
-        "kinder/BaseMotion3D-v0",
-        render_mode="rgb_array",
-        use_gui=False,
-        config=_ENV_CONFIG,
+    """Reset the worker env and return the first rendered frame."""
+    _ensure_worker_initialized()
+    _reset_worker_scene(seed=seed)
+    if _W.client_id is not None and paint_buckets:
+        for bucket in paint_buckets:
+            _add_paint_bucket_visual(
+                float(bucket["x"]),
+                float(bucket["y"]),
+                (
+                    int(bucket["r"]) / 255.0,
+                    int(bucket["g"]) / 255.0,
+                    int(bucket["b"]) / 255.0,
+                ),
+                _W.client_id,
+            )
+    return (  # type: ignore[return-value]
+        _render(_W.client_id) if _W.client_id is not None else _W.env.render()
     )
-    try:
-        env.reset(seed=seed)
-        cid = _get_physics_client_id(env)
-        if cid is not None and paint_buckets:
-            for bucket in paint_buckets:
-                _add_paint_bucket_visual(
-                    float(bucket["x"]),
-                    float(bucket["y"]),
-                    (
-                        int(bucket["r"]) / 255.0,
-                        int(bucket["g"]) / 255.0,
-                        int(bucket["b"]) / 255.0,
-                    ),
-                    cid,
-                )
-        frame = _render(cid) if cid is not None else env.render()
-        return frame  # type: ignore[return-value]
-    finally:
-        env.close()  # type: ignore[no-untyped-call]
 
 
 def execute_program(
@@ -389,18 +443,17 @@ def execute_program(
     if not blocks:
         return
 
-    env = kinder.make(
-        "kinder/BaseMotion3D-v0",
-        render_mode="rgb_array",
-        use_gui=False,
-        config=_ENV_CONFIG,
-    )
+    _ensure_worker_initialized()
+
     try:
-        obs, _ = env.reset(seed=seed)
+        obs = _reset_worker_scene(seed=seed)
+        env = _W.env
+        sim = _W.sim
+        assert sim is not None
+        client_id = _W.client_id
+        robot_arm = _W.robot_arm
+
         state = env.observation_space.devectorize(obs)  # type: ignore[attr-defined]
-
-        sim = ObjectCentricBaseMotion3DEnv(allow_state_access=True)
-
         # Resolve pybullet client for 3-D debug lines and arm animation.
         client_id = _get_physics_client_id(env)
         robot_arm = _get_robot_arm(env)
@@ -736,7 +789,7 @@ def execute_program(
         if spawned_buckets_out is not None:
             spawned_buckets_out.extend(runtime_buckets)
     finally:
-        env.close()  # type: ignore[no-untyped-call]
+        gc.collect()
 
 
 def _run_move_base_to(
