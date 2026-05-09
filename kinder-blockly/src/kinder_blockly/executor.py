@@ -1,10 +1,23 @@
 """Execute Blockly programs in KinDER environments."""
 
+import gc
 import math
+import os
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
+
+import psutil
+
+
+def _rss_mb() -> float:
+    """Return the current process RSS in MB via /proc/self/status."""
+    with open("/proc/self/status", "r") as f:
+        for line in f:
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) / 1024.0
+    return 0.0
 
 import kinder
 import numpy as np
@@ -363,6 +376,8 @@ def render_initial_frame(
         return frame  # type: ignore[return-value]
     finally:
         env.close()  # type: ignore[no-untyped-call]
+        if cid is not None:
+            p.disconnect(cid)
 
 
 def execute_program(
@@ -389,12 +404,17 @@ def execute_program(
     if not blocks:
         return
 
+    _proc = psutil.Process(os.getpid())
+    _mem_before = _proc.memory_info().rss / 1024 ** 2
+    print(f"[worker {os.getpid()}] run START  | RSS before: {_mem_before:.1f} MB", flush=True)
+
     env = kinder.make(
         "kinder/BaseMotion3D-v0",
         render_mode="rgb_array",
         use_gui=False,
         config=_ENV_CONFIG,
     )
+    sim: ObjectCentricBaseMotion3DEnv | None = None
     try:
         obs, _ = env.reset(seed=seed)
         state = env.observation_space.devectorize(obs)  # type: ignore[attr-defined]
@@ -737,6 +757,23 @@ def execute_program(
             spawned_buckets_out.extend(runtime_buckets)
     finally:
         env.close()  # type: ignore[no-untyped-call]
+        if sim is not None:
+            sim_client_id = getattr(sim, "physics_client_id", None)
+            sim.close()  # type: ignore[no-untyped-call]
+            if sim_client_id is not None:
+                try:
+                    p.disconnect(sim_client_id)
+                except Exception:  # pylint: disable=broad-except
+                    pass
+        if client_id is not None:
+            p.disconnect(client_id)
+        gc.collect()
+        _mem_after = _proc.memory_info().rss / 1024 ** 2
+        print(
+            f"[worker {os.getpid()}] run END    | RSS after: {_mem_after:.1f} MB"
+            f"  |  delta: {_mem_after - _mem_before:+.1f} MB",
+            flush=True,
+        )
 
 
 def _run_move_base_to(
