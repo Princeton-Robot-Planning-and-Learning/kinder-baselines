@@ -1,12 +1,13 @@
 <script>
   export let message = '';
   export let visible = false;
+  export let isError = false;
   export let onPoke = () => {};
 </script>
 
 <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
 <div id="tama-container">
-  <div id="tama-bubble" class:visible on:click={onPoke}>{message}</div>
+  <div id="tama-bubble" class:visible class:error={isError} on:click={onPoke}>{message}</div>
   <div id="tama-bot" on:click={onPoke} title="Click me!">
     <div id="tama-pixel"></div>
   </div>
@@ -33,12 +34,19 @@
     box-sizing: border-box;
   }
   #tama-bubble.visible { opacity: 1; transform: translateX(0); }
+  #tama-bubble.error {
+    border-color: #ef4444;
+    box-shadow: var(--px) var(--px) 0 rgba(239,68,68,.4);
+    background: #1a0505;
+    color: #fca5a5;
+  }
   #tama-bubble::after {
     content: ''; position: absolute; right: -8px; bottom: 28px;
     width: 0; height: 0;
     border-top: 8px solid transparent; border-bottom: 8px solid transparent;
     border-left: 8px solid var(--accent);
   }
+  #tama-bubble.error::after { border-left-color: #ef4444; }
   #tama-bot {
     flex-shrink: 0;
     width: 96px; height: 108px; position: relative;

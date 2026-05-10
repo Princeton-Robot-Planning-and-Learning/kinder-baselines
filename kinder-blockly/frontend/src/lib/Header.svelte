@@ -3,7 +3,6 @@
   export let challenges = [];
   export let isRunning = false;
   export let status = '';
-  export let hint = '';
 
   const dispatch = createEventDispatcher();
   let selectedId = '';
@@ -24,16 +23,14 @@
       <option value={c.id}>[{stars}] {c.name.toUpperCase()}</option>
     {/each}
   </select>
-  <span id="challenge-hint">{hint}</span>
   <span id="status">{status}</span>
 </header>
 
 <style>
   header {
     background: var(--panel); padding: 10px 16px;
-    display: flex; align-items: center; gap: 12px; flex-wrap: nowrap;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
     border-bottom: var(--px) solid var(--border);
-    overflow: hidden;
   }
   h1 { font-size: 36px; color: var(--accent); text-shadow: 2px 2px 0 #2e1065; }
   #run-btn {
@@ -62,11 +59,6 @@
     padding: 6px 8px; font-size: 24px;
     border: var(--px) solid var(--border);
     background: var(--surface); color: var(--highlight); cursor: pointer;
-  }
-  #challenge-hint {
-    font-size: 22px; color: var(--muted);
-    flex: 1 1 0; min-width: 0;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   #status { font-size: 22px; color: var(--highlight); flex-shrink: 0; }
 </style>

@@ -12,7 +12,6 @@
   let isStopped = false;
   let runAbortController = null;
   let status = '';
-  let hint = '';
   let allFrames = [];
   let allFrameLabels = [];
   let currentFrameIndex = -1;
@@ -42,6 +41,7 @@
   let scoreData = null;
   let tamaMsg = '';
   let tamaVisible = false;
+  let tamaIsError = false;
   let tamaTimer = null;
 
   const TAMA_IDLE_TIPS = [
@@ -65,16 +65,22 @@
   ];
 
   function tamaSay(msg, duration = 5000) {
-    tamaMsg = msg; tamaVisible = true;
+    tamaMsg = msg; tamaVisible = true; tamaIsError = false;
     if (tamaTimer) clearTimeout(tamaTimer);
     tamaTimer = setTimeout(() => { tamaVisible = false; }, duration);
+  }
+
+  function tamaSayError(msg, duration = 6000) {
+    tamaMsg = msg; tamaVisible = true; tamaIsError = true;
+    if (tamaTimer) clearTimeout(tamaTimer);
+    tamaTimer = setTimeout(() => { tamaVisible = false; tamaIsError = false; }, duration);
   }
 
   function tamaPoke() {
     tamaSay(TAMA_IDLE_TIPS[Math.floor(Math.random() * TAMA_IDLE_TIPS.length)], 4000);
   }
 
-  const onKey = e => { if (e.key === 'Escape') { tamaVisible = false; if (tamaTimer) clearTimeout(tamaTimer); } };
+  const onKey = e => { if (e.key === 'Escape') { tamaVisible = false; tamaIsError = false; if (tamaTimer) clearTimeout(tamaTimer); } };
   onDestroy(() => document.removeEventListener('keydown', onKey));
 
   onMount(async () => {
@@ -107,22 +113,21 @@
   async function onChallengeChange(id) {
     scoreData = null;
     if (!id) {
-      currentChallenge = null; hint = ''; targetTrail = []; paintBuckets = []; visitedBuckets = [];
+      currentChallenge = null; targetTrail = []; paintBuckets = []; visitedBuckets = [];
       blocklyWorkspace.setPenColorEnabled(true);
       tamaSay("FREE DRAW! No rules, no limits! Just me and the canvas. *chef's kiss*", 4000);
       await loadInitialFrame([]);
       return;
     }
-    hint = 'LOADING...';
     try {
       const r = await fetch('/challenges/' + id);
       const c = await r.json();
-      currentChallenge = c; hint = c.description || ''; targetTrail = c.target_trail || [];
+      currentChallenge = c; targetTrail = c.target_trail || [];
       paintBuckets = c.paint_buckets || []; visitedBuckets = [];
       blocklyWorkspace.setPenColorEnabled((c.paint_buckets?.length ?? 0) === 0);
       tamaSay(c.hint || c.description || 'Good luck!', 5000);
       await loadInitialFrame(paintBuckets);
-    } catch { hint = 'FAILED TO LOAD.'; }
+    } catch { tamaSay("Failed to load challenge!", 4000); }
   }
 
   async function stopProgram() {
@@ -133,9 +138,11 @@
   }
 
   async function runProgram() {
-    if (blocklyWorkspace.hasParamErrors()) { status = 'ERRORS!'; tamaSay("Oh no, the skills are broken! Fix the red params first.", 4000); return; }
+    if (!blocklyWorkspace.hasStartBlock()) { status = 'NO START!'; tamaSayError("I need a Start block! Drag one from the Program category.", 5000); return; }
     const program = blocklyWorkspace.getProgram();
-    if (program.blocks.length === 0) { status = 'NO BLOCKS!'; tamaSay("Drag some blocks first!", 3000); return; }
+    if (program.blocks.length === 0) { status = 'NO BLOCKS!'; tamaSayError("Connect some blocks under the Start block first!", 4000); return; }
+    const paramErr = blocklyWorkspace.hasParamErrors();
+    if (paramErr) { status = 'ERRORS!'; tamaSayError(paramErr, 6000); return; }
 
     isStopped = false;
     runAbortController = new AbortController();
@@ -184,10 +191,10 @@
 
         if (doneMsg.error) {
           status = 'ERROR!';
-          tamaSay(doneMsg.error, 7000);
+          tamaSayError(doneMsg.error, 7000);
         } else if (doneMsg.infinite_loop) {
           status = 'LOOP!';
-          tamaSay("I'm going in circles!! My while loop ran 100 times and never stopped — I think I'm stuck forever. Could you check that condition?", 7000);
+          tamaSayError("I'm going in circles!! My while loop ran 100 times and never stopped — I think I'm stuck forever. Could you check that condition?", 7000);
         } else if (!isStopped) {
           status = 'DONE!';
         }
@@ -213,7 +220,7 @@
       if (e?.name === 'AbortError') {
         status = 'STOPPED';
         frameInfo = allFrames.length ? `FRAME ${currentFrameIndex + 1}/${allFrames.length}` : 'STOPPED';
-      } else { status = 'ERROR!'; tamaSay("Connection error! Is the server running?", 4000); }
+      } else { status = 'ERROR!'; tamaSayError("Connection error! Is the server running?", 4000); }
     }
     finally { isRunning = false; }
   }
@@ -234,20 +241,20 @@
   }
 </script>
 
-<Header {challenges} {isRunning} {status} {hint}
+<Header {challenges} {isRunning} {status}
   on:run={runProgram}
   on:stop={stopProgram}
   on:challengeChange={e => onChallengeChange(e.detail)}
 />
 
 <div class="content">
-  <BlocklyWorkspace bind:this={blocklyWorkspace} on:message={e => tamaSay(e.detail, 4000)} />
+  <BlocklyWorkspace bind:this={blocklyWorkspace} on:message={e => tamaSayError(e.detail, 4000)} />
   <OutputPanel
     {frameDataUrl} {frameInfo} {frameLabel} {studentTrail} {studentPenEvents} {targetTrail} score={scoreData}
     paintBuckets={allPaintBuckets} {visitedBuckets}
     showTarget={currentChallenge !== null}
     {canGoPrev} {canGoNext}
-    tamaMsg={tamaMsg} tamaVisible={tamaVisible} onTamaPoke={tamaPoke}
+    tamaMsg={tamaMsg} tamaVisible={tamaVisible} {tamaIsError} onTamaPoke={tamaPoke}
     on:gridClick={e => blocklyWorkspace.setMoveCoords(e.detail.x, e.detail.y)}
     on:gridDrag={e => blocklyWorkspace.setMoveDelta(e.detail.dx, e.detail.dy)}
     on:prevFrame={prevFrame}
