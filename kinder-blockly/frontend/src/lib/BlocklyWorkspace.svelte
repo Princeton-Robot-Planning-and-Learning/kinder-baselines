@@ -155,7 +155,7 @@
   export function setPenColorEnabled(enabled) {
     penColorEnabled = enabled;
     if (workspace) workspace.updateToolbox(buildToolbox(enabled));
-    updateEnabledStates();
+    setTimeout(() => updateEnabledStates(), 0);
   }
 
   const SEQUENCE_HEADS = new Set(['start', 'define_skill']);
@@ -175,7 +175,10 @@
     if ((block.staleSaved_?.size ?? 0) > 0) return false;
     for (let i = 0; i < (block.paramDefs_?.length ?? 0); i++) {
       const def = block.paramDefs_[i];
-      if (def.type !== 'color' && String(block.getFieldValue('ARG_VAL_' + i) ?? '').toUpperCase() === 'NULL') return false;
+      if (def.type !== 'color') {
+        const raw = String(block.getFieldValue('ARG_VAL_' + i) ?? '');
+        if (raw.toUpperCase() === 'NULL' || isNaN(Number(raw))) return false;
+      }
     }
     for (let i = 0; i < count; i++) {
       const expName = skillBlock.getFieldValue('PARAM_NAME_' + i) || ('param' + (i + 1));
@@ -236,20 +239,58 @@
     Blockly.common.setSelected(block);
   }
 
+  export function hasStartBlock() {
+    return workspace?.getAllBlocks(false).some(b => b.type === 'start') ?? false;
+  }
+
   export function hasParamErrors() {
+    const skillBodies = {};
+    for (const top of workspace.getTopBlocks(false)) {
+      if (top.type === 'define_skill') {
+        const name = top.getFieldValue('NAME');
+        if (name) skillBodies[name] = top.getInputTargetBlock('BODY');
+      }
+    }
+    const visitedSkills = new Set();
+
     function walkErrors(block) {
       while (block) {
-        if (block.type === 'use_skill' && !block.isEnabled()) return true;
-        if ((block.type === 'repeat' || block.type === 'repeat_while') && walkErrors(block.getInputTargetBlock('BODY'))) return true;
+        if (!penColorEnabled && block.type === 'set_pen_color')
+          return "This challenge uses paint buckets — remove the Set Pen Color block to run!";
+        if (block.type === 'use_skill') {
+          const defs = block.paramDefs_ || [];
+          for (let i = 0; i < defs.length; i++) {
+            if (defs[i].type !== 'color') {
+              const raw = String(block.getFieldValue('ARG_VAL_' + i) ?? '');
+              if (raw.toUpperCase() === 'NULL')
+                return `Skill parameter "${defs[i].name}" has no value — fill it in!`;
+              if (isNaN(Number(raw)))
+                return `"${raw}" is not a valid number for parameter "${defs[i].name}"!`;
+            }
+          }
+          if (!block.isEnabled())
+            return "A skill block has missing or invalid parameters — fix the red blocks first!";
+          const skillName = block.getFieldValue('SKILL');
+          if (skillName && skillName !== '__NONE__' && !visitedSkills.has(skillName)) {
+            visitedSkills.add(skillName);
+            const bodyErr = walkErrors(skillBodies[skillName]);
+            if (bodyErr) return bodyErr;
+          }
+        }
+        if (block.type === 'repeat' || block.type === 'repeat_while') {
+          const bodyErr = walkErrors(block.getInputTargetBlock('BODY'));
+          if (bodyErr) return bodyErr;
+        }
         block = block.getNextBlock();
       }
-      return false;
+      return null;
     }
     for (const top of workspace.getTopBlocks(false)) {
       if (top.type !== 'start') continue;
-      if (walkErrors(top.getInputTargetBlock('BODY'))) return true;
+      const err = walkErrors(top.getInputTargetBlock('BODY'));
+      if (err) return err;
     }
-    return false;
+    return null;
   }
 
   export function getProgram() {
@@ -264,37 +305,15 @@
       }
     }
 
-    // Substitute param names (case-insensitive) into an expression and evaluate it.
-    // Only pure arithmetic is allowed after substitution — no arbitrary code execution.
-    function evalParamExpr(raw, params) {
-      let s = raw;
-      // Longest param names first to avoid partial substitutions (e.g. "ab" before "a")
-      const keys = Object.keys(params).sort((a, b) => b.length - a.length);
-      for (const key of keys) {
-        const val = params[key];
-        if (val == null || isNaN(Number(val))) continue;
-        const re = new RegExp('\\b' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi');
-        s = s.replace(re, String(Number(val)));
-      }
-      // Guard: after substitution only digits, operators, parens, dots and spaces may remain
-      if (!/^[\d+\-*/.() ]+$/.test(s)) return NaN;
-      try { return Function('"use strict"; return (' + s + ')')(); }
-      catch { return NaN; }
-    }
-
     function getNumFromInput(block, inputName, params) {
       const connected = block.getInput(inputName)?.connection?.targetBlock();
       if (!connected) return 0;
       if (connected.type === 'param_ref') {
+        const scale = Number(connected.getFieldValue('SCALE') ?? 1);
         const val = params?.[connected.getFieldValue('PARAM')];
-        return (val != null && !isNaN(Number(val))) ? Number(val) : 0;
+        return (val != null && !isNaN(Number(val))) ? scale * Number(val) : 0;
       }
-      const raw = String(connected.getFieldValue('NUM') ?? '0').trim();
-      if (params) {
-        const result = evalParamExpr(raw, params);
-        if (isFinite(result)) return result;
-      }
-      return Number(raw) || 0;
+      return Number(connected.getFieldValue('NUM')) || 0;
     }
 
     // Inline-expand a chain of blocks into `output`, substituting skill calls recursively.

@@ -99,19 +99,19 @@ function getChainHead(block) {
 }
 
 export function registerBlocks() {
-  // Inline number/param block used as a shadow inside movement value inputs.
-  // Accepts a plain number OR a parameter name (resolved at execution time).
+  // Inline number block used as a shadow inside movement value inputs. Pure numeric only.
   Blockly.Blocks['kinder_num'] = {
     init: function() {
       this.appendDummyInput()
-        .appendField(new Blockly.FieldTextInput('0'), 'NUM');
+        .appendField(new Blockly.FieldNumber(0), 'NUM');
       this.setOutput(true, 'Number');
       this.setColour(260);
-      this.setTooltip('A number value or parameter name (e.g. "x", "count").');
+      this.setTooltip('A number value.');
     }
   };
 
   // Parameter reference block — yellow, dropdown of params from enclosing define_skill.
+  // Supports an optional scale multiplier (e.g. -1 × SIDE) for arithmetic on params.
   Blockly.Blocks['param_ref'] = {
     init: function() {
       const getOptions = function() {
@@ -143,21 +143,26 @@ export function registerBlocks() {
         return opts.length ? opts : [['(no params)', '__NONE__']];
       };
       this.appendDummyInput()
+        .appendField(new Blockly.FieldNumber(1), 'SCALE')
+        .appendField('×')
         .appendField(new FieldDropdownDark(getOptions), 'PARAM');
       this.setOutput(true, 'Param');
       this.setStyle('param_style');
-      this.setTooltip('Reference a parameter from the enclosing skill.');
+      this.setTooltip('Reference a skill parameter, optionally scaled (e.g. -1 × SIDE).');
     }
   };
 
   function collapseValueInput(block, inputName) {
     const connected = block.getInput(inputName)?.connection?.targetBlock();
     if (!connected) return { text: '?', isParam: false };
-    if (connected.type === 'param_ref') return { text: connected.getFieldValue('PARAM') || '?', isParam: true };
+    if (connected.type === 'param_ref') {
+      const scale = Number(connected.getFieldValue('SCALE') ?? 1);
+      const name = connected.getFieldValue('PARAM') || '?';
+      const text = scale === 1 ? name : `${scale}×${name}`;
+      return { text, isParam: true };
+    }
     const raw = String(connected.getFieldValue('NUM') ?? '?').trim();
-    // Treat non-numeric text as a parameter name reference
-    const isParam = raw !== '?' && raw !== '' && isNaN(Number(raw));
-    return { text: raw, isParam };
+    return { text: raw, isParam: false };
   }
 
   Blockly.Blocks['move_base_to_target'] = {
@@ -628,18 +633,7 @@ export function registerBlocks() {
   Blockly.Blocks['condition'] = {
     init: function() {
       const getVarOptions = function() {
-        const block = this.getSourceBlock();
-        const opts = [['ROBOT X', 'X'], ['ROBOT Y', 'Y']];
-        if (!block) return opts;
-        const head = getChainHead(block);
-        if (head?.type !== 'define_skill') return opts;
-        const count = parseInt(head.getFieldValue('ARGS')) || 0;
-        for (let i = 0; i < count; i++) {
-          const name = head.getFieldValue('PARAM_NAME_' + i) || ('param' + (i + 1));
-          const type = head.getFieldValue('PARAM_TYPE_' + i) || 'int';
-          if (type === 'int' || type === 'float') opts.push([name, name]);
-        }
-        return opts;
+        return [['ROBOT X', 'X'], ['ROBOT Y', 'Y']];
       };
       this.appendDummyInput()
         .appendField(new FieldDropdownDark(getVarOptions), 'VAR')
@@ -650,7 +644,7 @@ export function registerBlocks() {
       this.setInputsInline(true);
       this.setOutput(true, 'Condition');
       this.setStyle('condition_style');
-      this.setTooltip('A condition comparing a variable against a threshold. ROBOT X/Y are the robot\'s current position; parameters from the enclosing skill are also available.');
+      this.setTooltip('A condition comparing a variable against a threshold. ROBOT X/Y are the robot\'s current position.');
     }
   };
 
