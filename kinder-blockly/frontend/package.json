@@ -14,6 +14,7 @@
     "vite": "^5.0.0"
   },
   "dependencies": {
+    "@sentry/browser": "^10.52.0",
     "blockly": "^11.0.0"
   }
 }

@@ -23,6 +23,13 @@ primary_region = "iad"
 [build]
   dockerfile = "Dockerfile"
 
+  # Frontend Sentry DSN is embedded into the built JS bundle (Vite inlines env
+  # vars at build time). Frontend DSNs are public by design — they ship in the
+  # JS that every visitor downloads — so committing the value is fine. Leave
+  # empty to disable frontend Sentry; populate to enable.
+  [build.args]
+    SENTRY_DSN_FRONTEND = "https://51d233941ab2aa6d35b50e8c3b639c58@o4511370706157568.ingest.us.sentry.io/4511370757406720"
+
 [env]
   GUNICORN_WORKERS = "2"
 

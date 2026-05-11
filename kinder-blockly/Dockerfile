@@ -7,6 +7,16 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
 # Vite outputs to ../src/kinder_blockly/static (see vite.config.js).
+#
+# SENTRY_DSN_FRONTEND is passed via fly.toml [build.args] (or
+# `fly deploy --build-arg SENTRY_DSN_FRONTEND=...`). It is intentionally a
+# build arg rather than a runtime env var because Vite inlines env vars at
+# build time. Frontend Sentry DSNs are public — they ride along in the JS
+# bundle every visitor downloads — so committing the value is fine.
+ARG SENTRY_DSN_FRONTEND=""
+ARG SENTRY_RELEASE=""
+ENV VITE_SENTRY_DSN=${SENTRY_DSN_FRONTEND}
+ENV VITE_SENTRY_RELEASE=${SENTRY_RELEASE}
 RUN mkdir -p /build/src/kinder_blockly/static \
     && npm run build
 
