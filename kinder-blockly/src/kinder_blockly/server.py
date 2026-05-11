@@ -94,6 +94,23 @@ def index() -> Response:
     return app.send_static_file("index.html")
 
 
+@app.route("/healthz")
+def healthz() -> Response:
+    """Liveness probe.
+
+    Returns 200 once this worker has a warm pybullet env.
+    """
+    # Avoid importing executor internals at module load to keep this cheap;
+    # introspect the worker state lazily here.
+    from kinder_blockly.executor import _W  # pylint: disable=import-outside-toplevel
+
+    status = "ok" if _W.env is not None else "warming"
+    code = 200 if _W.env is not None else 503
+    return Response(
+        json.dumps({"status": status}), status=code, mimetype="application/json"
+    )
+
+
 def _encode_frame(frame: "np.ndarray[Any, Any]") -> str:
     """Encode a numpy RGB frame as a base64 JPEG string."""
     img = Image.fromarray(frame)

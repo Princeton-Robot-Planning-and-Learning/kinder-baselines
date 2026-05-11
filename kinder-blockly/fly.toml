@@ -1,0 +1,45 @@
+# Fly.io deployment for the Blockly server.
+#
+# Sizing notes:
+# - Each machine runs 2 gunicorn workers (matches 2 vCPUs).
+# - Each worker pre-warms one pybullet env (~300-500 MB resident).
+# - 2 GB memory leaves comfortable headroom above the steady-state working set.
+# - soft_limit = 2 (= worker count) tells Fly to start another machine before
+#   queueing requests on this one. hard_limit = 3 gives one slot of buffer for
+#   the very short /reset and /healthz calls between long /run streams.
+#
+# Cost profile assumes occasional / demo use with a single machine warm and
+# burst-scaling on demand. For a known classroom session, bump
+# min_machines_running with `fly scale count <N>` before class starts.
+
+app = "kinder-blockly"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  GUNICORN_WORKERS = "2"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 2
+    hard_limit = 3
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "15s"
+    method = "GET"
+    timeout = "5s"
+    path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"
