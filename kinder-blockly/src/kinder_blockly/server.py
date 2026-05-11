@@ -5,12 +5,13 @@ import io
 import json
 import threading
 import time
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-from flask import Flask, Response, request, stream_with_context
+from flask import Flask, Response, g, request, stream_with_context
 from PIL import Image
 
 from kinder_blockly.challenges import get_challenge, list_challenges, score_trail
@@ -29,9 +30,62 @@ STATIC_DIR = Path(__file__).parent / "static"
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
 app.config["PROPAGATE_EXCEPTIONS"] = True
 
-_stop_event = threading.Event()
-
 EXECUTION_TIMEOUT_S = 120.0
+
+# Per-session stop-event registry. Keys are session IDs read from the
+# ``kb_session`` cookie; values are the Event a streaming /run watches. /stop
+# sets the caller's Event only, so one student pressing Stop cannot cancel
+# another student's run. The lock guards the dict itself.
+_SESSION_COOKIE = "kb_session"
+_SESSION_COOKIE_TTL_S = 86400
+_session_stops: dict[str, threading.Event] = {}
+_session_stops_lock = threading.Lock()
+
+
+def _acquire_session_stop(session_id: str) -> threading.Event:
+    """Return a fresh (cleared) stop Event registered under *session_id*."""
+    event = threading.Event()
+    with _session_stops_lock:
+        _session_stops[session_id] = event
+    return event
+
+
+def _release_session_stop(session_id: str) -> None:
+    """Remove a session's stop Event from the registry."""
+    with _session_stops_lock:
+        _session_stops.pop(session_id, None)
+
+
+def _peek_session_stop(session_id: str) -> threading.Event | None:
+    """Return the current stop Event for *session_id*, or None if absent."""
+    with _session_stops_lock:
+        return _session_stops.get(session_id)
+
+
+@app.before_request
+def _attach_session_id() -> None:
+    """Read the session cookie, minting a new id if the client doesn't have one."""
+    g.session_id = request.cookies.get(_SESSION_COOKIE) or str(uuid.uuid4())
+    g.session_cookie_was_set = _SESSION_COOKIE in request.cookies
+
+
+@app.after_request
+def _ensure_session_cookie(response: Response) -> Response:
+    """Issue the session cookie on the first response a client receives.
+
+    Setting it server-side means existing frontends work without modification — their
+    next request automatically carries the cookie.
+    """
+    if not getattr(g, "session_cookie_was_set", True):
+        response.set_cookie(
+            _SESSION_COOKIE,
+            g.session_id,
+            max_age=_SESSION_COOKIE_TTL_S,
+            samesite="Lax",
+            secure=request.is_secure,
+            httponly=True,
+        )
+    return response
 
 
 @app.route("/")
@@ -115,7 +169,8 @@ def run_program() -> Response:
             mimetype="application/x-ndjson",
         )
 
-    _stop_event.clear()
+    session_id = g.session_id
+    stop_event = _acquire_session_stop(session_id)
 
     def generate() -> Iterator[str]:
         trail: list[TrailSegment] = []
@@ -136,7 +191,7 @@ def run_program() -> Response:
                 pen_events_out=pen_events,
                 frame_labels_out=frame_labels,
                 infinite_loop_out=infinite_loop,
-                stop_event=_stop_event,
+                stop_event=stop_event,
                 paint_buckets=paint_buckets,
                 visited_buckets_out=visited_buckets,
                 spawned_buckets_out=spawned_buckets,
@@ -153,7 +208,7 @@ def run_program() -> Response:
                 ) + "\n"
                 frame_index += 1
                 if time.monotonic() > deadline:
-                    _stop_event.set()
+                    stop_event.set()
                     error = (
                         "Phew, I'm exhausted!! That program took too long to run. "
                         "Try fewer moves, or check for a loop that's too long!"
@@ -161,6 +216,8 @@ def run_program() -> Response:
                     break
         except Exception as exc:  # pylint: disable=broad-except
             error = str(exc)
+        finally:
+            _release_session_stop(session_id)
 
         yield json.dumps(
             {
@@ -179,8 +236,13 @@ def run_program() -> Response:
 
 @app.route("/stop", methods=["POST"])
 def stop_program() -> Response:
-    """Signal the running execute_program to stop after the current block."""
-    _stop_event.set()
+    """Signal the caller's running execute_program to stop after the current block.
+
+    Only this session's stop event is set. Other students' runs are unaffected.
+    """
+    event = _peek_session_stop(g.session_id)
+    if event is not None:
+        event.set()
     return Response(json.dumps({"ok": True}), status=200, mimetype="application/json")
 
 
