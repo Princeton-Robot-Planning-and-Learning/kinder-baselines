@@ -100,6 +100,14 @@ class _WorkerState:
 
 _W = _WorkerState()
 
+# Serializes access to the shared pybullet env within a single process. A
+# pybullet client is not safe to drive from multiple threads concurrently, and
+# the request-handling layer (Flask dev server, or any threaded WSGI server)
+# may dispatch two requests on the same worker at the same time. Holding this
+# lock for the lifetime of execute_program / render_initial_frame guarantees
+# that two simultaneous students don't corrupt each other's physics state.
+_WORKER_LOCK = threading.Lock()
+
 
 def _ensure_worker_initialized() -> None:
     """Create the env and planning-sim once per worker process (lazy)."""
@@ -400,23 +408,24 @@ def render_initial_frame(
     paint_buckets: list[PaintBucket] | None = None,
 ) -> NDArray[np.uint8]:
     """Reset the worker env and return the first rendered frame."""
-    _ensure_worker_initialized()
-    _reset_worker_scene(seed=seed)
-    if _W.client_id is not None and paint_buckets:
-        for bucket in paint_buckets:
-            _add_paint_bucket_visual(
-                float(bucket["x"]),
-                float(bucket["y"]),
-                (
-                    int(bucket["r"]) / 255.0,
-                    int(bucket["g"]) / 255.0,
-                    int(bucket["b"]) / 255.0,
-                ),
-                _W.client_id,
-            )
-    return (  # type: ignore[return-value]
-        _render(_W.client_id) if _W.client_id is not None else _W.env.render()
-    )
+    with _WORKER_LOCK:
+        _ensure_worker_initialized()
+        _reset_worker_scene(seed=seed)
+        if _W.client_id is not None and paint_buckets:
+            for bucket in paint_buckets:
+                _add_paint_bucket_visual(
+                    float(bucket["x"]),
+                    float(bucket["y"]),
+                    (
+                        int(bucket["r"]) / 255.0,
+                        int(bucket["g"]) / 255.0,
+                        int(bucket["b"]) / 255.0,
+                    ),
+                    _W.client_id,
+                )
+        return (  # type: ignore[return-value]
+            _render(_W.client_id) if _W.client_id is not None else _W.env.render()
+        )
 
 
 def execute_program(
@@ -443,8 +452,36 @@ def execute_program(
     if not blocks:
         return
 
-    _ensure_worker_initialized()
+    with _WORKER_LOCK:
+        _ensure_worker_initialized()
+        yield from _execute_program_locked(
+            blocks,
+            seed=seed,
+            trail_out=trail_out,
+            pen_events_out=pen_events_out,
+            frame_labels_out=frame_labels_out,
+            infinite_loop_out=infinite_loop_out,
+            stop_event=stop_event,
+            paint_buckets=paint_buckets,
+            visited_buckets_out=visited_buckets_out,
+            spawned_buckets_out=spawned_buckets_out,
+        )
 
+
+def _execute_program_locked(  # pylint: disable=too-many-arguments,too-many-locals
+    blocks: list[dict[str, Any]],
+    *,
+    seed: int,
+    trail_out: list[TrailSegment] | None,
+    pen_events_out: list[PenEvent] | None,
+    frame_labels_out: list[FrameLabel] | None,
+    infinite_loop_out: list[bool] | None,
+    stop_event: threading.Event | None,
+    paint_buckets: list[PaintBucket] | None,
+    visited_buckets_out: set[str] | None,
+    spawned_buckets_out: list[PaintBucket] | None,
+) -> Iterator[NDArray[np.uint8]]:
+    """Body of execute_program, run with the worker lock already held."""
     try:
         obs = _reset_worker_scene(seed=seed)
         env = _W.env
