@@ -28,7 +28,7 @@ primary_region = "iad"
   # JS that every visitor downloads — so committing the value is fine. Leave
   # empty to disable frontend Sentry; populate to enable.
   [build.args]
-    SENTRY_DSN_FRONTEND = ""
+    SENTRY_DSN_FRONTEND = "https://51d233941ab2aa6d35b50e8c3b639c58@o4511370706157568.ingest.us.sentry.io/4511370757406720"
 
 [env]
   GUNICORN_WORKERS = "2"
