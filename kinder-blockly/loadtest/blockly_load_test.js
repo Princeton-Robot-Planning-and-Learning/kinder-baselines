@@ -11,7 +11,11 @@
 //   BASE_URL=https://kinder-blockly.fly.dev PEAK_VUS=20 \
 //     k6 run loadtest/blockly_load_test.js
 //
-// Watch Fly logs in another terminal while it runs:
+// Benchmark a path-prefixed deploy (no /healthz needed — setup tolerates it):
+//   BASE_URL=http://blockly.prpl-group.com/blockly \
+//     k6 run loadtest/blockly_load_test.js
+//
+// Watch the target's logs in another terminal while it runs (Fly):
 //   fly logs
 
 import http from 'k6/http';
@@ -64,9 +68,19 @@ const PROGRAM = {
 };
 
 export function setup() {
-  const res = http.get(`${BASE_URL}/healthz`);
-  if (res.status !== 200) {
-    throw new Error(`healthz returned ${res.status}: ${res.body}`);
+  // /healthz is a Fly-stack convention. Older deploys may not expose it;
+  // fall back to validating that GET / responds at all.
+  const hz = http.get(`${BASE_URL}/healthz`);
+  if (hz.status === 200) {
+    console.log(`healthz ok at ${BASE_URL}/healthz`);
+  } else {
+    const root = http.get(`${BASE_URL}/`);
+    if (root.status !== 200) {
+      throw new Error(
+        `${BASE_URL}/ returned ${root.status} (and no /healthz). Is the target up?`,
+      );
+    }
+    console.log(`no /healthz at target (status ${hz.status}); GET / returned 200`);
   }
   console.log(`target: ${BASE_URL}, peak VUs: ${PEAK_VUS}`);
   return { baseUrl: BASE_URL };
