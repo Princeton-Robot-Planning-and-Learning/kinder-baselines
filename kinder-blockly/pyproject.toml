@@ -13,6 +13,7 @@ dependencies = [
    "numpy",
    "pillow",
    "kindergarden>=0.1.0",
+   "sentry-sdk[flask]>=2.0",
 ]
 
 [project.optional-dependencies]
