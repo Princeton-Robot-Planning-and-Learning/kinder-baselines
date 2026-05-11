@@ -30,15 +30,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install python deps first for better layer caching.
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
+
+# Copy the pre-built frontend bundle into the package's static dir BEFORE
+# pip install, so setuptools picks it up via the static/**/* package_data
+# rule in pyproject.toml. Without this, pip installs an empty static dir
+# into site-packages and Flask returns 404 for index.html at runtime.
+COPY --from=frontend /build/src/kinder_blockly/static /app/src/kinder_blockly/static
+
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir gunicorn \
     && pip install --no-cache-dir .
-
-# Copy the pre-built frontend bundle into the static dir Flask serves from.
-COPY --from=frontend /build/src/kinder_blockly/static /app/src/kinder_blockly/static
 
 COPY gunicorn_conf.py ./
 
