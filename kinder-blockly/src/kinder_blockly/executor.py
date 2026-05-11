@@ -44,8 +44,12 @@ _CAM_DISTANCE = 4.0  # original was 2.8; 4.0 gives ~40% more world coverage
 _CAM_PITCH = -35  # original was -30; 5° steeper keeps the floor in frame
 _CAM_YAW = 90
 _CAM_TARGET = (0.0, 0.0, 0.0)
-_RENDER_W = 640
-_RENDER_H = 360
+# Rendered at 320x180 (half each dimension of the original 640x360). PyBullet's
+# TINY_RENDERER on the CPU is roughly linear in pixel count, so this gives a
+# ~4x speedup per frame. The frontend img element scales the JPEG back up to
+# fit its container, so visual impact is mild pixelation, not a smaller view.
+_RENDER_W = 320
+_RENDER_H = 180
 
 
 def _render(client_id: int) -> NDArray[np.uint8]:
