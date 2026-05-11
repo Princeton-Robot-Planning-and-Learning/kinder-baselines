@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>kinder-blockly stress test</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      margin: 0;
+      padding: 20px;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+    h1 { margin: 0; font-size: 1.4rem; }
+    button {
+      font-family: inherit;
+      background: #2a6;
+      color: white;
+      border: none;
+      padding: 10px 16px;
+      font-size: 1rem;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    button:hover { background: #3c8; }
+    button:disabled { background: #555; cursor: not-allowed; }
+    button.run-all { background: #d63; padding: 12px 24px; font-size: 1.1rem; }
+    button.run-all:hover { background: #f74; }
+    #summary {
+      font-size: 0.9rem;
+      color: #888;
+      margin-left: auto;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: #2a2a2a;
+      border: 1px solid #3a3a3a;
+      border-radius: 6px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .card.running { border-color: #d63; }
+    .card.done { border-color: #2a6; }
+    .card.error { border-color: #d44; }
+    .card h2 { margin: 0; font-size: 1rem; color: #eee; }
+    .card .desc { font-size: 0.85rem; color: #888; margin: 0; }
+    .card .frame {
+      background: #000;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      object-fit: contain;
+      border-radius: 4px;
+    }
+    .card .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+    .card .stats {
+      font-size: 0.8rem;
+      color: #aaa;
+      font-variant-numeric: tabular-nums;
+    }
+    .status-idle { color: #888; }
+    .status-running { color: #d63; }
+    .status-done { color: #2a6; }
+    .status-error { color: #f44; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>kinder-blockly stress test</h1>
+    <button class="run-all" id="run-all">▶ Run all 5</button>
+    <div id="summary">click Run All, or open this page in N tabs for 5N parallel sessions</div>
+  </header>
+  <div class="grid" id="cards"></div>
+
+  <script>
+    // ----- Heavy program library ---------------------------------------
+
+    function longZigzag() {
+      const blocks = [
+        { type: "set_pen_color", r: 240, g: 80, b: 60 },
+        { type: "pen_down" },
+      ];
+      for (let i = 0; i < 18; i++) {
+        blocks.push({ type: "move_base_by", dx: 0.15, dy: 0.12 });
+        blocks.push({ type: "move_base_by", dx: 0.15, dy: -0.12 });
+      }
+      blocks.push({ type: "pen_up" });
+      return { blocks };
+    }
+
+    function repeatSquares() {
+      return {
+        blocks: [
+          { type: "set_pen_color", r: 60, g: 180, b: 240 },
+          { type: "pen_down" },
+          {
+            type: "repeat_while",
+            var: "X",
+            op: "<",
+            threshold: 1.5,
+            body: [
+              { type: "move_base_by", dx: 0.0, dy: 0.25 },
+              { type: "move_base_by", dx: 0.25, dy: 0.0 },
+              { type: "move_base_by", dx: 0.0, dy: -0.25 },
+              { type: "move_base_by", dx: 0.05, dy: 0.0 },
+            ],
+          },
+          { type: "pen_up" },
+        ],
+      };
+    }
+
+    function rainbowSpiral() {
+      const colors = [
+        [240, 70, 70], [240, 170, 70], [240, 240, 70],
+        [70, 200, 70], [70, 180, 240], [180, 70, 240],
+      ];
+      const body = [];
+      for (let i = 0; i < colors.length; i++) {
+        const [r, g, b] = colors[i];
+        body.push({ type: "set_pen_color", r, g, b });
+        body.push({ type: "move_base_by", dx: 0.18, dy: 0.0 });
+        body.push({ type: "move_base_by", dx: 0.0, dy: 0.18 });
+      }
+      return {
+        blocks: [
+          { type: "pen_down" },
+          {
+            type: "repeat_while",
+            var: "X",
+            op: "<",
+            threshold: 1.8,
+            body,
+          },
+          { type: "pen_up" },
+        ],
+      };
+    }
+
+    function stepStaircase() {
+      const blocks = [
+        { type: "set_pen_color", r: 200, g: 200, b: 60 },
+      ];
+      for (let i = 0; i < 8; i++) {
+        blocks.push({ type: "pen_down" });
+        blocks.push({ type: "move_base_by", dx: 0.2, dy: 0.0 });
+        blocks.push({ type: "pen_up" });
+        blocks.push({ type: "move_base_by", dx: 0.0, dy: 0.2 });
+      }
+      return { blocks };
+    }
+
+    function bigSweep() {
+      return {
+        blocks: [
+          { type: "set_pen_color", r: 240, g: 80, b: 240 },
+          { type: "pen_down" },
+          {
+            type: "repeat_while",
+            var: "X",
+            op: "<",
+            threshold: 1.9,
+            body: [
+              { type: "move_base_by", dx: 0.1, dy: 0.05 },
+              { type: "move_base_by", dx: 0.05, dy: -0.1 },
+              { type: "move_base_by", dx: -0.05, dy: 0.05 },
+            ],
+          },
+          { type: "pen_up" },
+        ],
+      };
+    }
+
+    const PROGRAMS = [
+      {
+        name: "Long zigzag",
+        desc: "36 alternating moves with pen down. Exercises rendering throughput.",
+        make: longZigzag,
+      },
+      {
+        name: "Repeat squares",
+        desc: "repeat_while loop drawing rows of squares while drifting right.",
+        make: repeatSquares,
+      },
+      {
+        name: "Rainbow spiral",
+        desc: "set_pen_color inside a loop — exercises colour state changes.",
+        make: rainbowSpiral,
+      },
+      {
+        name: "Pen up/down staircase",
+        desc: "8 dashes climbing the canvas. Exercises pen state toggling.",
+        make: stepStaircase,
+      },
+      {
+        name: "Big sweep",
+        desc: "Near-max repeat_while iterations with three moves per iter.",
+        make: bigSweep,
+      },
+    ];
+
+    // ----- Card rendering ----------------------------------------------
+
+    const cardsEl = document.getElementById("cards");
+    const runAllBtn = document.getElementById("run-all");
+    const cards = [];
+
+    function makeCard(p, idx) {
+      const el = document.createElement("div");
+      el.className = "card";
+      el.innerHTML = `
+        <h2>${p.name}</h2>
+        <p class="desc">${p.desc}</p>
+        <img class="frame" alt="frame" />
+        <div class="row">
+          <button data-idx="${idx}">Run</button>
+          <span class="stats">
+            <span class="status status-idle">idle</span>
+            · <span class="frames">0</span>f
+            · <span class="elapsed">0.0</span>s
+          </span>
+        </div>
+      `;
+      cardsEl.appendChild(el);
+      const card = {
+        el,
+        img: el.querySelector(".frame"),
+        btn: el.querySelector("button"),
+        status: el.querySelector(".status"),
+        frames: el.querySelector(".frames"),
+        elapsed: el.querySelector(".elapsed"),
+        program: p,
+      };
+      card.btn.addEventListener("click", () => runOne(card));
+      return card;
+    }
+
+    function setStatus(card, text, klass) {
+      card.status.textContent = text;
+      card.status.className = "status " + klass;
+      card.el.className = "card " + (klass === "status-running" ? "running"
+        : klass === "status-done" ? "done"
+        : klass === "status-error" ? "error" : "");
+    }
+
+    async function runOne(card) {
+      card.btn.disabled = true;
+      setStatus(card, "resetting…", "status-running");
+      card.frames.textContent = "0";
+      card.elapsed.textContent = "0.0";
+      const t0 = performance.now();
+      const timer = setInterval(() => {
+        card.elapsed.textContent = ((performance.now() - t0) / 1000).toFixed(1);
+      }, 100);
+
+      try {
+        const resetRes = await fetch("/reset", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ seed: 0, paint_buckets: [] }),
+        });
+        if (!resetRes.ok) throw new Error(`reset returned ${resetRes.status}`);
+        const resetData = await resetRes.json();
+        if (resetData.frame) {
+          card.img.src = "data:image/jpeg;base64," + resetData.frame;
+        }
+
+        setStatus(card, "running…", "status-running");
+        const runRes = await fetch("/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            program: card.program.make(),
+            seed: 0,
+            paint_buckets: [],
+          }),
+        });
+
+        if (!runRes.ok) throw new Error(`run returned ${runRes.status}`);
+
+        const reader = runRes.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        let frameCount = 0;
+        let doneMsg = null;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop();
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const msg = JSON.parse(line);
+            if (msg.type === "frame") {
+              frameCount++;
+              card.frames.textContent = String(frameCount);
+              card.img.src = "data:image/jpeg;base64," + msg.frame;
+            } else if (msg.type === "done") {
+              doneMsg = msg;
+            }
+          }
+        }
+
+        if (doneMsg && doneMsg.error) {
+          setStatus(card, `error: ${doneMsg.error.slice(0, 40)}`, "status-error");
+        } else if (doneMsg && doneMsg.infinite_loop) {
+          setStatus(card, "infinite_loop flagged", "status-error");
+        } else {
+          setStatus(card, "done", "status-done");
+        }
+      } catch (e) {
+        setStatus(card, `error: ${e.message}`, "status-error");
+      } finally {
+        clearInterval(timer);
+        card.elapsed.textContent = ((performance.now() - t0) / 1000).toFixed(1);
+        card.btn.disabled = false;
+      }
+    }
+
+    async function runAll() {
+      runAllBtn.disabled = true;
+      try {
+        await Promise.all(cards.map((c) => runOne(c)));
+      } finally {
+        runAllBtn.disabled = false;
+      }
+    }
+
+    PROGRAMS.forEach((p, idx) => cards.push(makeCard(p, idx)));
+    runAllBtn.addEventListener("click", runAll);
+  </script>
+</body>
+</html>
