@@ -3,6 +3,7 @@
 import base64
 import io
 import json
+import os
 import threading
 import time
 import uuid
@@ -11,8 +12,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import sentry_sdk
 from flask import Flask, Response, g, request, stream_with_context
 from PIL import Image
+from sentry_sdk.integrations.flask import FlaskIntegration
 
 from kinder_blockly.challenges import get_challenge, list_challenges, score_trail
 from kinder_blockly.executor import (
@@ -24,6 +27,23 @@ from kinder_blockly.executor import (
     render_initial_frame,
     validate_program,
 )
+
+# Initialise Sentry before creating the Flask app so the integration can hook
+# request handlers. No-ops when SENTRY_DSN is unset (e.g. local dev), so this
+# never gates the server on having Sentry configured.
+_SENTRY_DSN = os.environ.get("SENTRY_DSN")
+if _SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=_SENTRY_DSN,
+        integrations=[FlaskIntegration()],
+        environment=os.environ.get("SENTRY_ENVIRONMENT", "production"),
+        release=os.environ.get("FLY_IMAGE_REF") or os.environ.get("SENTRY_RELEASE"),
+        # Capture all exceptions; this is a low-volume service.
+        sample_rate=1.0,
+        # No performance tracing — we have k6 + Fly metrics for that.
+        traces_sample_rate=0.0,
+        send_default_pii=False,
+    )
 
 STATIC_DIR = Path(__file__).parent / "static"
 
