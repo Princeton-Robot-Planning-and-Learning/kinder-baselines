@@ -19,8 +19,7 @@
   <select id="challenge-select" bind:value={selectedId} on:change={onChallengeChange}>
     <option value="">FREE DRAW</option>
     {#each challenges as c}
-      {@const stars = c.difficulty === 'easy' ? '*' : c.difficulty === 'medium' ? '**' : '***'}
-      <option value={c.id}>[{stars}] {c.name.toUpperCase()}</option>
+      <option value={c.id}>{c.name.toUpperCase()}</option>
     {/each}
   </select>
   <span id="status">{status}</span>
