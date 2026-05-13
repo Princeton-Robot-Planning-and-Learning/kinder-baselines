@@ -438,6 +438,52 @@
   let pendingDeleteStartId = null;
   let saveTimer = null;
   const WS_KEY = 'kinder-blockly-ws-v3';
+  // Set after the first visit so we never show the starter program again,
+  // even if the user clears their workspace later.
+  const VISITED_KEY = 'kinder-blockly-visited';
+
+  // Starter workspace shown only on a browser's very first visit: pen down,
+  // move left by 1, move up by 1. Gives new students something to read and
+  // a Run button that produces a visible result immediately.
+  const STARTER_WORKSPACE = {
+    blocks: {
+      languageVersion: 0,
+      blocks: [{
+        type: 'start',
+        // Placed up-and-left of world origin so the block sits roughly in the
+        // upper-left of the visible workspace after the default scroll(divW/2,
+        // divH/2). Without the negative offset the block lands in the bottom-
+        // right of the viewport and clips off the right edge.
+        x: -180,
+        y: -120,
+        inputs: {
+          BODY: {
+            block: {
+              type: 'pen_down',
+              next: {
+                block: {
+                  type: 'move_base_by',
+                  inputs: {
+                    INPUT_DX: { shadow: { type: 'kinder_num', fields: { NUM: -1 } } },
+                    INPUT_DY: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
+                  },
+                  next: {
+                    block: {
+                      type: 'move_base_by',
+                      inputs: {
+                        INPUT_DX: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
+                        INPUT_DY: { shadow: { type: 'kinder_num', fields: { NUM: 1 } } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }],
+    },
+  };
 
   function saveWorkspace() {
     if (!workspace) return;
@@ -671,9 +717,37 @@
         }
       }
 
+      // First-visit starter program: only loads if no prior workspace exists in
+      // either v3 or v2 storage AND this browser has never been here before.
+      // Subsequent visits skip this, even if the user has cleared their work.
+      if (workspace.getTopBlocks(false).length === 0 && !localStorage.getItem(VISITED_KEY)) {
+        try {
+          Blockly.serialization.workspaces.load(STARTER_WORKSPACE, workspace);
+          for (const block of workspace.getAllBlocks(false)) {
+            if (block.isShadow() || block.outputConnection) continue;
+            if (CUSTOM_COLLAPSE.has(block.type)) block.customCollapse_?.();
+            else if (!block.isCollapsed()) block.setCollapsed(true);
+          }
+        } catch {}
+      }
+      localStorage.setItem(VISITED_KEY, '1');
+
       workspace.setScale(1.5);
       workspace.scroll(blocklyDiv.clientWidth / 2, blocklyDiv.clientHeight / 2);
       updateEnabledStates();
+
+      // Re-layout once web fonts are loaded. Blockly measures glyph widths
+      // when sizing each block; if the custom retro/silkscreen font has not
+      // arrived yet, blocks get sized with fallback-font metrics and look
+      // misaligned. On a reload the font is cached so this never triggers,
+      // which is why the issue "fixes itself" after refresh.
+      document.fonts?.ready.then(() => {
+        if (!workspace || workspace.isDisposed?.()) return;
+        for (const block of workspace.getAllBlocks(false)) {
+          block.render(false);
+        }
+        Blockly.svgResize(workspace);
+      });
     });
 
     blocklyDiv.addEventListener('wheel', onWheel, { passive: false });
