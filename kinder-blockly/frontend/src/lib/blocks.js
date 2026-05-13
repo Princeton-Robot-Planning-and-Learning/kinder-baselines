@@ -1,5 +1,11 @@
 import * as Blockly from 'blockly';
 
+// Toggle to render collapsed blocks with Python-flavoured summaries (e.g.
+// `if __name__ == "__main__":` for start, `for _ in range(N):` for repeat).
+// When false, the same compact summary view is shown but with human-readable
+// labels that match each block's expanded form.
+const PYTHON_STYLE_LABELS = false;
+
 class FieldLabelUnderline extends Blockly.FieldLabel {
   initView() {
     super.initView();
@@ -183,7 +189,7 @@ export function registerBlocks() {
       if (this.getInput('SUM')) this.removeInput('SUM');
       const x = collapseValueInput(this, 'INPUT_X');
       const y = collapseValueInput(this, 'INPUT_Y');
-      const row = this.appendDummyInput('SUM').appendField('move base to (');
+      const row = this.appendDummyInput('SUM').appendField(PYTHON_STYLE_LABELS ? 'move base to (' : 'Move base to (');
       row.appendField(x.isParam ? new FieldLabelUnderline(x.text) : x.text);
       row.appendField(', ');
       row.appendField(y.isParam ? new FieldLabelUnderline(y.text) : y.text);
@@ -215,7 +221,7 @@ export function registerBlocks() {
       if (this.getInput('SUM')) this.removeInput('SUM');
       const dx = collapseValueInput(this, 'INPUT_DX');
       const dy = collapseValueInput(this, 'INPUT_DY');
-      const row = this.appendDummyInput('SUM').appendField('move base by (');
+      const row = this.appendDummyInput('SUM').appendField(PYTHON_STYLE_LABELS ? 'move base by (' : 'Move base by (');
       row.appendField(dx.isParam ? new FieldLabelUnderline(dx.text) : dx.text);
       row.appendField(', ');
       row.appendField(dy.isParam ? new FieldLabelUnderline(dy.text) : dy.text);
@@ -282,17 +288,18 @@ export function registerBlocks() {
       this.getInput('RGB_ROW')?.setVisible(false);
       if (this.getInput('SUM')) this.removeInput('SUM');
       const colorBlock = this.getInput('COLOR_PARAM')?.connection?.targetBlock();
+      const label = PYTHON_STYLE_LABELS ? 'set_pen_color (' : 'Set pen color (';
       if (colorBlock) {
         const paramName = colorBlock.getFieldValue('PARAM') || '?';
         this.appendDummyInput('SUM')
-          .appendField('set_pen_color (')
+          .appendField(label)
           .appendField(new FieldLabelUnderline(paramName))
           .appendField(')');
       } else {
         const r = Math.round(Number(this.getFieldValue('R')));
         const g = Math.round(Number(this.getFieldValue('G')));
         const b = Math.round(Number(this.getFieldValue('B')));
-        this.appendDummyInput('SUM').appendField(`set_pen_color (${r}, ${g}, ${b})`);
+        this.appendDummyInput('SUM').appendField(`${label}${r}, ${g}, ${b})`);
       }
     },
     customExpand_: function() {
@@ -314,7 +321,7 @@ export function registerBlocks() {
     },
     customCollapse_: function() {
       this.isCustomCollapsed_ = true;
-      this.setFieldValue('if __name__ == "__main__":', 'LABEL');
+      this.setFieldValue(PYTHON_STYLE_LABELS ? 'if __name__ == "__main__":' : 'Start', 'LABEL');
     },
     customExpand_: function() {
       this.isCustomCollapsed_ = false;
@@ -381,14 +388,15 @@ export function registerBlocks() {
       if (this.getInput('SUM_FOOTER')) this.removeInput('SUM_FOOTER');
       // Build summary
       const name = this.getFieldValue('NAME') || 'my skill';
+      const prefix = PYTHON_STYLE_LABELS ? 'def ' : 'Define skill ';
       if (count === 0) {
         this.appendDummyInput('SUM_HEADER')
-          .appendField('def ')
+          .appendField(prefix)
           .appendField(new FieldLabelUnderline(name))
           .appendField('()');
       } else {
         this.appendDummyInput('SUM_HEADER')
-          .appendField('def ')
+          .appendField(prefix)
           .appendField(new FieldLabelUnderline(name))
           .appendField('(');
         for (let i = 0; i < count; i++) {
@@ -589,12 +597,13 @@ export function registerBlocks() {
       const nameField = nameInvalid
         ? new FieldLabelColored(name, '#f87171')
         : new FieldLabelUnderline(name);
+      const prefix = PYTHON_STYLE_LABELS ? '' : 'Use skill ';
       if (defs.length === 0) {
         this.appendDummyInput('SUM_HEADER')
-          .appendField(nameField).appendField('()');
+          .appendField(prefix).appendField(nameField).appendField('()');
       } else {
         this.appendDummyInput('SUM_HEADER')
-          .appendField(nameField).appendField('(');
+          .appendField(prefix).appendField(nameField).appendField('(');
         for (let i = 0; i < defs.length; i++) {
           const { name: pname, type } = defs[i];
           let val;
@@ -668,12 +677,14 @@ export function registerBlocks() {
       if (condBlock?.type === 'condition') {
         const v    = condBlock.getFieldValue('VAR') || 'X';
         const rawOp = condBlock.getFieldValue('OP') || '>';
-        const opSym = { '>': '>', '>=': '>=', '=': '==', '<': '<', '<=': '<=' }[rawOp] || rawOp;
+        const pyOp  = { '>': '>', '>=': '>=', '=': '==', '<': '<', '<=': '<=' }[rawOp] || rawOp;
+        const humanOp = { '>': '>', '>=': '≥', '=': '=', '<': '<', '<=': '≤' }[rawOp] || rawOp;
+        const opSym = PYTHON_STYLE_LABELS ? pyOp : humanOp;
         const thresh = collapseValueInput(condBlock, 'THRESHOLD');
         const varLabel = v === 'X' ? 'ROBOT X' : v === 'Y' ? 'ROBOT Y' : v;
         condText = `${varLabel} ${opSym} ${thresh.text}`;
       }
-      this.appendDummyInput('SUM').appendField(`while (${condText}):`);
+      this.appendDummyInput('SUM').appendField(PYTHON_STYLE_LABELS ? `while (${condText}):` : `Repeat while ${condText}`);
       this.moveInputBefore('SUM', 'BODY');
     },
     customExpand_: function() {
@@ -702,9 +713,9 @@ export function registerBlocks() {
       // BODY stays visible so blocks can always be dropped into the loop
       if (this.getInput('SUM')) this.removeInput('SUM');
       const cnt = collapseValueInput(this, 'INPUT_COUNT');
-      const row = this.appendDummyInput('SUM').appendField('for _ in range(');
+      const row = this.appendDummyInput('SUM').appendField(PYTHON_STYLE_LABELS ? 'for _ in range(' : 'Repeat ');
       row.appendField(cnt.isParam ? new FieldLabelUnderline(cnt.text) : cnt.text);
-      row.appendField('):');
+      row.appendField(PYTHON_STYLE_LABELS ? '):' : ' times');
       this.moveInputBefore('SUM', 'BODY');
     },
     customExpand_: function() {
@@ -724,7 +735,7 @@ export function registerBlocks() {
       this.setColour(310);
       this.setTooltip('Stop drawing while the robot moves.');
     },
-    customCollapse_: function() { this.isCustomCollapsed_ = true;  this.setFieldValue('pen up ()',  'LABEL'); },
+    customCollapse_: function() { this.isCustomCollapsed_ = true;  this.setFieldValue(PYTHON_STYLE_LABELS ? 'pen up ()' : 'Pen up',  'LABEL'); },
     customExpand_:   function() { this.isCustomCollapsed_ = false; this.setFieldValue('Pen up',     'LABEL'); },
   };
 
@@ -737,7 +748,7 @@ export function registerBlocks() {
       this.setColour(310);
       this.setTooltip('Resume drawing while the robot moves.');
     },
-    customCollapse_: function() { this.isCustomCollapsed_ = true;  this.setFieldValue('pen down ()', 'LABEL'); },
+    customCollapse_: function() { this.isCustomCollapsed_ = true;  this.setFieldValue(PYTHON_STYLE_LABELS ? 'pen down ()' : 'Pen down', 'LABEL'); },
     customExpand_:   function() { this.isCustomCollapsed_ = false; this.setFieldValue('Pen down',    'LABEL'); },
   };
 
@@ -753,7 +764,7 @@ export function registerBlocks() {
         'Move to a bucket first, then use this block!'
       );
     },
-    customCollapse_: function() { this.isCustomCollapsed_ = true;  this.setFieldValue('dip arm ()',        'LABEL'); },
+    customCollapse_: function() { this.isCustomCollapsed_ = true;  this.setFieldValue(PYTHON_STYLE_LABELS ? 'dip arm ()' : 'Dip arm in paint',        'LABEL'); },
     customExpand_:   function() { this.isCustomCollapsed_ = false; this.setFieldValue('Dip arm in paint', 'LABEL'); },
   };
 
@@ -780,7 +791,9 @@ export function registerBlocks() {
       const f = this.getField('COLOR');
       const r = f?.r_ ?? 255; const g = f?.g_ ?? 0; const b = f?.b_ ?? 0;
       this.appendDummyInput('SUM')
-        .appendField(`spawn bucket (${x.text}, ${y.text}) rgb(${r},${g},${b})`);
+        .appendField(PYTHON_STYLE_LABELS
+          ? `spawn bucket (${x.text}, ${y.text}) rgb(${r},${g},${b})`
+          : `Spawn bucket at (${x.text}, ${y.text}) color (${r}, ${g}, ${b})`);
     },
     customExpand_: function() {
       this.isCustomCollapsed_ = false;
@@ -800,7 +813,7 @@ export function registerBlocks() {
       this.setColour(310);
       this.setTooltip('Remove the nearest paint bucket within reach.');
     },
-    customCollapse_: function() { this.isCustomCollapsed_ = true;  this.setFieldValue('remove bucket ()', 'LABEL'); },
+    customCollapse_: function() { this.isCustomCollapsed_ = true;  this.setFieldValue(PYTHON_STYLE_LABELS ? 'remove bucket ()' : 'Remove nearest bucket', 'LABEL'); },
     customExpand_:   function() { this.isCustomCollapsed_ = false; this.setFieldValue('Remove nearest bucket', 'LABEL'); },
   };
 }
