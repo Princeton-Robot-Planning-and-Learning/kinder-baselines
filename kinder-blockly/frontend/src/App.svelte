@@ -111,7 +111,11 @@
   }
 
   async function onChallengeChange(id) {
+    // Clear everything tied to the previous challenge's run so the YOURS
+    // canvas, 3D frame label, and score do not bleed across challenges.
     scoreData = null;
+    studentTrail = []; studentPenEvents = [];
+    spawnedBuckets = []; allFrameLabels = [];
     if (!id) {
       currentChallenge = null; targetTrail = []; paintBuckets = []; visitedBuckets = [];
       blocklyWorkspace.setPenColorEnabled(true);
