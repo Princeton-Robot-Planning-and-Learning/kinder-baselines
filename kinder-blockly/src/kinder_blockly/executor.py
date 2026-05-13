@@ -232,7 +232,11 @@ class _PenState:
     """Mutable pen state threaded through block execution."""
 
     down: bool = False
-    color_rgb: tuple[int, int, int] = (255, 0, 0)
+    # Sky blue. Chosen so that a student who skips `dip_arm` and just pens
+    # down draws in a colour that does not match any challenge target trail
+    # (challenges use red, blue, green, orange, yellow) — they fail the
+    # colour score and are nudged toward using the paint bucket.
+    color_rgb: tuple[int, int, int] = (135, 206, 235)
     prev_xy: list[float] | None = None
     trail: list[TrailSegment] = field(default_factory=list)
     events: list[PenEvent] = field(default_factory=list)
