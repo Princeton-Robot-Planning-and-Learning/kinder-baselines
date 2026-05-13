@@ -511,6 +511,15 @@
     // point where `ready` resolves, so request the specific face explicitly.
     try { await document.fonts.load("12px 'Silkscreen'"); } catch {}
 
+    // Connection snap radii. Blockly's defaults (28 / 28 in workspace coords)
+    // are tuned for small zoom-1.0 blocks; at our 1.5× scale with chunky
+    // Silkscreen glyphs, students see two shapes visually overlapping but
+    // the underlying connection points are still further than 28 wsu apart,
+    // so the snap never fires. Bumping both radii lets the block snap as
+    // soon as the input clearly overlaps the opening.
+    Blockly.config.snapRadius = 60;
+    Blockly.config.connectingSnapRadius = 80;
+
     workspace = Blockly.inject(blocklyDiv, {
       toolbox,
       theme: retroTheme,
