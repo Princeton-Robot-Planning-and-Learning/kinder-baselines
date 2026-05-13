@@ -502,7 +502,15 @@
     pendingDeleteStartId = null;
   }
 
-  onMount(() => {
+  onMount(async () => {
+    // Wait for Silkscreen before injecting Blockly. Blockly measures glyph
+    // widths during block construction, and if the retro font has not yet
+    // arrived blocks get sized with fallback-font metrics and look wrong
+    // until the next reload. document.fonts.ready is not enough here: with
+    // Google Fonts + display=swap the woff2 fetch can be deferred past the
+    // point where `ready` resolves, so request the specific face explicitly.
+    try { await document.fonts.load("12px 'Silkscreen'"); } catch {}
+
     workspace = Blockly.inject(blocklyDiv, {
       toolbox,
       theme: retroTheme,
@@ -736,18 +744,20 @@
       workspace.scroll(blocklyDiv.clientWidth / 2, blocklyDiv.clientHeight / 2);
       updateEnabledStates();
 
-      // Re-layout once web fonts are loaded. Blockly measures glyph widths
-      // when sizing each block; if the custom retro/silkscreen font has not
-      // arrived yet, blocks get sized with fallback-font metrics and look
-      // misaligned. On a reload the font is cached so this never triggers,
-      // which is why the issue "fixes itself" after refresh.
-      document.fonts?.ready.then(() => {
+      // Belt-and-braces guard: even with the pre-inject await, the FontFace
+      // for Silkscreen could in principle still be settling (e.g. cached
+      // bytes that have not finished decoding) by the time the first blocks
+      // render. Re-render once the specific face is fully ready. We use
+      // document.fonts.load rather than document.fonts.ready because the
+      // latter resolves whenever nothing is currently loading, which is not
+      // the same as "Silkscreen is available".
+      document.fonts?.load("12px 'Silkscreen'").then(() => {
         if (!workspace || workspace.isDisposed?.()) return;
         for (const block of workspace.getAllBlocks(false)) {
           block.render(false);
         }
         Blockly.svgResize(workspace);
-      });
+      }).catch(() => {});
     });
 
     blocklyDiv.addEventListener('wheel', onWheel, { passive: false });
