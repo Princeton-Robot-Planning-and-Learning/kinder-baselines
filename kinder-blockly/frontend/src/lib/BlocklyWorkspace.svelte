@@ -536,6 +536,14 @@
       try { Blockly.ContextMenuRegistry.registry.unregister(id); } catch (_) {}
     }
 
+    // Blockly's default DELETE_X_BLOCKS label is "Delete %1 Blocks", where %1
+    // is computed from the block + every descendant in connection inputs.
+    // For our compound blocks (start/define_skill bodies, shadow number
+    // children inside movement inputs) that count is misleading — students
+    // see "Delete 4 Blocks" when right-clicking a single visible block.
+    // Drop the count entirely.
+    Blockly.Msg.DELETE_X_BLOCKS = 'Delete Blocks';
+
     try { Blockly.ContextMenuRegistry.registry.unregister('duplicateFromHere'); } catch (_) {}
     Blockly.ContextMenuRegistry.registry.register({
       id: 'duplicateFromHere',
