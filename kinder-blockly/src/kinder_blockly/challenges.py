@@ -63,92 +63,12 @@ CHALLENGES: list[dict] = [
         ),
     },
     {
-        "id": "triangle",
-        "name": "Triangle",
-        "difficulty": "easy",
-        "description": "Draw a blue triangle.",
-        "hint": "Grab the blue paint bucket first, "
-        "then connect three points to close the shape!",
-        "paint_buckets": [
-            {"id": "blue_bucket", "x": 1.5, "y": -1.5, "r": 0, "g": 80, "b": 255},
-        ],
-        "target_trail": _segments_from_waypoints(
-            [(0.0, 1.0), (1.0, -0.5), (-1.0, -0.5)],
-            r=0,
-            g=80,
-            b=255,
-            closed=True,
-        ),
-    },
-    {
-        "id": "letter_l",
-        "name": "Letter L",
-        "difficulty": "easy",
-        "description": "Draw a green letter L.",
-        "hint": "Fetch the green paint, then two straight lines: "
-        "one going down, one going right.",
-        "paint_buckets": [
-            {"id": "green_bucket", "x": 1.5, "y": 1.5, "r": 0, "g": 200, "b": 0},
-        ],
-        "target_trail": _segments_from_waypoints(
-            [(0.5, 1.0), (0.5, -0.5), (-0.5, -0.5)],
-            r=0,
-            g=200,
-            b=0,
-            closed=False,
-        ),
-    },
-    {
-        "id": "diamond",
-        "name": "Diamond",
-        "difficulty": "medium",
-        "description": "Draw a red diamond (rotated square).",
-        "hint": "Dip into the red paint first, then make four diagonal moves "
-        "connecting top, right, bottom, and left.",
-        "paint_buckets": [
-            {"id": "red_bucket", "x": 1.5, "y": -1.5, "r": 255, "g": 0, "b": 0},
-        ],
-        "target_trail": _segments_from_waypoints(
-            [(0.0, 1.0), (-1.0, 0.0), (0.0, -1.0), (1.0, 0.0)],
-            r=255,
-            g=0,
-            b=0,
-            closed=True,
-        ),
-    },
-    {
-        "id": "zigzag",
-        "name": "Zigzag",
-        "difficulty": "medium",
-        "description": "Draw an orange zigzag line from left to right.",
-        "hint": "Pick up the orange paint, then alternate "
-        "between moving up-right and down-right.",
-        "paint_buckets": [
-            {"id": "orange_bucket", "x": 1.5, "y": 1.5, "r": 255, "g": 140, "b": 0},
-        ],
-        "target_trail": _segments_from_waypoints(
-            [
-                (1.0, 0.0),
-                (0.5, 0.5),
-                (0.0, 0.0),
-                (-0.5, 0.5),
-                (-1.0, 0.0),
-            ],
-            r=255,
-            g=140,
-            b=0,
-            closed=False,
-        ),
-    },
-    {
         "id": "house",
         "name": "House",
-        "difficulty": "hard",
+        "difficulty": "easy",
         "description": "Draw a house: red square base with a blue triangle roof.",
         "hint": "Find the red paint bucket first, dip your arm in, then draw the square "
         "base. Next, find the blue bucket, dip again, and draw the triangle roof!",
-        # Two paint buckets in the lower corners of the world (robot coords),
-        # clear of the house drawing which occupies the upper-centre region.
         "paint_buckets": [
             {"id": "red_bucket", "x": 1.5, "y": -1.5, "r": 255, "g": 0, "b": 0},
             {"id": "blue_bucket", "x": 1.5, "y": 1.5, "r": 0, "g": 80, "b": 255},
@@ -157,44 +77,68 @@ CHALLENGES: list[dict] = [
             # base (red square)
             _segments_from_waypoints(
                 [(0.5, -0.5), (0.5, 0.5), (0.0, 0.5), (0.0, -0.5)],
-                r=255,
-                g=0,
-                b=0,
+                r=255, g=0, b=0,
                 closed=True,
             )
             +
             # roof (blue triangle)
             _segments_from_waypoints(
                 [(0.0, -0.5), (-1.0, 0.0), (0.0, 0.5)],
-                r=0,
-                g=80,
-                b=255,
+                r=0, g=80, b=255,
                 closed=False,
             )
         ),
     },
     {
-        "id": "star",
-        "name": "Star",
-        "difficulty": "hard",
-        "description": "Draw a yellow five-pointed star.",
-        "hint": "Get the yellow paint first, then connect every other vertex "
-        "of a regular pentagon to draw the star.",
+        "id": "fast_forward",
+        "name": "Fast Forward",
+        "difficulty": "medium",
+        "description": "Draw a blue fast-forward icon: two right-pointing triangles.",
+        "hint": "Grab the blue paint bucket, then draw two triangles side by side — "
+        "each one points to the right!",
         "paint_buckets": [
-            {"id": "yellow_bucket", "x": 1.5, "y": -1.5, "r": 220, "g": 180, "b": 0},
+            {"id": "blue_bucket", "x": 1.5, "y": -1.5, "r": 0, "g": 80, "b": 255},
         ],
-        "target_trail": _segments_from_waypoints(
-            [
-                (0.0, 1.0),
-                (-0.5, -0.5),
-                (1.0, 0.5),
-                (-1.0, 0.5),
-                (0.5, -0.5),
-            ],
-            r=220,
-            g=180,
-            b=0,
-            closed=True,
+        "target_trail": (
+            _segments_from_waypoints(
+                [(1.0, -1.0), (0.0, 0.0), (-1.0, -1.0)],
+                r=0, g=80, b=255,
+                closed=True,
+            )
+            + _segments_from_waypoints(
+                [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)],
+                r=0, g=80, b=255,
+                closed=True,
+            )
+        ),
+    },
+    {
+        "id": "four_squares",
+        "name": "Four Squares",
+        "difficulty": "hard",
+        "description": "Draw a 2×2 grid of green squares centered at the origin.",
+        "hint": "Dip into the green paint bucket, then draw four 1×1 squares "
+        "arranged in a 2×2 grid — they share edges in the middle!",
+        "paint_buckets": [
+            {"id": "green_bucket", "x": 1.5, "y": 1.5, "r": 0, "g": 200, "b": 0},
+        ],
+        "target_trail": (
+            _segments_from_waypoints(
+                [(-1.0, -1.0), (-1.0, 0.0), (0.0, 0.0), (0.0, -1.0)],
+                r=0, g=200, b=0, closed=True,
+            )
+            + _segments_from_waypoints(
+                [(0.0, -1.0), (0.0, 0.0), (1.0, 0.0), (1.0, -1.0)],
+                r=0, g=200, b=0, closed=True,
+            )
+            + _segments_from_waypoints(
+                [(-1.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (0.0, 0.0)],
+                r=0, g=200, b=0, closed=True,
+            )
+            + _segments_from_waypoints(
+                [(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0)],
+                r=0, g=200, b=0, closed=True,
+            )
         ),
     },
 ]
@@ -304,7 +248,7 @@ def score_trail(
                 break
     precision = precise / len(student_pts)
 
-    color_score = sum(color_diffs) / len(color_diffs) if color_diffs else 0.0
+    color_score = min(1.0, sum(color_diffs) / len(color_diffs)) if color_diffs else 0.0
 
     raw = 0.45 * coverage + 0.30 * precision + 0.25 * color_score
     final = round(raw * 100)
@@ -314,6 +258,6 @@ def score_trail(
         "breakdown": {
             "coverage": round(coverage * 100),
             "precision": round(precision * 100),
-            "color": round(color_score * 100),
+            "color": 100 if round(color_score * 100) == 99 else round(color_score * 100),
         },
     }

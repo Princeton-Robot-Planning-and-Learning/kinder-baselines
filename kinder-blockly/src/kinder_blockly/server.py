@@ -195,6 +195,7 @@ def run_program() -> Response:
                 {
                     "type": "done",
                     "error": validation.get("error"),
+                    "error_detail": validation.get("error_detail"),
                     "infinite_loop": validation.get("infinite_loop", False),
                     "error_block_id": validation.get("error_block_id"),
                     "trail": [],

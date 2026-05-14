@@ -20,6 +20,7 @@
   export let tamaMsg = '';
   export let tamaVisible = false;
   export let tamaIsError = false;
+  export let tamaIsWarning = false;
   export let onTamaPoke = () => {};
 
   let el;
@@ -160,7 +161,7 @@
     {/if}
 
     <div id="tama-area">
-      <TamaBot message={tamaMsg} visible={tamaVisible} isError={tamaIsError} onPoke={onTamaPoke} />
+      <TamaBot message={tamaMsg} visible={tamaVisible} isError={tamaIsError} isWarning={tamaIsWarning} onPoke={onTamaPoke} />
     </div>
   </div>
 </div>
