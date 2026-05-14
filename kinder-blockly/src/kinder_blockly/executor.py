@@ -378,7 +378,11 @@ def validate_program(program: dict[str, Any]) -> dict[str, Any]:
                         f"Target ({ui_x:g}, {ui_y:g}) is outside my world. "
                         "Both X and Y must stay between -2 and 2."
                     )
-                    return {"error": err, "error_detail": detail, "error_block_id": block_id}
+                    return {
+                        "error": err,
+                        "error_detail": detail,
+                        "error_block_id": block_id,
+                    }
                 pos[0], pos[1] = rx, ry
 
             elif btype == "move_base_by":
@@ -390,12 +394,17 @@ def validate_program(program: dict[str, Any]) -> dict[str, Any]:
                     cur_ui_y = -pos[0] + 0.0
                     dx = float(blk.get("dx", 0.0))
                     dy = float(blk.get("dy", 0.0))
+                    dest = f"({new_ry + 0.0:g}, {-new_rx + 0.0:g})"
                     detail = (
                         f"I'm at ({cur_ui_x:g}, {cur_ui_y:g}). "
-                        f"Moving by ({dx:g}, {dy:g}) would reach ({new_ry + 0.0:g}, {-new_rx + 0.0:g}) — "
+                        f"Moving by ({dx:g}, {dy:g}) would reach {dest} — "
                         "outside the -2 to 2 bounds!"
                     )
-                    return {"error": err, "error_detail": detail, "error_block_id": block_id}
+                    return {
+                        "error": err,
+                        "error_detail": detail,
+                        "error_block_id": block_id,
+                    }
                 pos[0], pos[1] = new_rx, new_ry
 
             elif btype == "repeat_while":
