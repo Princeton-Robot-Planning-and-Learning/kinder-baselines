@@ -77,14 +77,18 @@ CHALLENGES: list[dict] = [
             # base (red square)
             _segments_from_waypoints(
                 [(0.5, -0.5), (0.5, 0.5), (0.0, 0.5), (0.0, -0.5)],
-                r=255, g=0, b=0,
+                r=255,
+                g=0,
+                b=0,
                 closed=True,
             )
             +
             # roof (blue triangle)
             _segments_from_waypoints(
                 [(0.0, -0.5), (-1.0, 0.0), (0.0, 0.5)],
-                r=0, g=80, b=255,
+                r=0,
+                g=80,
+                b=255,
                 closed=False,
             )
         ),
@@ -102,12 +106,16 @@ CHALLENGES: list[dict] = [
         "target_trail": (
             _segments_from_waypoints(
                 [(1.0, -1.0), (0.0, 0.0), (-1.0, -1.0)],
-                r=0, g=80, b=255,
+                r=0,
+                g=80,
+                b=255,
                 closed=True,
             )
             + _segments_from_waypoints(
                 [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)],
-                r=0, g=80, b=255,
+                r=0,
+                g=80,
+                b=255,
                 closed=True,
             )
         ),
@@ -125,19 +133,31 @@ CHALLENGES: list[dict] = [
         "target_trail": (
             _segments_from_waypoints(
                 [(-1.0, -1.0), (-1.0, 0.0), (0.0, 0.0), (0.0, -1.0)],
-                r=0, g=200, b=0, closed=True,
+                r=0,
+                g=200,
+                b=0,
+                closed=True,
             )
             + _segments_from_waypoints(
                 [(0.0, -1.0), (0.0, 0.0), (1.0, 0.0), (1.0, -1.0)],
-                r=0, g=200, b=0, closed=True,
+                r=0,
+                g=200,
+                b=0,
+                closed=True,
             )
             + _segments_from_waypoints(
                 [(-1.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (0.0, 0.0)],
-                r=0, g=200, b=0, closed=True,
+                r=0,
+                g=200,
+                b=0,
+                closed=True,
             )
             + _segments_from_waypoints(
                 [(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0)],
-                r=0, g=200, b=0, closed=True,
+                r=0,
+                g=200,
+                b=0,
+                closed=True,
             )
         ),
     },
@@ -258,6 +278,8 @@ def score_trail(
         "breakdown": {
             "coverage": round(coverage * 100),
             "precision": round(precision * 100),
-            "color": 100 if round(color_score * 100) == 99 else round(color_score * 100),
+            "color": (
+                100 if round(color_score * 100) == 99 else round(color_score * 100)
+            ),
         },
     }
