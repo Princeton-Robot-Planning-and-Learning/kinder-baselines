@@ -584,10 +584,27 @@
         const collapsedIds = new Set(
           workspace.getAllBlocks(false).filter(b => b.isCustomCollapsed_).map(b => b.id)
         );
-        const state = Blockly.serialization.workspaces.save(workspace);
-        setPythonMode(!getPythonMode());
+        let state;
+        try {
+          state = Blockly.serialization.workspaces.save(workspace);
+        } catch (e) {
+          console.error('Python mode toggle: failed to snapshot workspace, aborting.', e);
+          return;
+        }
+        const prevMode = getPythonMode();
+        setPythonMode(!prevMode);
         workspace.clear();
-        Blockly.serialization.workspaces.load(state, workspace);
+        try {
+          Blockly.serialization.workspaces.load(state, workspace);
+        } catch (e) {
+          // Loading failed — try to restore the original workspace so the
+          // student doesn't lose their program. Revert the mode flag too.
+          console.error('Python mode toggle: failed to reload workspace, restoring.', e);
+          setPythonMode(prevMode);
+          workspace.clear();
+          try { Blockly.serialization.workspaces.load(state, workspace); } catch (_) {}
+          return;
+        }
         for (const block of workspace.getAllBlocks(false)) {
           if (collapsedIds.has(block.id)) block.customCollapse_?.();
         }
