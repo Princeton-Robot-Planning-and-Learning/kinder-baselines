@@ -236,7 +236,7 @@ class _PenState:
     # down draws in a colour that does not match any challenge target trail
     # (challenges use red, blue, green, orange, yellow) — they fail the
     # colour score and are nudged toward using the paint bucket.
-    color_rgb: tuple[int, int, int] = (135, 206, 235)
+    color_rgb: tuple[int, int, int] = (128, 128, 128)
     prev_xy: list[float] | None = None
     trail: list[TrailSegment] = field(default_factory=list)
     events: list[PenEvent] = field(default_factory=list)
@@ -372,13 +372,31 @@ def validate_program(program: dict[str, Any]) -> dict[str, Any]:
                 ry = float(blk.get("x", 0.0))
                 err = _oob_error(rx, ry)
                 if err:
-                    return {"error": err, "error_block_id": block_id}
+                    ui_x = float(blk.get("x", 0.0))
+                    ui_y = float(blk.get("y", 0.0))
+                    detail = (
+                        f"Target ({ui_x:g}, {ui_y:g}) is outside my world. "
+                        "Both X and Y must stay between -2 and 2."
+                    )
+                    return {"error": err, "error_detail": detail, "error_block_id": block_id}
                 pos[0], pos[1] = rx, ry
 
             elif btype == "move_base_by":
-                # Real executor clips; abstract sim mirrors that.
-                pos[0] = max(-2.0, min(2.0, pos[0] - float(blk.get("dy", 0.0))))
-                pos[1] = max(-2.0, min(2.0, pos[1] + float(blk.get("dx", 0.0))))
+                new_rx = pos[0] - float(blk.get("dy", 0.0))
+                new_ry = pos[1] + float(blk.get("dx", 0.0))
+                err = _oob_error(new_rx, new_ry)
+                if err:
+                    cur_ui_x = pos[1] + 0.0
+                    cur_ui_y = -pos[0] + 0.0
+                    dx = float(blk.get("dx", 0.0))
+                    dy = float(blk.get("dy", 0.0))
+                    detail = (
+                        f"I'm at ({cur_ui_x:g}, {cur_ui_y:g}). "
+                        f"Moving by ({dx:g}, {dy:g}) would reach ({new_ry + 0.0:g}, {-new_rx + 0.0:g}) — "
+                        "outside the -2 to 2 bounds!"
+                    )
+                    return {"error": err, "error_detail": detail, "error_block_id": block_id}
+                pos[0], pos[1] = new_rx, new_ry
 
             elif btype == "repeat_while":
                 var = blk.get("var", "X")

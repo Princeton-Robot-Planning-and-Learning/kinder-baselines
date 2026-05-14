@@ -4,7 +4,9 @@ import * as Blockly from 'blockly';
 // `if __name__ == "__main__":` for start, `for _ in range(N):` for repeat).
 // When false, the same compact summary view is shown but with human-readable
 // labels that match each block's expanded form.
-const PYTHON_STYLE_LABELS = false;
+let PYTHON_STYLE_LABELS = false;
+export function getPythonMode() { return PYTHON_STYLE_LABELS; }
+export function setPythonMode(val) { PYTHON_STYLE_LABELS = val; }
 
 class FieldLabelUnderline extends Blockly.FieldLabel {
   initView() {
@@ -88,9 +90,23 @@ class FieldDropdownDark extends Blockly.FieldDropdown {
   }
 }
 
-// Like FieldDropdownDark but without forced dark text — used on dark-coloured blocks.
-class FieldDropdownPermissive extends Blockly.FieldDropdown {
+
+// Forces white text — used on dark-background blocks (define_skill, use_skill).
+class FieldDropdownLight extends Blockly.FieldDropdown {
   doClassValidation_(newVal) { return newVal ?? null; }
+  initView() { super.initView(); this.forceTextLight_(); }
+  applyColour() {
+    super.applyColour();
+    this.forceTextLight_();
+    if (this.arrow) this.arrow.style.setProperty('fill', '#ffffff', 'important');
+  }
+  render_() { super.render_(); this.forceTextLight_(); }
+  forceTextLight_() {
+    this.fieldGroup_?.querySelectorAll('text, tspan').forEach(el => {
+      el.style.setProperty('fill', '#ffffff', 'important');
+    });
+    if (this.textElement_) this.textElement_.style.setProperty('fill', '#ffffff', 'important');
+  }
 }
 
 // Walk up the parent chain to find the topmost block.
@@ -117,7 +133,7 @@ export function registerBlocks() {
   };
 
   // Parameter reference block — yellow, dropdown of params from enclosing define_skill.
-  // Supports an optional scale multiplier (e.g. -1 × SIDE) for arithmetic on params.
+  // Supports an optional scale multiplier (e.g. -1 * SIDE) for arithmetic on params.
   Blockly.Blocks['param_ref'] = {
     init: function() {
       const getOptions = function() {
@@ -130,7 +146,10 @@ export function registerBlocks() {
         let expectedKind = null;
         const parent = block.getParent();
         if (parent) {
+          const parentInput = block.outputConnection?.targetConnection?.getParentInput?.();
           if (parent.type === 'set_pen_color') expectedKind = 'color';
+          else if (parent.type === 'spawn_paint_bucket' && parentInput?.name === 'COLOR_PARAM') expectedKind = 'color';
+          else if (parent.type === 'spawn_paint_bucket') expectedKind = 'num';
           else if (parent.type === 'move_base_to_target' || parent.type === 'move_base_by'
                 || parent.type === 'repeat' || parent.type === 'condition') expectedKind = 'num';
         }
@@ -148,13 +167,24 @@ export function registerBlocks() {
         }
         return opts.length ? opts : [['(no params)', '__NONE__']];
       };
-      this.appendDummyInput()
+      this.appendDummyInput('SCALE_ROW')
         .appendField(new Blockly.FieldNumber(1), 'SCALE')
-        .appendField('×')
+        .appendField(new FieldLabelColored('*', '#000000'));
+      this.appendDummyInput('PARAM_ROW')
         .appendField(new FieldDropdownDark(getOptions), 'PARAM');
+      this.setInputsInline(true);
       this.setOutput(true, 'Param');
       this.setStyle('param_style');
-      this.setTooltip('Reference a skill parameter, optionally scaled (e.g. -1 × SIDE).');
+      this.setTooltip('Reference a skill parameter, optionally scaled (e.g. -1 * SIDE).');
+
+      this.setOnChange(function(_evt) {
+        if (this.isInFlyout) return;
+        const parentInput = this.outputConnection?.targetConnection?.getParentInput?.();
+        const parent = this.getParent();
+        const isColor = parent?.type === 'set_pen_color' ||
+          (parent?.type === 'spawn_paint_bucket' && parentInput?.name === 'COLOR_PARAM');
+        this.getInput('SCALE_ROW')?.setVisible(!isColor);
+      });
     }
   };
 
@@ -253,9 +283,9 @@ export function registerBlocks() {
         };
       }
 
-      const rField = new Blockly.FieldNumber(255, 0, 255, 1);
-      const gField = new Blockly.FieldNumber(0,   0, 255, 1);
-      const bField = new Blockly.FieldNumber(0,   0, 255, 1);
+      const rField = new Blockly.FieldNumber(128, 0, 255, 1);
+      const gField = new Blockly.FieldNumber(128, 0, 255, 1);
+      const bField = new Blockly.FieldNumber(128, 0, 255, 1);
       rField.setValidator(makeValidator('R'));
       gField.setValidator(makeValidator('G'));
       bField.setValidator(makeValidator('B'));
@@ -268,7 +298,7 @@ export function registerBlocks() {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#ff0000');
+      this.setColour('#808080');
       this.setTooltip('Set the drawing colour (RGB 0-255 or a color parameter).');
 
       this.setOnChange(function(evt) {
@@ -335,7 +365,7 @@ export function registerBlocks() {
       this.appendDummyInput('HEADER')
         .appendField('Define skill')
         .appendField(new Blockly.FieldTextInput('my skill'), 'NAME')
-        .appendField(new Blockly.FieldDropdown([
+        .appendField(new FieldDropdownLight([
           ['0 params','0'],['1 param','1'],['2 params','2'],
           ['3 params','3'],['4 params','4'],['5 params','5'],
         ]), 'ARGS');
@@ -365,7 +395,7 @@ export function registerBlocks() {
           .appendField('  • ')
           .appendField(new Blockly.FieldTextInput(saved[i]?.name ?? 'param' + (i + 1)), 'PARAM_NAME_' + i)
           .appendField(' : ')
-          .appendField(new Blockly.FieldDropdown(types), 'PARAM_TYPE_' + i);
+          .appendField(new FieldDropdownLight(types), 'PARAM_TYPE_' + i);
         if (saved[i]?.type) this.setFieldValue(saved[i].type, 'PARAM_TYPE_' + i);
       }
       // Keep BODY at the end (params were appended after it).
@@ -440,7 +470,7 @@ export function registerBlocks() {
       };
       this.appendDummyInput('HEADER')
         .appendField('Use skill')
-        .appendField(new FieldDropdownPermissive(getOptions), 'SKILL');
+        .appendField(new FieldDropdownLight(getOptions), 'SKILL');
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
       this.setColour('#0f766e');
@@ -771,36 +801,92 @@ export function registerBlocks() {
   Blockly.Blocks['spawn_paint_bucket'] = {
     init: function() {
       this.isCustomCollapsed_ = false;
+
+      function makeSwatchValidator(ch) {
+        return function(newVal) {
+          const src = this.getSourceBlock();
+          if (!src) return newVal;
+          const r = ch === 'SR' ? Number(newVal) : Number(src.getFieldValue('SR'));
+          const g = ch === 'SG' ? Number(newVal) : Number(src.getFieldValue('SG'));
+          const b = ch === 'SB' ? Number(newVal) : Number(src.getFieldValue('SB'));
+          src.getField('COLOR')?.setRGB(r, g, b);
+          return newVal;
+        };
+      }
+
+      const rField = new Blockly.FieldNumber(255, 0, 255, 1);
+      const gField = new Blockly.FieldNumber(0,   0, 255, 1);
+      const bField = new Blockly.FieldNumber(0,   0, 255, 1);
+      rField.setValidator(makeSwatchValidator('SR'));
+      gField.setValidator(makeSwatchValidator('SG'));
+      bField.setValidator(makeSwatchValidator('SB'));
+
       this.appendValueInput('INPUT_X').setCheck(['Number', 'Param']).appendField('Spawn bucket at x');
       this.appendValueInput('INPUT_Y').setCheck(['Number', 'Param']).appendField('y');
-      this.appendDummyInput('COLOR_ROW').appendField('color').appendField(new FieldColorSwatch(), 'COLOR');
+      this.appendEndRowInput('ROW_BREAK');
+      this.appendValueInput('COLOR_PARAM').setCheck(['Param']).appendField('color');
+      this.appendDummyInput('COLOR_ROW')
+        .appendField(new FieldColorSwatch(), 'COLOR')
+        .appendField('R').appendField(rField, 'SR')
+        .appendField('G').appendField(gField, 'SG')
+        .appendField('B').appendField(bField, 'SB');
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
       this.setColour(310);
       this.setTooltip('Spawn a paint bucket at (x, y) with the chosen colour.');
+
+      this.setOnChange(function(evt) {
+        if ([Blockly.Events.BLOCK_MOVE, Blockly.Events.BLOCK_CHANGE,
+             Blockly.Events.BLOCK_CREATE, Blockly.Events.BLOCK_DELETE].includes(evt.type)) {
+          if (!this.isCustomCollapsed_) {
+            const hasParam = !!this.getInput('COLOR_PARAM')?.connection?.targetBlock();
+            this.getInput('COLOR_ROW')?.setVisible(!hasParam);
+          }
+        }
+      });
     },
     customCollapse_: function() {
       this.isCustomCollapsed_ = true;
       this.getInput('INPUT_X')?.setVisible(false);
       this.getInput('INPUT_Y')?.setVisible(false);
+      this.getInput('ROW_BREAK')?.setVisible(false);
+      this.getInput('COLOR_PARAM')?.setVisible(false);
       this.getInput('COLOR_ROW')?.setVisible(false);
       if (this.getInput('SUM')) this.removeInput('SUM');
       const x = collapseValueInput(this, 'INPUT_X');
       const y = collapseValueInput(this, 'INPUT_Y');
-      const f = this.getField('COLOR');
-      const r = f?.r_ ?? 255; const g = f?.g_ ?? 0; const b = f?.b_ ?? 0;
-      this.appendDummyInput('SUM')
-        .appendField(PYTHON_STYLE_LABELS
-          ? `spawn bucket (${x.text}, ${y.text}) rgb(${r},${g},${b})`
-          : `Spawn bucket at (${x.text}, ${y.text}) color (${r}, ${g}, ${b})`);
+      const colorBlock = this.getInput('COLOR_PARAM')?.connection?.targetBlock();
+      if (colorBlock) {
+        const paramName = colorBlock.getFieldValue('PARAM') || '?';
+        const label = PYTHON_STYLE_LABELS ? 'spawn bucket(' : 'Spawn bucket at (';
+        const suffix = PYTHON_STYLE_LABELS ? `)` : `)`;
+        this.appendDummyInput('SUM')
+          .appendField(label)
+          .appendField(x.isParam ? new FieldLabelUnderline(x.text) : x.text)
+          .appendField(', ')
+          .appendField(y.isParam ? new FieldLabelUnderline(y.text) : y.text)
+          .appendField(PYTHON_STYLE_LABELS ? ', ' : ') color (')
+          .appendField(new FieldLabelUnderline(paramName))
+          .appendField(suffix);
+      } else {
+        const f = this.getField('COLOR');
+        const r = f?.r_ ?? 255; const g = f?.g_ ?? 0; const b = f?.b_ ?? 0;
+        this.appendDummyInput('SUM')
+          .appendField(PYTHON_STYLE_LABELS
+            ? `spawn bucket(${x.text}, ${y.text}, (${r},${g},${b}))`
+            : `Spawn bucket at (${x.text}, ${y.text}) color (${r}, ${g}, ${b})`);
+      }
     },
     customExpand_: function() {
       this.isCustomCollapsed_ = false;
       if (this.getInput('SUM')) this.removeInput('SUM');
       this.getInput('INPUT_X')?.setVisible(true);
       this.getInput('INPUT_Y')?.setVisible(true);
-      this.getInput('COLOR_ROW')?.setVisible(true);
+      this.getInput('ROW_BREAK')?.setVisible(true);
+      this.getInput('COLOR_PARAM')?.setVisible(true);
+      const hasParam = !!this.getInput('COLOR_PARAM')?.connection?.targetBlock();
+      this.getInput('COLOR_ROW')?.setVisible(!hasParam);
     },
   };
 
@@ -818,7 +904,7 @@ export function registerBlocks() {
   };
 }
 
-export function buildToolbox(penColorEnabled = true) {
+export function buildToolbox(penColorEnabled = true, spawnBucketEnabled = true) {
   return {
     kind: 'categoryToolbox',
     contents: [
@@ -847,11 +933,11 @@ export function buildToolbox(penColorEnabled = true) {
         { kind: 'block', type: 'pen_down' },
         { kind: 'block', type: 'pen_up' },
         { kind: 'block', type: 'dip_arm' },
-        { kind: 'block', type: 'spawn_paint_bucket', inputs: {
+        { kind: 'block', type: 'spawn_paint_bucket', disabled: !spawnBucketEnabled, inputs: {
             INPUT_X: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
             INPUT_Y: { shadow: { type: 'kinder_num', fields: { NUM: 0 } } },
         }},
-        { kind: 'block', type: 'remove_paint_bucket' },
+        { kind: 'block', type: 'remove_paint_bucket', disabled: !spawnBucketEnabled },
       ]},
       { kind: 'category', name: 'Abstraction', colour: '#1e3a8a', contents: [
         { kind: 'block', type: 'define_skill' },

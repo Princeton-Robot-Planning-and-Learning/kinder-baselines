@@ -3,7 +3,7 @@
 
   const dispatch = createEventDispatcher();
   import * as Blockly from 'blockly';
-  import { registerBlocks, toolbox, buildToolbox } from './blocks.js';
+  import { registerBlocks, toolbox, buildToolbox, getPythonMode, setPythonMode } from './blocks.js';
   import ColorPicker from './ColorPicker.svelte';
 
   registerBlocks();
@@ -75,6 +75,12 @@
       selectedPenBlock.setFieldValue(String(b), 'B');
     } else if (selectedColorSwatch && !selectedColorSwatch.getSourceBlock()?.isDisposed()) {
       selectedColorSwatch.setRGB(r, g, b);
+      const swatchBlock = selectedColorSwatch.getSourceBlock();
+      if (swatchBlock?.type === 'spawn_paint_bucket') {
+        swatchBlock.setFieldValue(String(r), 'SR');
+        swatchBlock.setFieldValue(String(g), 'SG');
+        swatchBlock.setFieldValue(String(b), 'SB');
+      }
     } else {
       pickerVisible = false; return;
     }
@@ -151,10 +157,29 @@
   }
 
   let penColorEnabled = true;
+  let spawnBucketEnabled = true;
+
+  function rebuildToolbox() {
+    if (!workspace) return;
+    const toolbox = workspace.getToolbox();
+    const selectedName = toolbox?.getSelectedItem()?.getName?.();
+    workspace.updateToolbox(buildToolbox(penColorEnabled, spawnBucketEnabled));
+    if (selectedName) {
+      const newToolbox = workspace.getToolbox();
+      const match = (newToolbox?.getToolboxItems?.() ?? []).find(item => item.getName?.() === selectedName);
+      if (match) newToolbox.setSelectedItem(match);
+    }
+  }
 
   export function setPenColorEnabled(enabled) {
     penColorEnabled = enabled;
-    if (workspace) workspace.updateToolbox(buildToolbox(enabled));
+    rebuildToolbox();
+    setTimeout(() => updateEnabledStates(), 0);
+  }
+
+  export function setSpawnBucketEnabled(enabled) {
+    spawnBucketEnabled = enabled;
+    rebuildToolbox();
     setTimeout(() => updateEnabledStates(), 0);
   }
 
@@ -227,6 +252,7 @@
       }
       if (should) should = !hasInvalidParamRef(block);
       if (!penColorEnabled && block.type === 'set_pen_color') should = false;
+      if (!spawnBucketEnabled && (block.type === 'spawn_paint_bucket' || block.type === 'remove_paint_bucket')) should = false;
       if (block.isEnabled() !== should) block.setEnabled(should);
     }
     } finally { _updatingEnabled = false; }
@@ -257,6 +283,8 @@
       while (block) {
         if (!penColorEnabled && block.type === 'set_pen_color')
           return "This challenge uses paint buckets — remove the Set Pen Color block to run!";
+        if (!spawnBucketEnabled && (block.type === 'spawn_paint_bucket' || block.type === 'remove_paint_bucket'))
+          return "Spawn/remove bucket blocks are not available in challenges — remove them to run!";
         if (block.type === 'use_skill') {
           const defs = block.paramDefs_ || [];
           for (let i = 0; i < defs.length; i++) {
@@ -388,12 +416,20 @@
               entry.b = Number(block.getFieldValue('B'));
             }
           } else if (block.type === 'spawn_paint_bucket') {
-            const f = block.getField('COLOR');
             entry.x = getNumFromInput(block, 'INPUT_X', params);
             entry.y = getNumFromInput(block, 'INPUT_Y', params);
-            entry.r = f?.r_ ?? 255;
-            entry.g = f?.g_ ?? 0;
-            entry.b = f?.b_ ?? 0;
+            const colorBlock = block.getInput('COLOR_PARAM')?.connection?.targetBlock();
+            if (colorBlock?.type === 'param_ref') {
+              const colorVal = params?.[colorBlock.getFieldValue('PARAM')];
+              entry.r = colorVal?.type === 'color' ? colorVal.r : 0;
+              entry.g = colorVal?.type === 'color' ? colorVal.g : 0;
+              entry.b = colorVal?.type === 'color' ? colorVal.b : 0;
+            } else {
+              const f = block.getField('COLOR');
+              entry.r = f?.r_ ?? 255;
+              entry.g = f?.g_ ?? 0;
+              entry.b = f?.b_ ?? 0;
+            }
           }
           output.push(entry);
         }
@@ -488,7 +524,9 @@
   function saveWorkspace() {
     if (!workspace) return;
     try {
-      const next = JSON.stringify(Blockly.serialization.workspaces.save(workspace));
+      const state = Blockly.serialization.workspaces.save(workspace);
+      state._pythonMode = getPythonMode();
+      const next = JSON.stringify(state);
       const prev = localStorage.getItem(WS_KEY);
       if (prev) localStorage.setItem(WS_KEY + '-backup', prev);
       localStorage.setItem(WS_KEY, next);
@@ -535,6 +573,26 @@
                        'collapseWorkspace', 'expandWorkspace', 'cleanWorkspace']) {
       try { Blockly.ContextMenuRegistry.registry.unregister(id); } catch (_) {}
     }
+
+    Blockly.ContextMenuRegistry.registry.register({
+      id: 'toggle_python_mode',
+      weight: 99,
+      scopeType: Blockly.ContextMenuRegistry.ScopeType.WORKSPACE,
+      displayText: () => getPythonMode() ? 'Disable Python mode' : 'Enable Python mode',
+      preconditionFn: () => 'enabled',
+      callback: () => {
+        const collapsedIds = new Set(
+          workspace.getAllBlocks(false).filter(b => b.isCustomCollapsed_).map(b => b.id)
+        );
+        const state = Blockly.serialization.workspaces.save(workspace);
+        setPythonMode(!getPythonMode());
+        workspace.clear();
+        Blockly.serialization.workspaces.load(state, workspace);
+        for (const block of workspace.getAllBlocks(false)) {
+          if (collapsedIds.has(block.id)) block.customCollapse_?.();
+        }
+      },
+    });
 
     // Blockly's default DELETE_X_BLOCKS label is "Delete %1 Blocks", where %1
     // is computed from the block + every descendant in connection inputs.
@@ -694,7 +752,9 @@
       const saved = localStorage.getItem(WS_KEY);
       if (saved) {
         try {
-          Blockly.serialization.workspaces.load(JSON.parse(saved), workspace);
+          const parsed = JSON.parse(saved);
+          if (parsed._pythonMode) setPythonMode(true);
+          Blockly.serialization.workspaces.load(parsed, workspace);
           // Refresh use_skill blocks now that all define_skill blocks are loaded.
           // (During deserialization the SKILL field change fires before define_skill
           // blocks exist, so updateParamInputs_ may have had nothing to look up.)

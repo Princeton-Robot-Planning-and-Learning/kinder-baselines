@@ -42,6 +42,8 @@
   let tamaMsg = '';
   let tamaVisible = false;
   let tamaIsError = false;
+  let tamaIsWarning = false;
+  let tamaErrorDetail = '';
   let tamaTimer = null;
 
   const TAMA_IDLE_TIPS = [
@@ -65,22 +67,32 @@
   ];
 
   function tamaSay(msg, duration = 5000) {
-    tamaMsg = msg; tamaVisible = true; tamaIsError = false;
+    tamaMsg = msg; tamaVisible = true; tamaIsError = false; tamaIsWarning = false;
     if (tamaTimer) clearTimeout(tamaTimer);
     tamaTimer = setTimeout(() => { tamaVisible = false; }, duration);
   }
 
-  function tamaSayError(msg, duration = 6000) {
-    tamaMsg = msg; tamaVisible = true; tamaIsError = true;
+  function tamaSayError(msg, duration = 6000, detail = '') {
+    tamaMsg = msg; tamaVisible = true; tamaIsError = true; tamaIsWarning = false; tamaErrorDetail = detail;
     if (tamaTimer) clearTimeout(tamaTimer);
     tamaTimer = setTimeout(() => { tamaVisible = false; tamaIsError = false; }, duration);
   }
 
-  function tamaPoke() {
-    tamaSay(TAMA_IDLE_TIPS[Math.floor(Math.random() * TAMA_IDLE_TIPS.length)], 4000);
+  function tamaSayWarning(msg, duration = 6000) {
+    tamaMsg = msg; tamaVisible = true; tamaIsError = false; tamaIsWarning = true;
+    if (tamaTimer) clearTimeout(tamaTimer);
+    tamaTimer = setTimeout(() => { tamaVisible = false; tamaIsWarning = false; }, duration);
   }
 
-  const onKey = e => { if (e.key === 'Escape') { tamaVisible = false; tamaIsError = false; if (tamaTimer) clearTimeout(tamaTimer); } };
+  function tamaPoke() {
+    if (tamaIsError && tamaErrorDetail) {
+      tamaSayWarning(tamaErrorDetail, 6000);
+    } else {
+      tamaSay(TAMA_IDLE_TIPS[Math.floor(Math.random() * TAMA_IDLE_TIPS.length)], 4000);
+    }
+  }
+
+  const onKey = e => { if (e.key === 'Escape') { tamaVisible = false; tamaIsError = false; tamaIsWarning = false; if (tamaTimer) clearTimeout(tamaTimer); } };
   onDestroy(() => document.removeEventListener('keydown', onKey));
 
   onMount(async () => {
@@ -119,6 +131,7 @@
     if (!id) {
       currentChallenge = null; targetTrail = []; paintBuckets = []; visitedBuckets = [];
       blocklyWorkspace.setPenColorEnabled(true);
+      blocklyWorkspace.setSpawnBucketEnabled(true);
       tamaSay("FREE DRAW! No rules, no limits! Just me and the canvas. *chef's kiss*", 4000);
       await loadInitialFrame([]);
       return;
@@ -129,6 +142,7 @@
       currentChallenge = c; targetTrail = c.target_trail || [];
       paintBuckets = c.paint_buckets || []; visitedBuckets = [];
       blocklyWorkspace.setPenColorEnabled((c.paint_buckets?.length ?? 0) === 0);
+      blocklyWorkspace.setSpawnBucketEnabled(false);
       tamaSay(c.hint || c.description || 'Good luck!', 5000);
       await loadInitialFrame(paintBuckets);
     } catch { tamaSay("Failed to load challenge!", 4000); }
@@ -195,7 +209,7 @@
 
         if (doneMsg.error) {
           status = 'ERROR!';
-          tamaSayError(doneMsg.error, 7000);
+          tamaSayError(doneMsg.error, 7000, doneMsg.error_detail || '');
         } else if (doneMsg.infinite_loop) {
           status = 'LOOP!';
           tamaSayError("I'm going in circles!! My while loop ran 100 times and never stopped — I think I'm stuck forever. Could you check that condition?", 7000);
@@ -214,7 +228,16 @@
         visitedBuckets = doneMsg.visited_buckets || [];
         spawnedBuckets = doneMsg.spawned_buckets || [];
 
-        if (currentChallenge && studentTrail.length > 0) {
+        const penEvents = doneMsg.pen_events || [];
+        const penWentDown = penEvents.some(e => e.type === 'down');
+        const usedDefaultColor = penWentDown && penEvents
+          .filter(e => e.type === 'down')
+          .every(e => e.r === 128 && e.g === 128 && e.b === 128);
+        if (!penWentDown && !doneMsg.error && !doneMsg.infinite_loop && !isStopped) {
+          tamaSayWarning("Psst — my pen never touched the canvas! Try adding a PEN DOWN block so I can actually draw something.", 7000);
+        } else if (usedDefaultColor && !doneMsg.error && !doneMsg.infinite_loop && !isStopped) {
+          tamaSayWarning("I drew in default gray! Add a SET PEN COLOR block if you'd like to use a different colour.", 6000);
+        } else if (currentChallenge && studentTrail.length > 0) {
           await requestScore(currentChallenge.id, studentTrail);
         } else if (!currentChallenge && !doneMsg.error && !doneMsg.infinite_loop && !isStopped) {
           tamaSay("Nice drawing! Pick a challenge to get scored!", 4000);
@@ -258,7 +281,7 @@
     paintBuckets={allPaintBuckets} {visitedBuckets}
     showTarget={currentChallenge !== null}
     {canGoPrev} {canGoNext}
-    tamaMsg={tamaMsg} tamaVisible={tamaVisible} {tamaIsError} onTamaPoke={tamaPoke}
+    tamaMsg={tamaMsg} tamaVisible={tamaVisible} {tamaIsError} {tamaIsWarning} onTamaPoke={tamaPoke}
     on:gridClick={e => blocklyWorkspace.setMoveCoords(e.detail.x, e.detail.y)}
     on:gridDrag={e => blocklyWorkspace.setMoveDelta(e.detail.dx, e.detail.dy)}
     on:prevFrame={prevFrame}
