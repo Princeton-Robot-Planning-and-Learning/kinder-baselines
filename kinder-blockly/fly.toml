@@ -1,21 +1,21 @@
 # Fly.io deployment for the Blockly server.
 #
 # Sizing notes:
-# - Each machine runs 2 gunicorn workers (matches 2 dedicated vCPUs).
-# - Each worker pre-warms one pybullet env (~300-500 MB resident baseline).
-# - performance-2x gives dedicated CPU so per-run latency does not depend on
-#   noisy neighbours on the shared pool. Important during classroom sessions
-#   where 20+ students may be running programs simultaneously.
-# - 4 GB memory leaves ~1.5 GB headroom per worker, enough to absorb large
-#   student programs (long repeat_while loops, many trail segments, paint
-#   bucket spawns) and slow pybullet leaks between worker restarts.
+# - Each machine runs 2 gunicorn workers.
+# - Each worker pre-warms one pybullet env (~300-500 MB resident baseline),
+#   so 2 GB memory leaves only modest headroom — adequate for occasional /
+#   single-user traffic but not for concurrent classroom load.
+# - shared-cpu-2x is the idle-period sizing. Per-run latency may vary with
+#   neighbour activity; that's acceptable when no class is in session.
+# - Before a classroom session, upsize to performance-2x / 4 GB (the
+#   previous classroom configuration) via `fly scale vm performance-2x
+#   --memory 4096` and bump count with `fly scale count 15+`.
 # - soft_limit = 2 (= worker count) tells Fly to route to another machine
 #   before queueing requests on this one. hard_limit = 3 gives one slot of
 #   buffer for short /reset and /healthz calls between long /run streams.
 #
 # Total fleet capacity is set by `fly scale count <N>`, not this file. With
-# auto_stop_machines = "suspend", idle machines suspend to near-zero cost,
-# so it is safe to provision well above steady-state demand.
+# auto_stop_machines = "suspend", idle machines suspend to near-zero cost.
 
 app = "kinder-blockly"
 primary_region = "iad"
@@ -53,5 +53,5 @@ primary_region = "iad"
     path = "/healthz"
 
 [[vm]]
-  size = "performance-2x"
-  memory = "4gb"
+  size = "shared-cpu-2x"
+  memory = "2gb"
