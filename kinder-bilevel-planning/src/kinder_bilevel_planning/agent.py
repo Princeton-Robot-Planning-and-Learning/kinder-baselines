@@ -21,18 +21,26 @@ from bilevel_planning.utils import (
     RelationalAbstractSuccessorGenerator,
     RelationalControllerGenerator,
 )
-from prpl_utils.gym_agent import Agent
+from prpl_utils.planning_agent import PlanningAgent
 
 _O = TypeVar("_O", bound=Hashable)
 _U = TypeVar("_U", bound=Hashable)
+_X = TypeVar("_X", bound=Hashable)
 
 
 class AgentFailure(BaseException):
     """Raised when the agent fails to find a plan."""
 
 
-class BilevelPlanningAgent(Agent[_O, _U]):
-    """A general interface for an agent that runs bilevel planning."""
+class BilevelPlanningAgent(PlanningAgent[_O, _U, _X]):
+    """A general interface for an agent that runs bilevel planning.
+
+    The full state-action trajectory is computed once in :meth:`reset` and
+    cached. Callers using the per-action :meth:`Agent.step` API pop actions one
+    at a time; callers using the per-trajectory :meth:`plan` API receive the
+    whole (state, action) sequence in one call. Mixing the two within an
+    episode is unsupported.
+    """
 
     def __init__(
         self,
@@ -45,7 +53,14 @@ class BilevelPlanningAgent(Agent[_O, _U]):
         planning_timeout: float = 30.0,
     ) -> None:
         self._env_models = env_models
+        # `_current_plan` is the remaining action queue consumed by `_get_action`.
+        # `_planned_states` / `_planned_actions` are the immutable record of what
+        # the planner returned in the last `reset`, used by `plan` to expose the
+        # full state-action trajectory.
         self._current_plan: list[_U] | None = None
+        self._planned_states: list[_X] = []
+        self._planned_actions: list[_U] = []
+        self._plan_consumed: bool = False
         self._max_abstract_plans = max_abstract_plans
         self._samples_per_step = samples_per_step
         self._max_skill_horizon = max_skill_horizon
@@ -60,14 +75,28 @@ class BilevelPlanningAgent(Agent[_O, _U]):
         info: dict[str, Any],
     ) -> None:
         super().reset(obs, info)
-        self._current_plan = self._run_planning()
+        self._planned_states, self._planned_actions = self._run_planning()
+        self._current_plan = list(self._planned_actions)
+        self._plan_consumed = False
 
     def _get_action(self) -> _U:
         if not self._current_plan:
             raise AgentFailure("Ran out of planning steps, failure!")
         return self._current_plan.pop(0)
 
-    def _run_planning(self) -> list[_U]:
+    def plan(self) -> list[tuple[_X, _U]]:
+        """Return the full state-action trajectory from the last reset.
+
+        The bilevel planner produces a single plan in :meth:`reset` and does not
+        replan, so the second call within an episode raises :class:`AgentFailure`
+        — matching the per-action exhaust behaviour of :meth:`Agent.step`.
+        """
+        if self._plan_consumed:
+            raise AgentFailure("Ran out of planning steps, failure!")
+        self._plan_consumed = True
+        return list(zip(self._planned_states[:-1], self._planned_actions))
+
+    def _run_planning(self) -> tuple[list[_X], list[_U]]:
         # Create planning problem.
         initial_state = self._env_models.observation_to_state(self._last_observation)
         goal = self._env_models.goal_deriver(initial_state)
@@ -121,4 +150,4 @@ class BilevelPlanningAgent(Agent[_O, _U]):
         if plan is None:
             raise AgentFailure("No plan found")
 
-        return plan.actions
+        return plan.states, plan.actions
