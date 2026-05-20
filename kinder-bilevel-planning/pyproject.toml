@@ -17,7 +17,7 @@ dependencies = [
    "hydra-joblib-launcher",
    "omegaconf",
    "kindergarden>=0.1.0",
-   "prpl_utils>=0.0.1",
+   "prpl_utils>=0.0.7",
    "relational_structs>=0.0.1",
    "tomsgeoms2d>=0.0.1",
    "pybullet_helpers>=0.0.1",
