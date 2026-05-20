@@ -381,6 +381,14 @@ def test_dynpushpullhook2d_bilevel_planning_agent():
     plan = agent._current_plan  # pylint: disable=protected-access
     assert plan is not None and len(plan) > 0, "Agent should have a non-empty plan"
 
+    # The new PlanningAgent.plan() entry point exposes the same trajectory as
+    # (state, action) pairs. Calling it before any agent.step() is intentional:
+    # plan() and step() share an underlying plan but track consumption
+    # independently, so this check doesn't disturb the execution phase below.
+    trajectory = agent.plan()
+    assert len(trajectory) == len(plan)
+    assert all(isinstance(pair, tuple) and len(pair) == 2 for pair in trajectory)
+
     # Execution phase.
     success = False
     for _ in range(3000):
