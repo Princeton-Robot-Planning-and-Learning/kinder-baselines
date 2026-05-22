@@ -9,6 +9,7 @@ from bilevel_planning.structs import (
 )
 from gymnasium.spaces import Space
 from kinder.envs.kinematic3d.base_motion3d import (
+    BaseMotion3DEnvConfig,
     BaseMotion3DObjectCentricState,
     Kinematic3DPointType,
     Kinematic3DRobotType,
@@ -35,12 +36,19 @@ from relational_structs.spaces import ObjectCentricBoxSpace, ObjectCentricStateS
 def create_bilevel_planning_models(
     observation_space: Space,
     action_space: Space,
+    config: BaseMotion3DEnvConfig | None = None,
 ) -> SesameModels:
-    """Create the env models for base motion 3D."""
+    """Create the env models for base motion 3D.
+
+    ``config`` overrides the env config of the internal sim. Defaults to
+    ``BaseMotion3DEnvConfig()`` if not provided.
+    """
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, Kinematic3DRobotActionSpace)
 
-    sim = ObjectCentricBaseMotion3DEnv(allow_state_access=True)
+    if config is None:
+        config = BaseMotion3DEnvConfig()
+    sim = ObjectCentricBaseMotion3DEnv(config=config, allow_state_access=True)
 
     # Convert observations into states. The important thing is that states are hashable.
     def observation_to_state(o: NDArray[np.float32]) -> ObjectCentricState:

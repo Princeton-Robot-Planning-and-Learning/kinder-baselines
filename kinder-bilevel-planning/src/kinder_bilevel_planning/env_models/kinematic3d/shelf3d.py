@@ -15,6 +15,7 @@ from kinder.envs.kinematic3d.object_types import (
 from kinder.envs.kinematic3d.shelf3d import (
     Kinematic3DRobotType,
     ObjectCentricShelf3DEnv,
+    Shelf3DEnvConfig,
     Shelf3DObjectCentricState,
 )
 from kinder.envs.kinematic3d.utils import (
@@ -41,12 +42,25 @@ def create_bilevel_planning_models(
     observation_space: Space,
     action_space: Space,
     num_objects: int = 1,
+    config: Shelf3DEnvConfig | None = None,
 ) -> SesameModels:
-    """Create the env models for shelf 3D."""
+    """Create the env models for shelf 3D.
+
+    ``config`` overrides the env config of the internal sim. Defaults to
+    ``Shelf3DEnvConfig()`` if not provided. Pass a custom config to plan
+    against e.g. a non-default shelf pose; the planner's transition function
+    and state abstractor both see this config via the internal sim, so
+    abstract-state checks (OnFixture) are computed against the configured
+    shelf rather than the dataclass default.
+    """
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, Kinematic3DRobotActionSpace)
 
-    sim = ObjectCentricShelf3DEnv(num_cubes=num_objects, allow_state_access=True)
+    if config is None:
+        config = Shelf3DEnvConfig()
+    sim = ObjectCentricShelf3DEnv(
+        num_cubes=num_objects, config=config, allow_state_access=True
+    )
 
     # Convert observations into states. The important thing is that states are hashable.
     def observation_to_state(o: NDArray[np.float32]) -> ObjectCentricState:
