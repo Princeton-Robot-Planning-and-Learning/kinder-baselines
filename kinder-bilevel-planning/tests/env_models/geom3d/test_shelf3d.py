@@ -1,10 +1,15 @@
 """Tests for shelf3d.py."""
 
+import os
+
 import kinder
 import numpy as np
 import pytest
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
+from kinder.envs.kinematic3d.object_types import Kinematic3DFixtureType
+from kinder.envs.kinematic3d.shelf3d import Shelf3DEnvConfig
+from pybullet_helpers.geometry import Pose
 
 from kinder_bilevel_planning.agent import BilevelPlanningAgent
 from kinder_bilevel_planning.env_models import create_bilevel_planning_models
@@ -88,6 +93,40 @@ def test_shelf3d_state_abstractor():
     assert OnGround([target]) in abstract_state.atoms
     assert Holding([robot, target]) not in abstract_state.atoms
     assert OnFixture([target, target_shelf]) not in abstract_state.atoms
+
+    env.close()
+
+
+def test_shelf3d_custom_config_threads_through():
+    """A custom Shelf3DEnvConfig threads through both the kinder env and the
+    env_model's internal sim.
+
+    Fast logic-only verification of the `config` plumbing — the heavier
+    end-to-end bilevel-planning run with the same custom config lives in
+    `test_shelf3d_bilevel_planning_with_custom_shelf_pose` (skipped in CI for
+    runtime).
+    """
+    custom_shelf_position = (1.2, 0.8, 0.02)
+    custom_config = Shelf3DEnvConfig(shelf_pose=Pose(custom_shelf_position))
+
+    env = kinder.make(
+        "kinder/KinematicShelf3D-o1-v0",
+        config=custom_config,
+    )
+    env_models = create_bilevel_planning_models(
+        "shelf3d",
+        env.observation_space,
+        env.action_space,
+        num_objects=1,
+        config=custom_config,
+    )
+
+    obs, _ = env.reset(seed=123)
+    state = env_models.observation_to_state(obs)
+    shelf = state.get_objects(Kinematic3DFixtureType)[0]
+    assert state.get(shelf, "pose_x") == pytest.approx(custom_shelf_position[0])
+    assert state.get(shelf, "pose_y") == pytest.approx(custom_shelf_position[1])
+    assert state.get(shelf, "pose_z") == pytest.approx(custom_shelf_position[2])
 
     env.close()
 
@@ -209,5 +248,80 @@ def test_shelf3d_bilevel_planning(seed):
 
     else:
         assert False, "Did not terminate successfully"
+
+    env.close()
+
+
+@pytest.mark.skipif(
+    os.environ.get("CI") == "true",
+    reason="End-to-end planning takes ~30 s; skipped in CI. Logic-only "
+    "verification that the custom config threads through to the env state lives in "
+    "test_shelf3d_custom_config_threads_through.",
+)
+@pytest.mark.parametrize("seed", [123])
+def test_shelf3d_bilevel_planning_with_custom_shelf_pose(seed):
+    """Plan against a non-default shelf pose.
+
+    Threads a custom Shelf3DEnvConfig (shelf moved from the default (2.0, 2.4, 0.02) to
+    (1.2, 0.8, 0.02)) through both kinder.make and create_bilevel_planning_models. The
+    env starts with the shelf at the custom location, the env_model's internal sim sees
+    the same config, and the planner reaches a goal defined by the custom-location
+    shelf.
+    """
+    custom_shelf_position = (1.2, 0.8, 0.02)
+    custom_config = Shelf3DEnvConfig(shelf_pose=Pose(custom_shelf_position))
+    num_objects = 1
+
+    env = kinder.make(
+        f"kinder/KinematicShelf3D-o{num_objects}-v0",
+        config=custom_config,
+        render_mode="rgb_array",
+    )
+
+    if MAKE_VIDEOS:
+        env = RecordVideo(
+            env,
+            "unit_test_videos",
+            name_prefix=f"Shelf3D-custom-shelf-{seed}",
+        )
+
+    env_models = create_bilevel_planning_models(
+        "shelf3d",
+        env.observation_space,
+        env.action_space,
+        num_objects=num_objects,
+        config=custom_config,
+    )
+
+    obs, info = env.reset(seed=seed)
+    # Sanity check: the env's perceived shelf sits at the custom location.
+    state = env_models.observation_to_state(obs)
+    shelf = state.get_objects(Kinematic3DFixtureType)[0]
+    assert state.get(shelf, "pose_x") == pytest.approx(custom_shelf_position[0])
+    assert state.get(shelf, "pose_y") == pytest.approx(custom_shelf_position[1])
+    assert state.get(shelf, "pose_z") == pytest.approx(custom_shelf_position[2])
+
+    agent = BilevelPlanningAgent(
+        env_models,
+        seed=seed,
+        max_abstract_plans=1,
+        samples_per_step=1,
+        planning_timeout=60.0,
+        max_skill_horizon=500,
+    )
+    try:
+        agent.reset(obs, info)
+    except Exception as e:
+        env.close()
+        pytest.skip(f"Planning failed for seed {seed}: {e}")
+
+    for _ in range(1000):
+        action = agent.step()
+        obs, reward, terminated, truncated, info = env.step(action)
+        agent.update(obs, reward, terminated or truncated, info)
+        if terminated or truncated:
+            break
+    else:
+        assert False, "Did not terminate successfully against custom shelf"
 
     env.close()

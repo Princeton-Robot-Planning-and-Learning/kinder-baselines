@@ -15,6 +15,7 @@ from kinder.envs.kinematic3d.object_types import (
 from kinder.envs.kinematic3d.transport3d import (
     Kinematic3DRobotType,
     ObjectCentricTransport3DEnv,
+    Transport3DEnvConfig,
     Transport3DObjectCentricState,
 )
 from kinder.envs.kinematic3d.utils import (
@@ -41,12 +42,21 @@ def create_bilevel_planning_models(
     observation_space: Space,
     action_space: Space,
     num_objects: int = 1,
+    config: Transport3DEnvConfig | None = None,
 ) -> SesameModels:
-    """Create the env models for shelf 3D."""
+    """Create the env models for transport 3D.
+
+    ``config`` overrides the env config of the internal sim. Defaults to
+    ``Transport3DEnvConfig()`` if not provided.
+    """
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, Kinematic3DRobotActionSpace)
 
-    sim = ObjectCentricTransport3DEnv(num_cubes=num_objects, allow_state_access=True)
+    if config is None:
+        config = Transport3DEnvConfig()
+    sim = ObjectCentricTransport3DEnv(
+        num_cubes=num_objects, config=config, allow_state_access=True
+    )
 
     # Convert observations into states. The important thing is that states are hashable.
     def observation_to_state(o: NDArray[np.float32]) -> ObjectCentricState:

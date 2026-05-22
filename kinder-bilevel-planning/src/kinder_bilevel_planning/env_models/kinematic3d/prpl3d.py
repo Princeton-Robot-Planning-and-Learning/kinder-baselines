@@ -15,6 +15,7 @@ from kinder.envs.kinematic3d.object_types import (
 from kinder.envs.kinematic3d.prpl3d import (
     Kinematic3DRobotType,
     ObjectCentricPrplLab3DEnv,
+    PrplLab3DEnvConfig,
     PrplLab3DObjectCentricState,
 )
 from kinder.envs.kinematic3d.utils import (
@@ -42,12 +43,21 @@ def create_bilevel_planning_models(
     observation_space: Space,
     action_space: Space,
     num_objects: int = 1,
+    config: PrplLab3DEnvConfig | None = None,
 ) -> SesameModels:
-    """Create the env models for PrplLab3D."""
+    """Create the env models for PrplLab3D.
+
+    ``config`` overrides the env config of the internal sim. Defaults to
+    ``PrplLab3DEnvConfig()`` if not provided.
+    """
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, Kinematic3DRobotActionSpace)
 
-    sim = ObjectCentricPrplLab3DEnv(num_cubes=num_objects, allow_state_access=True)
+    if config is None:
+        config = PrplLab3DEnvConfig()
+    sim = ObjectCentricPrplLab3DEnv(
+        num_cubes=num_objects, config=config, allow_state_access=True
+    )
 
     def observation_to_state(o: NDArray[np.float32]) -> ObjectCentricState:
         return observation_space.devectorize(o)
