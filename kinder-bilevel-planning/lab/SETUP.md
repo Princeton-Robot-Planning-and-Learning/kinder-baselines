@@ -26,20 +26,22 @@ cd kinder-baselines
 
 ## 3. Create the environment and install the lab packages
 
-Run this from the `kinder-baselines` root:
+Run this from the `kinder-baselines` root. **Activate the environment before
+installing** — that way the packages land in this venv even if you already have
+another environment active (e.g. conda's `base`):
 
 ```bash
 uv venv --python=3.10
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 uv pip install -e "./kinder-models[develop]" -e "./kinder-bilevel-planning[develop]"
 ```
 
 (This installs just the two packages the lab uses and their dependencies — not the
 other baselines.)
 
-## 4. Activate, go to the lab, and verify
+## 4. Go to the lab and verify
 
 ```bash
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
 cd kinder-bilevel-planning/lab
 python -c "import kinder, kinder_models, bilevel_planning, kinder_bilevel_planning; print('install OK')"
 python -m pytest part1_stacking -q
@@ -61,6 +63,7 @@ Then open `README.md` and start with **Part 1**.
 - **Step 3 errors about a missing file / package** → make sure you're in the
   `kinder-baselines` root directory (the one containing `kinder-models/` and
   `kinder-bilevel-planning/`).
-- **`ModuleNotFoundError` in step 4** → re-run step 3 and watch for errors; make
-  sure the venv is activated (your prompt should show `(.venv)`).
+- **`ModuleNotFoundError` in step 4** → your prompt should show `(.venv)`; if not,
+  run `source .venv/bin/activate` and re-run the `uv pip install` from step 3 (if
+  you installed with another env active, the packages may have gone there instead).
 - Still stuck? Send us the exact command you ran and the full error output.
