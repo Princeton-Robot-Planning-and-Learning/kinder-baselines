@@ -7,11 +7,15 @@ predicates, skills, and operators, and watch a planner use them — including a 
 
 ## Setup
 
-Use the `kinder-bilevel-planning` virtualenv (activate it however you normally
-do), and run everything from this `lab/` directory:
+**Do this before the lab:** follow [`SETUP.md`](SETUP.md) to install `uv`, clone
+the repo, and install the lab packages.
+
+Once installed, activate the environment and run everything from this `lab/`
+directory:
 
 ```bash
-cd lab
+source ../../.venv/bin/activate     # the venv created in SETUP.md
+cd kinder-bilevel-planning/lab
 python -m pytest part1_stacking -q
 ```
 
