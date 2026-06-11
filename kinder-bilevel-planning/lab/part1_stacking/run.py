@@ -8,31 +8,16 @@ barrier between them. The two-step plan
 
 is the same as before, but now the motion-planned controllers must route the
 robot -- and the carried block -- up and over the barrier (a straight path
-collides). Run from the repo root:
+collides). Run from the lab/ directory:
 
-    python -m part1_stacking.run      (from the lab/ directory)
+    python -m part1_stacking.run
 """
 
-import pickle
 from pathlib import Path
 
 import kinder
 import numpy as np
-from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
-    AbstractPlanGenerator,
-)
-from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
-    RelationalHeuristicSearchAbstractPlanGenerator,
-)
-from bilevel_planning.bilevel_planners.sesame_planner import SesamePlanner
-from bilevel_planning.structs import PlanningProblem
-from bilevel_planning.trajectory_samplers.parameterized_controller_sampler import (
-    ParameterizedControllerTrajectorySampler,
-)
-from bilevel_planning.utils import (
-    RelationalAbstractSuccessorGenerator,
-    RelationalControllerGenerator,
-)
+from bilevel_planning.sesame import run_sesame
 from part1_stacking.models import create_stacking_models
 
 ENV_NAME = "kinder/Obstruction2D-o2-v0"
@@ -41,7 +26,6 @@ SEED = 0
 MAX_ABSTRACT_PLANS = 1
 SAMPLES_PER_STEP = 5
 MAX_SKILL_HORIZON = 200
-HEURISTIC_NAME = "hff"
 PLANNING_TIMEOUT = 120.0
 
 # Hand-designed geometry (world x in [0, 1.618]; blocks rest on the table top at
@@ -90,61 +74,18 @@ def build_bilevel_planning_graph() -> tuple:
         initial_state.get_object_from_name("target_surface"), "x", TARGET_SURFACE_X
     )
 
-    goal = env_models.goal_deriver(initial_state)
-    problem = PlanningProblem(
-        env_models.state_space,
-        env_models.action_space,
+    plan, bpg = run_sesame(
+        env_models,
         initial_state,
-        env_models.transition_fn,
-        goal,
-    )
-    trajectory_sampler = ParameterizedControllerTrajectorySampler(
-        controller_generator=RelationalControllerGenerator(env_models.skills),
-        transition_function=env_models.transition_fn,
-        state_abstractor=env_models.state_abstractor,
-        max_trajectory_steps=MAX_SKILL_HORIZON,
-    )
-    abstract_plan_generator: AbstractPlanGenerator = (
-        RelationalHeuristicSearchAbstractPlanGenerator(
-            env_models.types,
-            env_models.predicates,
-            env_models.operators,
-            HEURISTIC_NAME,
-            seed=SEED,
-            precomputed_ground_operators=env_models.ground_operators,
-        )
-    )
-    abstract_successor_fn = RelationalAbstractSuccessorGenerator(
-        env_models.operators,
-        precomputed_ground_operators=env_models.ground_operators,
-    )
-    planner = SesamePlanner(
-        abstract_plan_generator,
-        trajectory_sampler,
-        MAX_ABSTRACT_PLANS,
-        SAMPLES_PER_STEP,
-        abstract_successor_fn,
-        env_models.state_abstractor,
         seed=SEED,
+        max_abstract_plans=MAX_ABSTRACT_PLANS,
+        samples_per_step=SAMPLES_PER_STEP,
+        max_skill_horizon=MAX_SKILL_HORIZON,
+        timeout=PLANNING_TIMEOUT,
     )
-    plan, bpg = planner.run(problem, timeout=PLANNING_TIMEOUT)
     if plan is None:
         raise RuntimeError("Planner found no plan for the stacking instance.")
     return plan.states[-1], bpg, constant_state
-
-
-def _bake_constants_into_states(bundle_path: Path, constant_state) -> None:
-    """Merge the constant (static) objects into each pickled state in place."""
-    with open(bundle_path, "rb") as f:
-        bundle = pickle.load(f)
-    baked = {}
-    for node_id, state in bundle["states"].items():
-        merged = state.copy()
-        merged.data.update(constant_state.data)  # type: ignore[attr-defined]
-        baked[node_id] = merged
-    bundle["states"] = baked
-    with open(bundle_path, "wb") as f:
-        pickle.dump(bundle, f)
 
 
 def main() -> None:
@@ -152,8 +93,7 @@ def main() -> None:
     final_state, bpg, constant_state = build_bilevel_planning_graph()
     out_path = Path(__file__).parent / "data" / "stacking.pkl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    bpg.export(out_path, final_state=final_state)
-    _bake_constants_into_states(out_path, constant_state)
+    bpg.export(out_path, final_state=final_state, constant_state=constant_state)
     renderer_path = Path(__file__).parent.parent / "renderer.py"
     print(f"Wrote visualizer bundle to {out_path}")
     print(
