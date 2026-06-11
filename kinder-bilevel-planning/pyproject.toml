@@ -21,7 +21,7 @@ dependencies = [
    "relational_structs>=0.0.1",
    "tomsgeoms2d>=0.0.1",
    "pybullet_helpers>=0.0.1",
-   "bilevel_planning>=0.1.3",
+   "bilevel_planning>=0.1.4",
 ]
 
 [project.optional-dependencies]
