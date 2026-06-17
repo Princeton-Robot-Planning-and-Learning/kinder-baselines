@@ -3,12 +3,13 @@
 # kindergarden, kinder_models, and kinder_bilevel_planning, plus pytest for the
 # exercises.
 #
-# The three lab packages pull every backend by default. To install the lab
-# without PyBullet, install them with --no-deps and then this file (pip resolves
-# the transitive dependencies of the entries below normally):
+# kindergarden pulls every backend by default. The lab needs only the
+# environments plus the planner, and it vendors the kinder_models helpers it uses
+# (see lab/crv_skills.py), so install kindergarden with --no-deps and then this
+# file (pip resolves the transitive dependencies of the entries below normally,
+# including the bilevel_planning planner):
 #
-#     uv pip install --no-deps kindergarden \
-#         -e ./kinder-models -e ./kinder-bilevel-planning
+#     uv pip install --no-deps kindergarden
 #     uv pip install -r kinder-bilevel-planning/lab/requirements/lab2d.txt
 #
 gymnasium

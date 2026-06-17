@@ -42,27 +42,29 @@ other baselines.)
 ### Slim install (no PyBullet — smaller and faster)
 
 The command above pulls every simulation backend, including PyBullet and MuJoCo.
-The lab only uses the 2D (Obstruction2D) environments, which need neither. To
-install just those, install the packages without their dependencies and then the
-lab's 2D requirements file:
+The lab only uses the 2D (Obstruction2D) environments, which need neither — and it
+needs only the environments (`kindergarden`) plus the planner (`bilevel_planning`,
+pulled in by the requirements file below). It vendors the few `kinder_models`
+helpers it uses (see `lab/crv_skills.py`), so neither `kinder-models` nor
+`kinder-bilevel-planning` has to be installed. Install just the environments
+without their backend dependencies, then the lab's 2D requirements file:
 
 ```bash
 uv venv --python=3.10
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-uv pip install --no-deps kindergarden \
-    -e ./kinder-models -e ./kinder-bilevel-planning
+uv pip install --no-deps kindergarden
 uv pip install -r kinder-bilevel-planning/lab/requirements/lab2d.txt
 ```
 
 This produces the same working lab with a much lighter install — useful on
 machines (or hosted notebooks like Colab) where the full backend stack is slow or
-unnecessary.
+unnecessary. (The Colab notebooks run exactly this install for you.)
 
 ## 4. Go to the lab and verify
 
 ```bash
 cd kinder-bilevel-planning/lab
-python -c "import kinder, kinder_models, bilevel_planning, kinder_bilevel_planning; print('install OK')"
+python -c "import kinder, bilevel_planning; print('install OK')"
 python -m pytest part1_stacking -q
 ```
 
