@@ -39,6 +39,25 @@ uv pip install -e "./kinder-models[develop]" -e "./kinder-bilevel-planning[devel
 (This installs just the two packages the lab uses and their dependencies — not the
 other baselines.)
 
+### Slim install (no PyBullet — smaller and faster)
+
+The command above pulls every simulation backend, including PyBullet and MuJoCo.
+The lab only uses the 2D (Obstruction2D) environments, which need neither. To
+install just those, install the packages without their dependencies and then the
+lab's 2D requirements file:
+
+```bash
+uv venv --python=3.10
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+uv pip install --no-deps kindergarden \
+    -e ./kinder-models -e ./kinder-bilevel-planning
+uv pip install -r kinder-bilevel-planning/lab/requirements/lab2d.txt
+```
+
+This produces the same working lab with a much lighter install — useful on
+machines (or hosted notebooks like Colab) where the full backend stack is slow or
+unnecessary.
+
 ## 4. Go to the lab and verify
 
 ```bash
