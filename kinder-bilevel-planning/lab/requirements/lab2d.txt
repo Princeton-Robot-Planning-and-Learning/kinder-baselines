@@ -1,0 +1,34 @@
+# 2D-only dependency set for the bilevel-planning lab: no PyBullet, MuJoCo,
+# pygame, or pymunk. This is the union of the non-backend dependencies of
+# kindergarden, kinder_models, and kinder_bilevel_planning, plus pytest for the
+# exercises.
+#
+# The three lab packages pull every backend by default. To install the lab
+# without PyBullet, install them with --no-deps and then this file (pip resolves
+# the transitive dependencies of the entries below normally):
+#
+#     uv pip install --no-deps kindergarden \
+#         -e ./kinder-models -e ./kinder-bilevel-planning
+#     uv pip install -r kinder-bilevel-planning/lab/requirements/lab2d.txt
+#
+gymnasium
+matplotlib
+numpy
+Pillow
+dill
+shapely>=2.1.2
+scipy>=1.14.0
+relational_structs>=0.0.1
+prpl_utils>=0.0.7
+tomsgeoms2d>=0.0.1
+spatialmath-python
+h5py
+flask-socketio
+opencv-python>=4.9.0
+pandas
+pandas-stubs
+hydra-core
+hydra-joblib-launcher
+omegaconf
+bilevel_planning>=0.1.3
+pytest>=7.2.2
