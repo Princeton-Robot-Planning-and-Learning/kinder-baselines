@@ -49,7 +49,6 @@ kinder-reward-grounding/
     predicates/                 Predicate registry and predicate functions
     rewards/                    Progress metrics, reward composers, evaluator
     utils/                      Geometry helpers
-    libraries/                  Backward-compatible import wrappers
   tests/                        Unit tests for specs, predicates, rewards, grounders
 ```
 
