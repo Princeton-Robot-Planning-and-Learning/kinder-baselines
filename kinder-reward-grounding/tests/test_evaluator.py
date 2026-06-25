@@ -1,5 +1,8 @@
 """Tests for reward evaluator wiring."""
 
+# Test names document behavior; helper methods are intentionally minimal.
+# pylint: disable=missing-function-docstring
+
 from typing import Any
 
 import numpy as np

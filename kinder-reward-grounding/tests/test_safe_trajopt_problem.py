@@ -1,5 +1,10 @@
 """Tests for the reward-grounding SafeKinderTrajOptProblem wrapper."""
 
+# Test doubles are intentionally small, and callback signatures mirror the
+# production reward interface.
+# pylint: disable=missing-function-docstring,too-few-public-methods
+# pylint: disable=too-many-arguments,too-many-positional-arguments
+
 from __future__ import annotations
 
 from typing import Any

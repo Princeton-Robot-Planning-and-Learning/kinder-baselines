@@ -1,5 +1,8 @@
 """Reward composition strategies."""
 
+# Composer implementations and their protocol intentionally expose one method.
+# pylint: disable=too-few-public-methods
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -43,7 +46,7 @@ class RewardComposer(Protocol):
 
     def compose(self, composer_input: ComposerInput) -> ComposerOutput:
         """Compose evaluated subgoals into one scalar reward."""
-        ...
+        raise NotImplementedError
 
 
 class SequentialComposer:

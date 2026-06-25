@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from collections.abc import Mapping
+from typing import Any, Protocol, TypeAlias
 
 import numpy as np
+
+StateLike: TypeAlias = np.ndarray | Mapping[str, float]
 
 
 class EnvAdapter(Protocol):
     """Interface for decoding states and computing object-centric quantities."""
 
-    def decode(self, env: Any, flat_state: np.ndarray) -> Any:
-        """Decode a flat planner state into a structured state."""
+    def decode(self, env: Any, state: StateLike) -> Any:
+        """Decode a planner or object-centric state into a structured state."""
 
     def get(self, state: Any, obj: Any, feature: str) -> Any:
         """Get a feature value for an object."""

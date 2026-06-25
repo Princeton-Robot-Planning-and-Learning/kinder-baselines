@@ -1,5 +1,8 @@
 """Tests for predicate and progress metric registries."""
 
+# Test names document behavior; per-test docstrings would duplicate them.
+# pylint: disable=missing-function-docstring
+
 from kinder_reward_grounding.predicates import PREDICATES
 from kinder_reward_grounding.rewards import PROGRESS_METRICS
 

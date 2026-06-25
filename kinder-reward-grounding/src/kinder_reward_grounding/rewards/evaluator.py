@@ -1,11 +1,17 @@
 """Reward evaluator that compiles RewardSpec into a reward_fn."""
 
+# The MPC-compatible callable signature and subgoal evaluation loop are
+# intentionally explicit in this prototype.
+# pylint: disable=too-few-public-methods,too-many-arguments
+# pylint: disable=too-many-positional-arguments,too-many-locals
+
 from __future__ import annotations
 
 from typing import Any
 
 import numpy as np
 
+from kinder_reward_grounding.adapters.base import StateLike
 from kinder_reward_grounding.predicates import get_predicate
 from kinder_reward_grounding.rewards.composers import (
     ComposerInput,
@@ -32,9 +38,9 @@ class RewardEvaluator:
 
     def __call__(
         self,
-        state: np.ndarray,
+        state: StateLike,
         action: np.ndarray,
-        next_state: np.ndarray,
+        next_state: StateLike,
         env_reward: float,
         terminated: bool,
         env: Any,

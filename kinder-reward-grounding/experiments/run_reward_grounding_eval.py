@@ -8,6 +8,11 @@ Each seed is written to one numbered subdirectory containing config.yaml and
 results.csv.
 """
 
+# Evaluation jobs deliberately keep their full serialized configuration and
+# episode loop explicit for reproducibility.
+# pylint: disable=too-many-arguments,too-many-positional-arguments
+# pylint: disable=too-many-locals,too-many-statements
+
 from __future__ import annotations
 
 import argparse
@@ -22,6 +27,8 @@ from typing import Any
 import kinder
 import numpy as np
 import yaml
+from gymnasium.spaces import Box
+from PIL import Image as PILImage
 from prpl_utils.trajopt.mpc_wrapper import MPCWrapper
 from prpl_utils.trajopt.predictive_sampling import (
     PredictiveSamplingHyperparameters,
@@ -54,6 +61,7 @@ class EnvConfig:
 
 
 @dataclass(frozen=True)
+# pylint: disable-next=too-many-instance-attributes
 class EvalConfig:
     """Serializable evaluation configuration."""
 
@@ -212,6 +220,8 @@ def run_episode(
 ) -> dict[str, Any]:
     """Run one MPC evaluation episode and return analyzer-compatible metrics."""
     obs, _ = eval_env.reset(seed=episode_seed)
+    if not isinstance(sim_env.action_space, Box):
+        raise TypeError("Expected a continuous Box action space.")
     action_range = sim_env.action_space.high - sim_env.action_space.low
     problem = SafeKinderTrajOptProblem(
         env=sim_env,
@@ -239,7 +249,9 @@ def run_episode(
     steps = 0
     success = False
     success_reason = "max_steps"
-    frames = [eval_env.render()] if gif_path is not None else []
+    frames: list[np.ndarray] = []
+    if gif_path is not None:
+        frames.append(render_frame(eval_env))
 
     start = time.perf_counter()
     mpc.reset(problem)
@@ -289,7 +301,7 @@ def run_episode(
         steps = step_idx + 1
 
         if gif_path is not None:
-            frames.append(eval_env.render())
+            frames.append(render_frame(eval_env))
 
         if terminated:
             success = True
@@ -320,8 +332,6 @@ def run_episode(
 
 def save_gif(frames: list[np.ndarray], path: Path) -> None:
     """Save rendered frames as a GIF."""
-    from PIL import Image as PILImage
-
     path.parent.mkdir(parents=True, exist_ok=True)
     pil_frames = [PILImage.fromarray(frame) for frame in frames]
     pil_frames[0].save(
@@ -332,6 +342,14 @@ def save_gif(frames: list[np.ndarray], path: Path) -> None:
         duration=100,
         loop=0,
     )
+
+
+def render_frame(env: Any) -> np.ndarray:
+    """Render one RGB frame or fail clearly if rendering is unavailable."""
+    frame = env.render()
+    if frame is None:
+        raise RuntimeError("Environment returned no frame in rgb_array mode.")
+    return np.asarray(frame)
 
 
 def run_seed(job_idx: int, cfg: EvalConfig, env_cfg: EnvConfig) -> None:

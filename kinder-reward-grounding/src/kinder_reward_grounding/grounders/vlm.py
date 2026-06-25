@@ -4,6 +4,9 @@ The real VLM implementation is intentionally absent. This module defines the
 boundary expected by reward code and provides a deterministic mock for tests.
 """
 
+# Grounders are callable strategy objects with one public operation.
+# pylint: disable=too-few-public-methods
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

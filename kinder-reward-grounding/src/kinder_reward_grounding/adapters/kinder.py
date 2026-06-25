@@ -66,7 +66,9 @@ class KinDERObjectCentricAdapter:
 
     def get_constant_state(self, env: Any) -> Any:
         """Get the KinDER initial constant state."""
-        return env.unwrapped._object_centric_env.initial_constant_state
+        # KinDER currently exposes constant state only through this internal
+        # object-centric bridge.
+        return env.unwrapped._object_centric_env.initial_constant_state  # pylint: disable=protected-access
 
     def get_constant_by_name(self, env: Any, name: str) -> tuple[Any, Any]:
         """Get a constant object and its state by object name."""

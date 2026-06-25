@@ -1,5 +1,8 @@
 """Tests for reward output contracts."""
 
+# Test names document behavior; per-test docstrings would duplicate them.
+# pylint: disable=missing-function-docstring
+
 import math
 
 from kinder_reward_grounding.rewards import (

@@ -1,5 +1,9 @@
 """Spec-driven reward MPC sanity rollout for Motion2D."""
 
+# Keeping the complete rollout in one function makes this example easy to run
+# and modify independently.
+# pylint: disable=too-many-locals
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,6 +12,7 @@ from typing import Any
 import gymnasium as gym
 import kinder
 import numpy as np
+from gymnasium.spaces import Box
 from PIL import Image as PILImage
 from prpl_utils.trajopt.mpc_wrapper import MPCWrapper
 from prpl_utils.trajopt.predictive_sampling import (
@@ -22,6 +27,14 @@ from kinder_reward_grounding.safe_trajopt_problem import SafeKinderTrajOptProble
 
 ENV_ID = "kinder/Motion2D-p5-v0"
 OUTPUT_PATH = Path("outputs/motion2d_spec_reward_mpc.gif")
+
+
+def render_frame(env: Any) -> np.ndarray:
+    """Render one RGB frame or fail clearly if rendering is unavailable."""
+    frame = env.render()
+    if frame is None:
+        raise RuntimeError("Environment returned no frame in rgb_array mode.")
+    return np.asarray(frame)
 
 
 def robot_goal_distance(
@@ -56,6 +69,8 @@ def main() -> None:
         reward_fn=reward_fn,
     )
 
+    if not isinstance(sim_env.action_space, Box):
+        raise TypeError("Expected a continuous Box action space.")
     action_range = sim_env.action_space.high - sim_env.action_space.low
     config = PredictiveSamplingHyperparameters(
         num_rollouts=40,
@@ -66,7 +81,7 @@ def main() -> None:
     mpc = MPCWrapper(solver, replan_interval=1)
     mpc.reset(problem)
 
-    frames = [eval_env.render()]
+    frames: list[np.ndarray] = [render_frame(eval_env)]
     distances = [robot_goal_distance(eval_env, obs, adapter)]
     print(f"Initial robot-goal distance: {distances[0]:.4f}")
 
@@ -77,7 +92,7 @@ def main() -> None:
     for step in range(max_steps):
         action = mpc.step(obs)
         obs, _, terminated, truncated, _ = eval_env.step(action)
-        frames.append(eval_env.render())
+        frames.append(render_frame(eval_env))
 
         distance = robot_goal_distance(eval_env, obs, adapter)
         distances.append(distance)

@@ -1,5 +1,8 @@
 """Tests for reward composers."""
 
+# Test names document behavior; per-test docstrings would duplicate them.
+# pylint: disable=missing-function-docstring
+
 from kinder_reward_grounding.composers import (
     ComposerInput,
     SequentialComposer,

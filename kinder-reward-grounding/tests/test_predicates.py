@@ -1,5 +1,8 @@
 """Tests for predicate output contracts."""
 
+# Test names document behavior; helper methods are intentionally minimal.
+# pylint: disable=missing-function-docstring
+
 from typing import Any
 
 from kinder_reward_grounding.predicates import held, near, vertical_gap_below

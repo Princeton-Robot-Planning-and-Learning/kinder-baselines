@@ -1,5 +1,8 @@
 """Tests for reward specifications."""
 
+# Test names document behavior; per-test docstrings would duplicate them.
+# pylint: disable=missing-function-docstring
+
 from kinder_reward_grounding.env_specs.dyn_pushpullhook2d import (
     make_dyn_pushpullhook2d_reward_spec,
 )
