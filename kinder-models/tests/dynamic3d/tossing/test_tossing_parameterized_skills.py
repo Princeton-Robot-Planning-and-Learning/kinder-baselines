@@ -1093,11 +1093,11 @@ def test_pick_ground_toss():
     """Test pick and place in ground environment with 1 cube."""
 
     # Create the environment.
-    num_cubes = 1
+    num_cubes = 3
     env = kinder.make(
         f"kinder/Tossing3D-o{num_cubes}-v0",
         render_mode="rgb_array",
-        scene_bg=False,
+        scene_bg=True,
     )
     if MAKE_VIDEOS:
         env.unwrapped._object_centric_env.set_render_camera("task_view")  # type: ignore # pylint: disable=protected-access

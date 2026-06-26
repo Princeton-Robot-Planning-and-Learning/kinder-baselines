@@ -12,3 +12,4 @@ env_model_kwargs:
 # Override default approach parameters for this environment.
 samples_per_step: 20
 max_abstract_plans: 5
+make_videos: true

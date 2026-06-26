@@ -77,8 +77,8 @@ def test_pick_place_skill():
     """Test pick and place skill in ground environment with 1 cube."""
 
     # Create the environment.
-    num_cubes = 1
-    env = kinder.make(f"kinder/Shelf3D-o{num_cubes}-v0", render_mode="rgb_array")
+    num_cubes = 3
+    env = kinder.make(f"kinder/Shelf3D-o{num_cubes}-v0", render_mode="rgb_array", scene_bg=True)
     if MAKE_VIDEOS:
         env = RecordVideo(
             env, "unit_test_videos", name_prefix=f"TidyBot3D-cupboard-o{num_cubes}-real"
@@ -124,7 +124,7 @@ def test_pick_place_skill():
     object_parameters = (robot, cube, cupboard)
     controller = lifted_controller.ground(object_parameters)
     params = controller.sample_parameters(state, np.random.default_rng(123))
-    # params = np.array([1.02, 0.0, -1.5707964])
+    params = np.array([0.95, 0.0, -1.5707964])
 
     # Reset and execute the controller until it terminates.
     controller.reset(state, params)

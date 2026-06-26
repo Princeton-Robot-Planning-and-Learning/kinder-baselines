@@ -126,8 +126,14 @@ def create_bilevel_planning_models(
 
     # Goal deriver.
     def goal_deriver(x: ObjectCentricState) -> RelationalAbstractGoal:
+        robot = x.get_objects(KinRobotType)[0]
+        hooks = x.get_objects(HookType)
         target_block = x.get_objects(TargetBlockType)[0]
-        atoms = {GroundAtom(TargetAtGoal, [target_block])}
+        hook = hooks[0]
+        atoms = {
+            GroundAtom(HoldingHook, [robot, hook]),
+            GroundAtom(TargetAtGoal, [target_block]),
+        }
         return RelationalAbstractGoal(atoms, state_abstractor)
 
     # Variables (names must match lifted controller variables).
