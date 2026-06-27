@@ -102,7 +102,8 @@ class SequentialComposer:
         )
 
 
-class SoftWeightedComposer:
+# Draft composers are kept internal until their semantics and tests are defined.
+class _SoftWeightedComposer:
     """Skeleton for soft weighted subgoal composition."""
 
     def compose(self, composer_input: ComposerInput) -> ComposerOutput:
@@ -110,7 +111,7 @@ class SoftWeightedComposer:
         raise NotImplementedError
 
 
-class HybridComposer:
+class _HybridComposer:
     """Skeleton for hybrid sequential and weighted composition."""
 
     def compose(self, composer_input: ComposerInput) -> ComposerOutput:

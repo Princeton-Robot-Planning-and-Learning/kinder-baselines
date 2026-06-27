@@ -3,10 +3,8 @@
 from kinder_reward_grounding.rewards.composers import (
     ComposerInput,
     ComposerOutput,
-    HybridComposer,
     RewardComposer,
     SequentialComposer,
-    SoftWeightedComposer,
     SubgoalEvaluation,
 )
 from kinder_reward_grounding.rewards.evaluator import RewardEvaluator
@@ -24,12 +22,10 @@ __all__ = [
     "PROGRESS_METRICS",
     "ComposerInput",
     "ComposerOutput",
-    "HybridComposer",
     "ProgressMetricFn",
     "RewardComposer",
     "RewardEvaluator",
     "SequentialComposer",
-    "SoftWeightedComposer",
     "SubgoalEvaluation",
     "distance_progress",
     "get_progress_metric",

@@ -101,7 +101,7 @@ def main() -> None:
     """Run the spec-driven reward MPC rollout and save a GIF."""
     kinder.register_all_environments()
 
-    eval_env = kinder.make(ENV_ID, render_mode="rgb_array")
+    eval_env = kinder.make(ENV_ID, render_mode="rgb_array", allow_state_access=True)
     sim_env = kinder.make(ENV_ID, allow_state_access=True)
 
     obs, _ = eval_env.reset(seed=42)

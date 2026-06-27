@@ -83,6 +83,10 @@ class SafeKinderTrajOptProblem(KinderTrajOptProblem):
     @staticmethod
     def _is_known_geometry_assertion(err: AssertionError) -> bool:
         """Return whether an AssertionError came from known dynamic geometry code."""
+        # Temporary workaround: this traceback-based classification is coupled
+        # to kindergarden internals. Replace it once kindergarden /
+        # KinderTrajOptProblem raises a typed exception such as
+        # InvalidGeometryError for invalid dynamic geometry.
         geometry_markers = (
             "tomsgeoms2d",
             "dyn_pushpullhook2d.py",

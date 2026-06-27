@@ -110,12 +110,17 @@ class KinDERObjectCentricAdapter:
     ) -> np.ndarray:
         """Return the center of a vertical passage from its obstacle pair."""
         x = float(self.get(state, bottom_obstacle, "x"))
-        width = float(self.get(state, bottom_obstacle, "width"))
         bottom_y = float(self.get(state, bottom_obstacle, "y"))
         bottom_height = float(self.get(state, bottom_obstacle, "height"))
         top_y = float(self.get(state, top_obstacle, "y"))
+        top_height = float(self.get(state, top_obstacle, "height"))
 
-        return np.array([x + width / 2.0, (bottom_y + bottom_height + top_y) / 2.0])
+        return np.array(
+            [
+                x,
+                (bottom_y + bottom_height / 2.0 + top_y - top_height / 2.0) / 2.0,
+            ]
+        )
 
     def passage_distance(
         self,

@@ -43,7 +43,7 @@ def test_grounding_specs_default_to_oracle_object_backend() -> None:
 def test_motion2d_spec_guides_robot_through_passages_before_goal() -> None:
     spec = make_motion2d_reward_spec()
 
-    assert spec.env_id == "kinder/Motion2D-p5"
+    assert spec.env_id == "kinder/Motion2D-p5-v0"
     assert len(spec.subgoals) == 6
 
     subgoal = spec.subgoals[0]

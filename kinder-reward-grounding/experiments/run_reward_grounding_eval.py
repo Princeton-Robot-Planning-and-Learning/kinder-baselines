@@ -368,7 +368,7 @@ def run_seed(job_idx: int, cfg: EvalConfig, env_cfg: EnvConfig) -> None:
     with open(job_dir / "config.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(config_dict, f, sort_keys=False)
 
-    eval_env = kinder.make(cfg.env_id, render_mode="rgb_array")
+    eval_env = kinder.make(cfg.env_id, render_mode="rgb_array", allow_state_access=True)
     sim_env = kinder.make(cfg.env_id, allow_state_access=True)
     rng = np.random.default_rng(cfg.seed)
     rows: list[dict[str, Any]] = []

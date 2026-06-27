@@ -12,7 +12,7 @@ from kinder_reward_grounding.specs import (
 
 
 def make_motion2d_reward_spec(
-    env_id: str = "kinder/Motion2D-p5",
+    env_id: str = "kinder/Motion2D-p5-v0",
 ) -> RewardSpec:
     """Create a hand-written oracle RewardSpec for Motion2D."""
     return RewardSpec(
