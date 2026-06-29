@@ -1,8 +1,12 @@
 """Tests for ground parameterized skills."""
 
+import pickle
+import time
+from pathlib import Path
+
 import kinder
 import numpy as np
-from conftest import MAKE_VIDEOS
+from conftest import MAKE_VIDEOS, SAVE_DEMOS
 from gymnasium.wrappers import RecordVideo
 from kinder.envs.dynamic3d.object_types import (
     MujocoMovableObjectType,
@@ -17,6 +21,38 @@ from kinder_models.dynamic3d.shelf.parameterized_skills import (
     create_lifted_controllers,
 )
 from kinder_models.dynamic3d.utils import PyBulletSim
+
+
+def _save_demo(
+    env_id: str,
+    seed: int,
+    observations: list,
+    actions: list,
+    rewards: list,
+    terminated: bool,
+    truncated: bool,
+    demos_dir: str = "./demos",
+) -> Path:
+    """Save a demo pickle in the standard kindergarden demo format."""
+    env_short_name = env_id.removeprefix("kinder/").removesuffix("-v0")
+    timestamp = int(time.time())
+    save_dir = Path(demos_dir) / env_short_name / str(seed)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    save_path = save_dir / f"{timestamp}.p"
+    demo = {
+        "env_id": env_id,
+        "timestamp": timestamp,
+        "seed": seed,
+        "observations": observations,
+        "actions": actions,
+        "rewards": rewards,
+        "terminated": terminated,
+        "truncated": truncated,
+    }
+    with open(save_path, "wb") as f:
+        pickle.dump(demo, f)
+    print(f"\nSaved demo to {save_path}")
+    return save_path
 
 kinder.register_all_environments()
 
@@ -78,16 +114,24 @@ def test_pick_place_skill():
 
     # Create the environment.
     num_cubes = 1
-    env = kinder.make(f"kinder/Shelf3D-o{num_cubes}-v0", render_mode="rgb_array")
+    env_id = f"kinder/Shelf3D-o{num_cubes}-v0"
+    seed = 123
+    env = kinder.make(env_id, render_mode="rgb_array")
     if MAKE_VIDEOS:
         env = RecordVideo(
             env, "unit_test_videos", name_prefix=f"TidyBot3D-cupboard-o{num_cubes}-real"
         )
 
     # Reset the environment and get the initial state.
-    obs, _ = env.reset(seed=123)
+    obs, _ = env.reset(seed=seed)
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
+
+    demo_observations = [obs]
+    demo_actions: list = []
+    demo_rewards: list = []
+    demo_terminated = False
+    demo_truncated = False
 
     assert state is not None
     pybullet_sim = PyBulletSim(state, rendering=False)
@@ -107,7 +151,12 @@ def test_pick_place_skill():
     controller.reset(state, params)
     for _ in range(400):
         action = controller.step()
-        obs, _, _, _, _ = env.step(action)
+        obs, reward, terminated, truncated, _ = env.step(action)
+        demo_observations.append(obs)
+        demo_actions.append(action)
+        demo_rewards.append(reward)
+        demo_terminated = terminated
+        demo_truncated = truncated
         next_state = env.observation_space.devectorize(obs)
         controller.observe(next_state)
         state = next_state
@@ -130,7 +179,12 @@ def test_pick_place_skill():
     controller.reset(state, params)
     for _ in range(400):
         action = controller.step()
-        obs, _, _, _, _ = env.step(action)
+        obs, reward, terminated, truncated, _ = env.step(action)
+        demo_observations.append(obs)
+        demo_actions.append(action)
+        demo_rewards.append(reward)
+        demo_terminated = terminated
+        demo_truncated = truncated
         next_state = env.observation_space.devectorize(obs)
         controller.observe(next_state)
         state = next_state
@@ -141,22 +195,41 @@ def test_pick_place_skill():
 
     env.close()
 
+    if SAVE_DEMOS:
+        _save_demo(
+            env_id=env_id,
+            seed=seed,
+            observations=demo_observations,
+            actions=demo_actions,
+            rewards=demo_rewards,
+            terminated=demo_terminated,
+            truncated=demo_truncated,
+        )
+
 
 def test_pick_place_two_cubes_skill():
     """Test pick and place skill in ground environment with 1 cube."""
 
     # Create the environment.
     num_cubes = 2
-    env = kinder.make(f"kinder/Shelf3D-o{num_cubes}-v0", render_mode="rgb_array")
+    env_id = f"kinder/Shelf3D-o{num_cubes}-v0"
+    seed = 123
+    env = kinder.make(env_id, render_mode="rgb_array")
     if MAKE_VIDEOS:
         env = RecordVideo(
             env, "unit_test_videos", name_prefix=f"TidyBot3D-cupboard-o{num_cubes}-real"
         )
 
     # Reset the environment and get the initial state.
-    obs, _ = env.reset(seed=123)
+    obs, _ = env.reset(seed=seed)
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
+
+    demo_observations = [obs]
+    demo_actions: list = []
+    demo_rewards: list = []
+    demo_terminated = False
+    demo_truncated = False
 
     assert state is not None
     pybullet_sim = PyBulletSim(state, rendering=False)
@@ -178,7 +251,12 @@ def test_pick_place_two_cubes_skill():
     controller.reset(state, params)
     for _ in range(400):
         action = controller.step()
-        obs, _, _, _, _ = env.step(action)
+        obs, reward, terminated, truncated, _ = env.step(action)
+        demo_observations.append(obs)
+        demo_actions.append(action)
+        demo_rewards.append(reward)
+        demo_terminated = terminated
+        demo_truncated = truncated
         next_state = env.observation_space.devectorize(obs)
         controller.observe(next_state)
         state = next_state
@@ -204,7 +282,12 @@ def test_pick_place_two_cubes_skill():
     controller.reset(state, params)
     for _ in range(800):
         action = controller.step()
-        obs, _, _, _, _ = env.step(action)
+        obs, reward, terminated, truncated, _ = env.step(action)
+        demo_observations.append(obs)
+        demo_actions.append(action)
+        demo_rewards.append(reward)
+        demo_terminated = terminated
+        demo_truncated = truncated
         next_state = env.observation_space.devectorize(obs)
         controller.observe(next_state)
         state = next_state
@@ -228,7 +311,12 @@ def test_pick_place_two_cubes_skill():
     controller.reset(state, params)
     for _ in range(400):
         action = controller.step()
-        obs, _, _, _, _ = env.step(action)
+        obs, reward, terminated, truncated, _ = env.step(action)
+        demo_observations.append(obs)
+        demo_actions.append(action)
+        demo_rewards.append(reward)
+        demo_terminated = terminated
+        demo_truncated = truncated
         next_state = env.observation_space.devectorize(obs)
         controller.observe(next_state)
         state = next_state
@@ -254,7 +342,12 @@ def test_pick_place_two_cubes_skill():
     controller.reset(state, params)
     for _ in range(400):
         action = controller.step()
-        obs, _, _, _, _ = env.step(action)
+        obs, reward, terminated, truncated, _ = env.step(action)
+        demo_observations.append(obs)
+        demo_actions.append(action)
+        demo_rewards.append(reward)
+        demo_terminated = terminated
+        demo_truncated = truncated
         next_state = env.observation_space.devectorize(obs)
         controller.observe(next_state)
         state = next_state
@@ -264,3 +357,14 @@ def test_pick_place_two_cubes_skill():
         assert False, "Controller did not terminate"
 
     env.close()
+
+    if SAVE_DEMOS:
+        _save_demo(
+            env_id=env_id,
+            seed=seed,
+            observations=demo_observations,
+            actions=demo_actions,
+            rewards=demo_rewards,
+            terminated=demo_terminated,
+            truncated=demo_truncated,
+        )
