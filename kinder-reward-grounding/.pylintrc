@@ -1,0 +1,5 @@
+[MESSAGES CONTROL]
+
+# The two rollout examples intentionally repeat their setup and GIF-writing
+# steps so each remains a self-contained research script.
+disable=duplicate-code
