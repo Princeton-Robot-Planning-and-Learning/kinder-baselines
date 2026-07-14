@@ -50,6 +50,7 @@ class FrankaPickPlace3DScriptedPolicy(StatefulPolicy):
         self._skill_sequence: list[tuple[str, tuple[Object, ...]]] = []
         self._skill_index = 0
         self._initialized = False
+        self._finished = False
 
     def reset(self) -> None:
         """Reset the policy state for a new episode."""
@@ -57,6 +58,17 @@ class FrankaPickPlace3DScriptedPolicy(StatefulPolicy):
         self._skill_sequence = []
         self._skill_index = 0
         self._initialized = False
+        self._finished = False
+
+    def is_finished(self) -> bool:
+        """Whether the scripted skill sequence has fully executed.
+
+        The environment's goal is a positional region check that fires while the cube is
+        still gripped during the place descent, before release. Demo collection uses
+        this to keep stepping until the place skill has also opened the gripper and
+        retracted, so the demo captures the full placement.
+        """
+        return self._finished
 
     def _build_skill_sequence(self, state: ObjectCentricState) -> None:
         """Build the skill sequence based on the initial state."""
@@ -112,8 +124,8 @@ class FrankaPickPlace3DScriptedPolicy(StatefulPolicy):
         while self._current_controller.terminated():
             self._skill_index += 1
             if not self._start_next_skill(state):
-                # All skills complete - return zero action (hold still) until
-                # the environment detects the goal.
+                # All skills complete - return zero action (hold still).
+                self._finished = True
                 shape = self._action_space.shape
                 assert shape is not None
                 return np.zeros(shape, dtype=np.float32)

@@ -101,6 +101,14 @@ def collect_single_demo(
     obs, _ = env.reset(seed=seed)
     observations.append(obs)
 
+    # Some scripted policies keep moving after the environment's goal is
+    # already satisfied (e.g. a positional region check that fires while the
+    # object is still gripped, before the place skill releases and retracts).
+    # When the policy exposes is_finished(), run until it completes so the demo
+    # captures the full motion; otherwise stop at the environment's first
+    # termination, as before.
+    policy_is_finished = getattr(policy, "is_finished", None)
+
     for _ in range(max_steps):
         try:
             action = policy(obs)
@@ -112,11 +120,16 @@ def collect_single_demo(
         actions.append(action)
         rewards.append(float(rew))
 
-        if done:
-            terminated = True
-            break
+        # Record the environment's latest termination status either way.
+        terminated = bool(done)
         if trunc:
             truncated = True
+            break
+
+        if policy_is_finished is not None:
+            if policy_is_finished():
+                break
+        elif done:
             break
 
     return observations, actions, rewards, terminated, truncated
