@@ -133,7 +133,7 @@ def _main(cfg: DictConfig) -> None:
 
     # Create the environment.
     kinder.register_all_environments()
-    env = kinder.make(**cfg.env.make_kwargs, render_mode="rgb_array", use_gui=False)
+    env = kinder.make(**cfg.env.make_kwargs, render_mode="rgb_array")
     env_id = cfg.env.make_kwargs["id"]
 
     # Create the domain-specific policy.
