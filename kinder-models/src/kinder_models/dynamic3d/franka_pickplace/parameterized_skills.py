@@ -55,6 +55,11 @@ PLACE_HEIGHT_OFFSET = 0.02
 GRIPPER_CLOSE_STEPS = 15
 GRIPPER_OPEN_STEPS = 10
 
+# Gripper close command in [0, 1]. A full close (1.0) squeezes the 2F-85 pads
+# far past contact on a 5 cm cube, rolling it in the grip; 0.6 is just beyond
+# contact. Ramped over the grip phase (see _GripPhase) for a gentle squeeze.
+GRIPPER_CLOSE_COMMAND = 0.6
+
 # Proportional gain for tracking profile targets; deltas are clipped to the
 # action space bounds by the caller-provided action space.
 ARM_KP = 2.0
@@ -89,13 +94,29 @@ class _MovePhase:
 
 
 class _GripPhase:
-    """Hold an arm configuration while commanding the gripper."""
+    """Hold an arm configuration while ramping the gripper command.
 
-    def __init__(self, hold_conf: np.ndarray, gripper: float, num_steps: int) -> None:
+    The command is interpolated linearly from gripper_start to gripper_end over
+    num_steps so the fingers close (or open) gently instead of snapping to the target.
+    """
+
+    def __init__(
+        self,
+        hold_conf: np.ndarray,
+        gripper_start: float,
+        gripper_end: float,
+        num_steps: int,
+    ) -> None:
         self.hold_conf = hold_conf
-        self.gripper = gripper
+        self.gripper_start = gripper_start
+        self.gripper_end = gripper_end
         self.num_steps = num_steps
         self.step_idx = 0
+
+    def current_command(self) -> float:
+        """The ramped gripper command for the current step."""
+        frac = min(1.0, (self.step_idx + 1) / self.num_steps)
+        return self.gripper_start + (self.gripper_end - self.gripper_start) * frac
 
 
 class _FrankaArmController(GroundParameterizedController[ObjectCentricState, Array]):
@@ -154,8 +175,9 @@ class _FrankaArmController(GroundParameterizedController[ObjectCentricState, Arr
             if phase.step_idx >= phase.num_steps:
                 self._phase_idx += 1
                 continue
+            gripper = phase.current_command()
             phase.step_idx += 1
-            return self._make_action(curr, phase.hold_conf, phase.gripper)
+            return self._make_action(curr, phase.hold_conf, gripper)
         # All phases done: hold the final configuration.
         last_phase = self._phases[-1]
         hold = (
@@ -170,7 +192,10 @@ class _FrankaArmController(GroundParameterizedController[ObjectCentricState, Arr
 
     def _final_gripper(self) -> float:
         assert self._phases is not None
-        return self._phases[-1].gripper
+        last_phase = self._phases[-1]
+        if isinstance(last_phase, _GripPhase):
+            return last_phase.gripper_end
+        return last_phase.gripper
 
     def _make_action(
         self, curr: np.ndarray, target: np.ndarray, gripper: float
@@ -256,8 +281,13 @@ class PickFrankaController(_FrankaArmController):
         return [
             _MovePhase(pre_grasp_conf, gripper=0.0),
             _MovePhase(grasp_conf, gripper=0.0),
-            _GripPhase(grasp_conf, gripper=1.0, num_steps=GRIPPER_CLOSE_STEPS),
-            _MovePhase(pre_grasp_conf, gripper=1.0),
+            _GripPhase(
+                grasp_conf,
+                gripper_start=0.0,
+                gripper_end=GRIPPER_CLOSE_COMMAND,
+                num_steps=GRIPPER_CLOSE_STEPS,
+            ),
+            _MovePhase(pre_grasp_conf, gripper=GRIPPER_CLOSE_COMMAND),
         ]
 
 
@@ -318,9 +348,14 @@ class PlaceFrankaController(_FrankaArmController):
         place_conf = self._solve_ik(place_world, pre_place_conf)
 
         return [
-            _MovePhase(pre_place_conf, gripper=1.0),
-            _MovePhase(place_conf, gripper=1.0),
-            _GripPhase(place_conf, gripper=0.0, num_steps=GRIPPER_OPEN_STEPS),
+            _MovePhase(pre_place_conf, gripper=GRIPPER_CLOSE_COMMAND),
+            _MovePhase(place_conf, gripper=GRIPPER_CLOSE_COMMAND),
+            _GripPhase(
+                place_conf,
+                gripper_start=GRIPPER_CLOSE_COMMAND,
+                gripper_end=0.0,
+                num_steps=GRIPPER_OPEN_STEPS,
+            ),
             _MovePhase(pre_place_conf, gripper=0.0),
             _MovePhase(FR3RobotEnv.HOME_QPOS.copy(), gripper=0.0),
         ]
