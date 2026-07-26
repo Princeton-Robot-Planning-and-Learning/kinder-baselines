@@ -7,6 +7,9 @@ from bilevel_planning.structs import (
     GroundParameterizedController,
     LiftedParameterizedController,
 )
+from bilevel_planning.trajectory_samplers.trajectory_sampler import (
+    TrajectorySamplingFailure,
+)
 from gymnasium.spaces import Box
 from kinder.envs.dynamic3d.object_types import (
     MujocoDrawerObjectType,
@@ -19,6 +22,7 @@ from kinder.envs.dynamic3d.robots.tidybot_robot_env import (
 from prpl_utils.utils import get_signed_angle_distance
 from pybullet_helpers.geometry import Pose, multiply_poses
 from pybullet_helpers.inverse_kinematics import (
+    InverseKinematicsError,
     inverse_kinematics,
 )
 from pybullet_helpers.joint import JointPositions
@@ -61,6 +65,19 @@ from kinder_models.dynamic3d.utils import (
     get_target_robot_pose_from_parameters,
     run_base_motion_planning,
 )
+
+
+def _ik_or_resample(*args: Any, **kwargs: Any) -> Any:
+    """Solve inverse kinematics, turning an unreachable pose into a resample.
+
+    The backtracking refiner retries a skill with freshly sampled parameters
+    whenever a TrajectorySamplingFailure is raised, so an infeasible target is
+    rejected and resampled instead of aborting the whole episode.
+    """
+    try:
+        return inverse_kinematics(*args, **kwargs)
+    except InverseKinematicsError as e:
+        raise TrajectorySamplingFailure() from e
 
 
 class OpenDrawerSweepController(
@@ -152,7 +169,8 @@ class OpenDrawerSweepController(
             extend_xy_magnitude=extend_xy_magnitude,
             extend_rot_magnitude=extend_rot_magnitude,
         )
-        assert base_motion_plan is not None
+        if base_motion_plan is None:
+            raise TrajectorySamplingFailure()
         self._current_base_motion_plan = base_motion_plan
 
         plan_x = x.copy()
@@ -197,13 +215,13 @@ class OpenDrawerSweepController(
             target_grasp_pose_world,
         )
 
-        target_joints = inverse_kinematics(
+        target_joints = _ik_or_resample(
             self._pybullet_sim.robot,
             target_end_effector_pose,
             set_joints=False,
         )
 
-        target_joints_end = inverse_kinematics(
+        target_joints_end = _ik_or_resample(
             self._pybullet_sim.robot,
             target_end_effector_pose_end,
             set_joints=False,
@@ -237,9 +255,8 @@ class OpenDrawerSweepController(
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
 
-        assert plan is not None, "Motion planning failed"
-        assert open_plan is not None, "Motion planning failed"
-        assert retract_plan is not None, "Motion planning failed"
+        if plan is None or open_plan is None or retract_plan is None:
+            raise TrajectorySamplingFailure()
 
         # Remap the plan to ensure we stay within action limits.
         plan = remap_joint_position_plan_to_constant_distance(
@@ -515,7 +532,8 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
             extend_xy_magnitude=extend_xy_magnitude,
             extend_rot_magnitude=extend_rot_magnitude,
         )
-        assert base_motion_plan is not None
+        if base_motion_plan is None:
+            raise TrajectorySamplingFailure()
         self._current_base_motion_plan = base_motion_plan
 
         plan_x = x.copy()
@@ -555,7 +573,7 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
             target_grasp_pose_world,
         )
 
-        target_joints = inverse_kinematics(
+        target_joints = _ik_or_resample(
             self._pybullet_sim.robot,
             target_end_effector_pose,
             set_joints=False,
@@ -581,8 +599,8 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
 
-        assert plan is not None, "Motion planning failed"
-        assert retract_plan is not None, "Motion planning failed"
+        if plan is None or retract_plan is None:
+            raise TrajectorySamplingFailure()
 
         # Remap the plan to ensure we stay within action limits.
         plan = remap_joint_position_plan_to_constant_distance(
@@ -831,7 +849,8 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             extend_xy_magnitude=extend_xy_magnitude,
             extend_rot_magnitude=extend_rot_magnitude,
         )
-        assert base_motion_plan is not None
+        if base_motion_plan is None:
+            raise TrajectorySamplingFailure()
         self._current_base_motion_plan = base_motion_plan
 
         plan_x = x.copy()
@@ -875,7 +894,7 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             target_place_pose_world,
         )
 
-        target_joints = inverse_kinematics(
+        target_joints = _ik_or_resample(
             self._pybullet_sim.robot,
             target_end_effector_pose,
             set_joints=False,
@@ -892,19 +911,23 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         )
 
         joint_distance_fn = create_joint_distance_fn(self._pybullet_sim.robot)
-        # Run motion planning to the target joint positions.
-        retract_plan = smoothly_follow_end_effector_path(
-            self._pybullet_sim.robot,
-            [target_end_effector_pose_end, target_end_effector_pose_end_2],
-            initial_joints=target_joints,
-            collision_ids={},  # type: ignore
-            seed=0,  # for determinism
-            joint_distance_fn=joint_distance_fn,
-            max_smoothing_iters_per_step=1,
-        )
+        # Run motion planning to the target joint positions. An unreachable sweep
+        # end-effector path signals a resample rather than aborting the episode.
+        try:
+            retract_plan = smoothly_follow_end_effector_path(
+                self._pybullet_sim.robot,
+                [target_end_effector_pose_end, target_end_effector_pose_end_2],
+                initial_joints=target_joints,
+                collision_ids={},  # type: ignore
+                seed=0,  # for determinism
+                joint_distance_fn=joint_distance_fn,
+                max_smoothing_iters_per_step=1,
+            )
+        except InverseKinematicsError as e:
+            raise TrajectorySamplingFailure() from e
 
-        assert plan is not None, "Motion planning failed"
-        assert retract_plan is not None, "Motion planning failed"
+        if plan is None or retract_plan is None:
+            raise TrajectorySamplingFailure()
 
         # Remap the plan to ensure we stay within action limits.
         plan = remap_joint_position_plan_to_constant_distance(
