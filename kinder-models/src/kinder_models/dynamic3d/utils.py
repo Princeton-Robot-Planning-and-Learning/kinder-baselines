@@ -432,10 +432,27 @@ class PyBulletSim:
         else:
             self._physics_client_id = p.connect(p.DIRECT)
 
-        # Disconnect when this object is garbage collected, since callers that create
-        # one sim per skill execution would otherwise exhaust PyBullet's client pool.
-        # The callback must take the client id by value and never close over self, or
-        # the sim would stay reachable and never be collected.
+        # Disconnect when this object is garbage collected. Callers that ground a
+        # fresh controller per skill execution create one sim each, and without this
+        # every one of those clients stays open for the life of the process.
+        #
+        #   weakref.finalize(self, p.disconnect, self._physics_client_id)
+        #                     ^     ^             ^
+        #                     |     |             a plain int
+        #                     |     a module-level function
+        #                     the object being watched
+        #
+        # Both arguments are deliberately self-free. Registering a bound method
+        # (weakref.finalize(self, self.close)) would keep self reachable, so the sim
+        # would never be collected, the callback would never fire, and the leak would
+        # look fixed while continuing. See close() for what does and does not run.
+        #
+        # This mirrors tempfile.TemporaryDirectory in the standard library, which
+        # registers a classmethod plus the path by value for the same reason. It uses
+        # a classmethod because its cleanup is several statements; ours is one call,
+        # so the module-level p.disconnect suffices. If more cleanup is ever needed,
+        # move it to a @staticmethod taking the client id and call that from both
+        # here and close() -- do not reach for self.
         self._finalizer = weakref.finalize(self, p.disconnect, self._physics_client_id)
 
         # Create the robot, assuming that it is a kinova gen3.
@@ -595,10 +612,20 @@ class PyBulletSim:
         return self._joint_distance_fn(conf1, conf2)
 
     def close(self) -> None:
-        """Close the PyBullet simulator.
+        """Close the PyBullet simulator. Safe to call more than once.
 
-        Safe to call more than once, and called automatically when this object is
-        garbage collected. Do not disconnect physics_client_id by hand instead:
+        What runs when, given the finalizer registered in __init__:
+
+            sim.close()          -> this body, then p.disconnect(id)
+            sim goes out of scope -> p.disconnect(id) ONLY; this body does not run
+            close() then collected -> nothing the second time
+
+        Note the middle line: garbage collection invokes the registered callback,
+        not this method, so anything added to this body will silently not happen on
+        collection. Register it in __init__ instead -- and keep it off self, or the
+        sim stays reachable and is never collected at all.
+
+        Do not disconnect physics_client_id by hand instead of calling this:
         PyBullet reuses client ids, so a finalizer left holding a recycled id would
         disconnect an unrelated simulator.
         """
