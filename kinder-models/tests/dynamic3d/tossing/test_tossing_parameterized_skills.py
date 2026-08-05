@@ -31,8 +31,11 @@ kinder.register_all_environments()
 
 _TEST_TASKS = Path(__file__).parent.parent.parent / "test_tasks"
 
-# PyBullet keeps a fixed-size table of physics clients, so every possible client id
-# can be queried directly.
+# Size of PyBullet's fixed table of physics client slots. This is a scan bound, not a
+# limit the test imposes: ids are handed out by first-free-slot scan, so a client can
+# land on any id, including one left over from an earlier test in the same process.
+# Scanning fewer slots would silently undercount and let a leak pass. The full scan
+# costs about 0.2 ms. pybullet does not expose the value, so it is repeated here.
 _MAX_PYBULLET_CLIENTS = 1024
 
 
@@ -45,11 +48,12 @@ def _get_robot_from_state(state: ObjectCentricState):
 
 def _count_connected_pybullet_clients() -> int:
     """Helper to count the PyBullet physics clients that are currently connected."""
-    return sum(
-        1
-        for client_id in range(_MAX_PYBULLET_CLIENTS)
-        if p.getConnectionInfo(physicsClientId=client_id)["isConnected"]
-    )
+    num_connected = 0
+    for client_id in range(_MAX_PYBULLET_CLIENTS):
+        connection_info = p.getConnectionInfo(physicsClientId=client_id)
+        if connection_info["isConnected"]:
+            num_connected += 1
+    return num_connected
 
 
 def _create_robot_state(
@@ -298,8 +302,16 @@ def test_repeated_grounding_does_not_leak_pybullet_clients():
         else:
             assert False, "Controller did not terminate"
 
-        # Drop the controller and collect so that the client count is deterministic.
+        # Drop the last reference to the controller, which drops its PyBulletSim,
+        # which runs the sim's weakref.finalize and disconnects the client.
         del controller
+        # gc.collect() runs a full collection pass immediately, rather than whenever
+        # CPython would next get round to it. It is belt-and-braces here: the sim is
+        # freed by reference counting alone, which is immediate and does not need the
+        # collector (verified by running this loop with gc disabled). It would only
+        # start to matter if a future change put the sim in a reference cycle, which
+        # refcounting cannot break. Calling it keeps the count below deterministic
+        # either way.
         gc.collect()
 
     # Check that the executions above did real work, rather than terminating
