@@ -1,9 +1,11 @@
 """Tests for ground parameterized skills."""
 
+import gc
 from pathlib import Path
 
 import kinder
 import numpy as np
+import pybullet as p
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from kinder.envs.dynamic3d.envs import TidyBot3DEnv
@@ -29,12 +31,29 @@ kinder.register_all_environments()
 
 _TEST_TASKS = Path(__file__).parent.parent.parent / "test_tasks"
 
+# Size of PyBullet's fixed table of physics client slots. This is a scan bound, not a
+# limit the test imposes: ids are handed out by first-free-slot scan, so a client can
+# land on any id, including one left over from an earlier test in the same process.
+# Scanning fewer slots would silently undercount and let a leak pass. The full scan
+# costs about 0.2 ms. pybullet does not expose the value, so it is repeated here.
+_MAX_PYBULLET_CLIENTS = 1024
+
 
 def _get_robot_from_state(state: ObjectCentricState):
     """Helper to get robot object from state by type."""
     robots = state.get_objects(MujocoTidyBotRobotObjectType)
     assert len(robots) == 1, f"Expected 1 robot, got {len(robots)}"
     return list(robots)[0]
+
+
+def _count_connected_pybullet_clients() -> int:
+    """Helper to count the PyBullet physics clients that are currently connected."""
+    num_connected = 0
+    for client_id in range(_MAX_PYBULLET_CLIENTS):
+        connection_info = p.getConnectionInfo(physicsClientId=client_id)
+        if connection_info["isConnected"]:
+            num_connected += 1
+    return num_connected
 
 
 def _create_robot_state(
@@ -224,6 +243,87 @@ def test_move_to_target_arm_configuration():
             break
     else:
         assert False, "Controller did not terminate"
+
+    env.close()
+
+
+def test_repeated_grounding_does_not_leak_pybullet_clients():
+    """Test that repeatedly grounding a controller does not leak PyBullet clients.
+
+    The motion-planning controllers create a PyBulletSim the first time they are reset,
+    and LiftedParameterizedController.ground() returns a new controller every call, so a
+    planner or data-collection loop creates one PyBulletSim per skill execution. Those
+    clients must be released when the controller is dropped.
+    """
+
+    # Create the environment.
+    num_cubes = 1
+    env = TidyBot3DEnv(
+        task_config_path=str(_TEST_TASKS / f"tidybot-ground-o{num_cubes}.json"),
+        render_mode="rgb_array",
+    )
+
+    # Reset the environment and get the initial state.
+    obs, _ = env.reset(seed=124)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+
+    # Create the controller.
+    controllers = create_lifted_controllers(env.action_space)
+    lifted_controller = controllers["move_arm_to_conf"]
+    robot = _get_robot_from_state(state)
+    object_parameters = (robot,)
+
+    # Alternate between two configurations so that every execution moves the arm.
+    target_confs = [
+        np.zeros(7),
+        np.deg2rad([0.0, -20.0, 180.0, -146.0, 0.0, -50.0, 90.0]),  # retract
+    ]
+    num_executions = 4
+    steps_per_execution = []
+
+    # Ground a fresh controller for each execution and drop it afterwards.
+    clients_before = _count_connected_pybullet_clients()
+    for execution_idx in range(num_executions):
+        controller = lifted_controller.ground(object_parameters)
+        params = target_confs[execution_idx % len(target_confs)]
+
+        # Reset and execute the controller until it terminates.
+        controller.reset(state, params)
+        for num_steps in range(1, 201):
+            action = controller.step()
+            obs, _, _, _, _ = env.step(action)
+            next_state = env.observation_space.devectorize(obs)
+            controller.observe(next_state)
+            state = next_state
+            if controller.terminated():
+                steps_per_execution.append(num_steps)
+                break
+        else:
+            assert False, "Controller did not terminate"
+
+        # Drop the last reference to the controller, which drops its PyBulletSim,
+        # which runs the sim's weakref.finalize and disconnects the client.
+        del controller
+        # gc.collect() runs a full collection pass immediately, rather than whenever
+        # CPython would next get round to it. It is belt-and-braces here: the sim is
+        # freed by reference counting alone, which is immediate and does not need the
+        # collector (verified by running this loop with gc disabled). It would only
+        # start to matter if a future change put the sim in a reference cycle, which
+        # refcounting cannot break. Calling it keeps the count below deterministic
+        # either way.
+        gc.collect()
+
+    # Check that the executions above did real work, rather than terminating
+    # immediately and making the client count below vacuously correct.
+    assert len(steps_per_execution) == num_executions
+    assert min(steps_per_execution) > 1
+
+    clients_after = _count_connected_pybullet_clients()
+    assert clients_after == clients_before, (
+        f"Leaked {clients_after - clients_before} PyBullet clients over "
+        f"{num_executions} skill executions"
+    )
 
     env.close()
 

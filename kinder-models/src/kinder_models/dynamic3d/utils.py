@@ -1,6 +1,7 @@
 """Utils for tidybot environments."""
 
 import math
+import weakref
 from typing import Iterable
 
 import numpy as np
@@ -431,6 +432,11 @@ class PyBulletSim:
         else:
             self._physics_client_id = p.connect(p.DIRECT)
 
+        # Disconnect on collection -- callers ground a fresh controller, and so a
+        # fresh sim, per skill execution. The callback must not reference self, or
+        # the sim stays reachable and is never collected. See close().
+        self._finalizer = weakref.finalize(self, p.disconnect, self._physics_client_id)
+
         # Create the robot, assuming that it is a kinova gen3.
         self._robot = create_pybullet_robot(
             "kinova-gen3",
@@ -588,5 +594,10 @@ class PyBulletSim:
         return self._joint_distance_fn(conf1, conf2)
 
     def close(self) -> None:
-        """Close the PyBullet simulator."""
-        p.disconnect(self._physics_client_id)
+        """Close the PyBullet simulator. Safe to call more than once.
+
+        Collection runs the finalizer, not this method, so put any further cleanup in
+        __init__'s callback. Do not call p.disconnect by hand: ids get reused, so a
+        stale finalizer would disconnect an unrelated sim.
+        """
+        self._finalizer()
