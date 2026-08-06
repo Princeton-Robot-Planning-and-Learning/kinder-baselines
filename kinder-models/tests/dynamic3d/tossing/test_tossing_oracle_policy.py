@@ -4,9 +4,15 @@ import kinder
 import numpy as np
 from conftest import MAKE_VIDEOS  # pylint: disable=import-error
 from gymnasium.wrappers import RecordVideo
+from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
 from relational_structs import ObjectCentricState
 
+from kinder_models.dynamic3d.shelf.parameterized_skills import (
+    create_lifted_controllers as shelf_create_lifted_controllers,
+)
 from kinder_models.dynamic3d.tossing.oracle_policy import (
+    ORACLE_PICK_DISTANCE,
+    ORACLE_PICK_ROTATION,
     ORACLE_THROW_STANDOFF,
     Tossing3DOraclePolicy,
 )
@@ -77,5 +83,27 @@ def test_tossing3d_oracle_policy():
         state.get(target_bin, "y") - state.get(robot, "pos_base_y"),
     )
     assert abs(standoff - ORACLE_THROW_STANDOFF) < WAYPOINT_TOL
+
+    env.close()
+
+
+def test_oracle_pick_parameters_match_the_sampler():
+    """The oracle's grasp literals are PickShelfController's own rng-123 draw.
+
+    They are literals in the package because the linter bans np.random there, so
+    nothing in the package itself can show where they came from. This does.
+    """
+    env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", scene_bg=False)
+    obs, _ = env.reset(seed=125)
+    state = env.observation_space.devectorize(obs)
+    assert isinstance(state, ObjectCentricState)
+
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    controllers = shelf_create_lifted_controllers(env.action_space)
+    controller = controllers["pick_shelf"].ground((robot, cube))
+
+    params = controller.sample_parameters(state, np.random.default_rng(123))
+    assert np.allclose(params, [ORACLE_PICK_DISTANCE, ORACLE_PICK_ROTATION])
 
     env.close()
