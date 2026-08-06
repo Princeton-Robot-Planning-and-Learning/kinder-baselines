@@ -58,4 +58,12 @@ def test_tidybot3d_tossing_bilevel_planning():
     else:
         assert False, "Did not terminate successfully"
 
+    # Running out of plan is not success. The refiner only ever returns a trajectory it
+    # simulated into the goal, but it simulates through transition_fn, which restores a
+    # state into a *separate* simulator; that the same actions also reach the goal when
+    # replayed in the real env is a different claim and is the one worth pinning.
+    assert terminated, "Executed the whole plan without the environment terminating"
+    final_state = env_models.observation_to_state(obs)
+    assert env_models.goal_deriver(final_state).check_state(final_state)
+
     env.close()
