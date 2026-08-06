@@ -1,11 +1,16 @@
 """Tests for the tossing oracle policy."""
 
 import kinder
+import numpy as np
 from conftest import MAKE_VIDEOS  # pylint: disable=import-error
 from gymnasium.wrappers import RecordVideo
 from relational_structs import ObjectCentricState
 
-from kinder_models.dynamic3d.tossing.oracle_policy import Tossing3DOraclePolicy
+from kinder_models.dynamic3d.tossing.oracle_policy import (
+    ORACLE_THROW_STANDOFF,
+    Tossing3DOraclePolicy,
+)
+from kinder_models.dynamic3d.utils import WAYPOINT_TOL
 
 kinder.register_all_environments()
 
@@ -59,5 +64,18 @@ def test_tossing3d_oracle_policy():
     assert executed == ["pick_shelf", "move_to_throw_pose", "toss_from_windup"]
     assert sim._check_goals()  # pylint: disable=protected-access
     assert policy.get_next_controller(state) is None
+
+    # The oracle hands move_to_throw_pose an explicit 1.35 m standoff, which is outside
+    # the MOVE_TO_TARGET_DISTANCE_BOUNDS that controller *samples* from. A supplied
+    # parameter is not a sampled one, and this pins that: the base really did stop at
+    # the requested standoff rather than at a clamped 0.5-0.6 m. The base does not move
+    # again after the drive, so the final state carries the same pose.
+    robot = policy._get_robot(state)  # pylint: disable=protected-access
+    target_bin = state.get_object_from_name("bin_0")
+    standoff = np.hypot(
+        state.get(target_bin, "x") - state.get(robot, "pos_base_x"),
+        state.get(target_bin, "y") - state.get(robot, "pos_base_y"),
+    )
+    assert abs(standoff - ORACLE_THROW_STANDOFF) < WAYPOINT_TOL
 
     env.close()
