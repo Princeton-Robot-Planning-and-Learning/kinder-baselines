@@ -1414,15 +1414,20 @@ def test_toss_from_windup_matches_split_controllers():
     windup_conf = np.deg2rad([0, 50, 180, -110, 0, -100, 90])  # pre toss
     toss_conf = np.deg2rad([0, 20, 180, -35, 0, 25, 90])  # toss
 
-    def _run_sequence(steps: list[tuple[str, np.ndarray]]) -> list[np.ndarray]:
-        """Run controllers back to back from a fresh reset, recording every action."""
+    def _run_sequence(steps: list[tuple[str, np.ndarray]]) -> list[list[np.ndarray]]:
+        """Run controllers back to back from a fresh reset, recording every action.
+
+        The actions are returned grouped by controller, so that a caller can tell how
+        much work each one did rather than only how much they did between them.
+        """
         obs, _ = env.reset(seed=125)
         state = env.observation_space.devectorize(obs)
-        actions: list[np.ndarray] = []
+        actions_per_controller: list[list[np.ndarray]] = []
         for controller_name, params in steps:
             robot = _get_robot_from_state(state)
             controller = controllers[controller_name].ground((robot,))
             controller.reset(state, params)
+            actions: list[np.ndarray] = []
             for _ in range(400):
                 action = controller.step()
                 actions.append(np.array(action, dtype=np.float32, copy=True))
@@ -1433,17 +1438,25 @@ def test_toss_from_windup_matches_split_controllers():
                     break
             else:
                 assert False, "Controller did not terminate"
-        return actions
+            actions_per_controller.append(actions)
+        return actions_per_controller
 
-    split_actions = _run_sequence(
+    split_phases = _run_sequence(
         [("move_arm_to_conf", windup_conf), ("toss", toss_conf)]
     )
-    composed_actions = _run_sequence(
+    composed_phases = _run_sequence(
         [("toss_from_windup", np.array([windup_conf, toss_conf]))]
     )
 
-    # The sequence did real work, so the comparison below is not vacuous.
-    assert len(split_actions) > 2
+    # Both halves did real work, so the comparison below is not vacuous. Measured
+    # locally: 16 windup actions then 18 toss actions, 34 in total. The exact counts
+    # are not asserted because they follow from a motion plan, but a phase that
+    # collapsed to a step or two would no longer be a windup or a toss.
+    assert len(split_phases) == 2
+    assert min(len(phase) for phase in split_phases) >= 5
+
+    split_actions = [action for phase in split_phases for action in phase]
+    (composed_actions,) = composed_phases
     assert len(composed_actions) == len(split_actions)
     for composed_action, split_action in zip(
         composed_actions, split_actions, strict=True
