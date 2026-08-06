@@ -8,6 +8,7 @@ from bilevel_planning.structs import (
     LiftedParameterizedController,
 )
 from kinder.envs.dynamic3d.object_types import (
+    MujocoMovableObjectType,
     MujocoObjectType,
     MujocoTidyBotRobotObjectType,
 )
@@ -185,7 +186,7 @@ class MoveToThrowPoseController(MoveToTargetGroundController):
     The object parameters are:
         robot: The robot itself.
         object: The target object to throw at.
-        held: The object the robot is currently holding.
+        held: The movable object the robot is currently holding.
 
     The continuous parameters are the same as MoveToTargetGroundController's:
         target_distance: float
@@ -900,7 +901,11 @@ def create_lifted_controllers(
     # Move to throw pose controller.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     target = Variable("?target", MujocoObjectType)
-    held = Variable("?held", MujocoObjectType)
+    # The held object is necessarily movable: the robot is carrying it. Typing it
+    # MujocoObjectType would let a planner ground it to a fixture, or to the same
+    # object as ?target, in which case the throw target is the object whose collisions
+    # get disabled.
+    held = Variable("?held", MujocoMovableObjectType)
 
     LiftedMoveToThrowPoseController: LiftedParameterizedController = (
         LiftedParameterizedController(
