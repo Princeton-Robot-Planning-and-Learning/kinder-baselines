@@ -17,12 +17,12 @@ is a value this repository already publishes:
   and the arm configurations for the toss are that test's own two confs, already module
   constants in parameterized_skills.
 
-Note that the standoff is passed explicitly and is deliberately outside
-MOVE_TO_TARGET_DISTANCE_BOUNDS, which MoveToThrowPoseController samples from. Those
-bounds are the grasping range; nothing constrains a caller-supplied parameter to them.
-1.35 m is the standoff test_pick_ground_toss drives to, and the test beside this module
-is what shows it lands the cube in the goal region -- that test prints the landing
-position without checking the goal.
+Note that the standoff is passed explicitly rather than sampled. It sits inside
+TOSS_TARGET_DISTANCE_BOUNDS, the range MoveToThrowPoseController draws from, but nothing
+constrains a caller-supplied parameter to that range either way. 1.35 m is the standoff
+test_pick_ground_toss drives to, and the test beside this module is what shows it lands
+the cube in the goal region -- that test prints the landing position without checking
+the goal.
 
 There is no other scripted policy in the monorepo to follow, so the shape here is the
 smallest one that keeps the existing test idiom intact: this class only *chooses* the
