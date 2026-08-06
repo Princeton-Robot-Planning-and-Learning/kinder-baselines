@@ -1,10 +1,12 @@
 """State abstractions for the Tossing3D environment.
 
-Tossing3D is the one dynamic3d domain whose goal cannot be reached by manipulation
-alone: a barrier spanning the width of the scene separates the robot from the bin, and
-the base cannot pass it, so a cube on the far side can never be retrieved. Reachable
-below exists to make that irreversibility expressible -- an operator model that omits it
-can emit a retrieve-and-retry plan the dynamics will never execute.
+Tossing3D's goal region sits on the far side of a barrier that spans the scene in y:
+cuboid_barrier is 5 m wide and the task config places it at x ~ 1.3, while the goal
+region is x in [1.85, 2.15]. Nothing in this package models that barrier -- base motion
+planning runs with an empty obstacle set -- so it is MuJoCo contact alone that keeps the
+base on the near side. Reachable below records which side of it a cube is on, so an
+operator model can express that a toss is irreversible rather than emitting a plan that
+retrieves the cube and retries, which the dynamics will never execute.
 """
 
 import numpy as np
@@ -34,6 +36,10 @@ InGoalRegion = Predicate("InGoalRegion", [MujocoMovableObjectType])
 OnGround = Predicate("OnGround", [MujocoObjectType])
 Holding = Predicate("Holding", [MujocoTidyBotRobotObjectType, MujocoMovableObjectType])
 HandEmpty = Predicate("HandEmpty", [MujocoTidyBotRobotObjectType])
+# Reachable reads as "the first object is on the robot's side of the second". Both slots
+# are MujocoMovableObjectType because upstream has no barrier type, so a planner will
+# also ground it as (cube_0, bin_0) or (bin_0, cuboid_barrier) -- pairs state_abstractor
+# never emits, since it only ever pairs a cube with BARRIER_NAME.
 Reachable = Predicate("Reachable", [MujocoMovableObjectType, MujocoMovableObjectType])
 NearBin = Predicate("NearBin", [MujocoTidyBotRobotObjectType, MujocoMovableObjectType])
 
@@ -50,8 +56,10 @@ CUBE_NAME_PREFIX = "cube"
 BIN_NAME_PREFIX = "bin"
 BARRIER_NAME = "cuboid_barrier"
 
-# Thresholds shared with shelf/state_abstractions.py, whose HandEmpty, OnGround and
-# Holding classify the same TidyBot state that this domain reads.
+# Duplicated from shelf/state_abstractions.py, whose HandEmpty, OnGround and Holding
+# classify the same TidyBot state this domain reads. They are literals there, declared
+# inside state_abstractor() rather than at module scope, so nothing keeps the two sets
+# in sync; hoisting them into dynamic3d/utils.py would, but that touches shelf.
 HANDEMPTY_TOL = 1e-3
 GRASP_THRESHOLD = 0.1
 HOLDING_HEIGHT = 0.1
@@ -60,10 +68,19 @@ EE_TO_OBJECT_TOL = 0.05
 
 # The band of base standoffs, in metres, that NearBin treats as throwable-from. Unlike
 # the grasping standoff, which MoveToTargetGroundController pins at 0.5 m, a throw
-# standoff has no single right value, so this is a band rather than a number. It is
-# wider than the 1.35 m the test uses and is the interval a toss sampler would draw
-# from; narrowing it makes NearBin stricter, never unsound.
+# standoff has no single right value, so this is a band rather than a number. It
+# brackets the 1.35 m the test uses with room either side, and is the interval a toss
+# sampler would draw from; narrowing it makes NearBin stricter, never unsound.
 THROW_STANDOFF_BOUNDS = (1.20, 1.65)
+
+# NearBin's own slack, deliberately wider than MoveToTargetGroundController's
+# WAYPOINT_TOL. That controller stops when np.isclose(..., atol=WAYPOINT_TOL) holds,
+# which is atol + rtol * |b| and so strictly wider than a <= test; and its own sampler
+# spends half of WAYPOINT_TOL on the planned off-axis offset before the controller adds
+# its termination slack on top. A pose the controller accepts can therefore sit just
+# outside a strict WAYPOINT_TOL test and make NearBin false immediately after the skill
+# that established it.
+NEAR_BIN_TOL = 2 * WAYPOINT_TOL
 
 
 class Tossing3DStateAbstractor:
@@ -77,18 +94,10 @@ class Tossing3DStateAbstractor:
         self._sim = sim
 
     def state_abstractor(self, state: ObjectCentricState) -> RelationalAbstractState:
-        """Get the abstract state for the current state.
-
-        Two things a caller should know. First, NearBin is not achievable through
-        MoveToTargetGroundController's *sampler*, which hardcodes a 0.5 m grasping
-        standoff; establishing it takes an explicit standoff parameter in the throwable
-        band, so an env model that grounds that skill with its own sampler will never
-        satisfy NearBin. Second, this is not a pure function of its argument: object
-        poses come from `state`, but the goal region is read from the live simulator, so
-        calling it on a stored or hypothetical state evaluates InGoalRegion against
-        today's region. Both are inert for Tossing3D as it stands and are recorded so
-        they do not have to be rediscovered.
-        """
+        """Get the abstract state for the current state."""
+        # Not a pure function of its argument: object poses come from `state`, but the
+        # goal region is read from the live simulator, so calling this on a stored or
+        # hypothetical state evaluates InGoalRegion against today's region.
         atoms: set[GroundAtom] = set()
 
         # Sync the pybullet simulator.
@@ -101,10 +110,11 @@ class Tossing3DStateAbstractor:
         all_mujoco_objects = set(fixtures) | set(movables)
         # The bin and the barrier are movables too, so the cubes -- the only objects
         # here that are actually manipulated -- are picked out by name, the way sweep3D
-        # picks its wiper out from its cubes. OnGround and InGoalRegion are restricted
-        # to them deliberately: the bin and the barrier are scene furniture, and
-        # asserting where they rest would say nothing a planner can act on.
-        cubes = [o for o in movables if o.name.startswith(CUBE_NAME_PREFIX)]
+        # picks its wiper out from its cubes. Every per-object predicate below
+        # (OnGround, Holding, InGoalRegion, Reachable) is restricted to them
+        # deliberately: the bin and the barrier are scene furniture, and asserting where
+        # they rest would say nothing a planner can act on.
+        cubes = self._get_cubes(state)
         bins = [o for o in movables if o.name.startswith(BIN_NAME_PREFIX)]
         barriers = [o for o in movables if o.name == BARRIER_NAME]
 
@@ -116,7 +126,11 @@ class Tossing3DStateAbstractor:
         for cube in cubes:
             # OnGround. Flatness is part of the condition because the pick controller
             # builds its grasp pose from the object's orientation, so a cube that came
-            # to rest on a corner is not a cube that grasp is modelled on.
+            # to rest on a corner is not a cube that grasp is modelled on. The cost is
+            # that OnGround is not predictable after a toss: a cube that lands flat in
+            # the goal region gets OnGround and InGoalRegion, one that lands tilted gets
+            # only InGoalRegion, and no fixed effect set covers both under the
+            # final_abstract_state == ns refinement gate.
             z = state.get(cube, "z")
             bb_z = state.get(cube, "bb_z")
             if (
@@ -137,12 +151,21 @@ class Tossing3DStateAbstractor:
                 ):
                     atoms.add(GroundAtom(Holding, [robot, cube]))
 
-            # InGoalRegion.
+            # InGoalRegion. Note for the env model that will consume this: the cube is
+            # only in the region once it has come to rest, and TossController
+            # terminates when its trapezoidal profile is exhausted, which is while the
+            # cube may still be in flight. Under the refinement gate's
+            # final_abstract_state == ns, a toss operator that adds InGoalRegion needs
+            # the cube settled before the state is abstracted -- and the same goes for
+            # HandEmpty, which wants pos_gripper back within 1e-3 of 0 after release.
             if self._check_in_goal_region(state, cube):
                 atoms.add(GroundAtom(InGoalRegion, [cube]))
 
             # Reachable. Compared against the barrier's own live x rather than a
-            # constant, because the barrier's pose is sampled per episode.
+            # constant, because the barrier's placement comes from a task-config region
+            # rather than from code. Today that region is 1 mm wide (barrier_init_region,
+            # yaw pinned to 0), so the value barely moves; reading it keeps this correct
+            # if the config ever widens it.
             for barrier in barriers:
                 if state.get(cube, "x") < state.get(barrier, "x"):
                     atoms.add(GroundAtom(Reachable, [cube, barrier]))
@@ -161,26 +184,30 @@ class Tossing3DStateAbstractor:
         #     a throw is released along the base's own heading, so a predicate that
         #     omitted this would call the robot ready to throw when it is not.
         #
-        # All three tolerances are MoveToTargetGroundController's own WAYPOINT_TOL --
-        # including the heading one, since _robot_is_close_to_pose() applies that same
-        # constant to x, y and theta alike. NearBin therefore admits precisely the poses
-        # that controller is willing to stop at, rather than a tolerance invented here.
+        # All three slacks are NEAR_BIN_TOL, derived from
+        # MoveToTargetGroundController's own WAYPOINT_TOL -- including the heading one,
+        # since _robot_is_close_to_pose() applies that same constant to x, y and theta
+        # alike -- rather than a tolerance invented here. That makes NearBin's slack the
+        # controller's slack; it does not make the two sets equal. The controller will
+        # also stop at poses NearBin rejects: any standoff outside the band, and any
+        # target_rot that swings the base off the bin's x axis (target_rot = pi/2 puts
+        # it beside the bin, dx = 0).
         low, high = THROW_STANDOFF_BOUNDS
         base_x = state.get(robot, "pos_base_x")
         base_y = state.get(robot, "pos_base_y")
         for target_bin in bins:
             dx = state.get(target_bin, "x") - base_x
-            dy = abs(state.get(target_bin, "y") - base_y)
+            dy = state.get(target_bin, "y") - base_y
             heading_error = abs(
                 get_signed_angle_distance(
-                    np.arctan2(state.get(target_bin, "y") - base_y, dx),
+                    np.arctan2(dy, dx),
                     state.get(robot, "pos_base_rot"),
                 )
             )
             if (
-                dy <= WAYPOINT_TOL
-                and low - WAYPOINT_TOL <= dx <= high + WAYPOINT_TOL
-                and heading_error <= WAYPOINT_TOL
+                abs(dy) <= NEAR_BIN_TOL
+                and low - NEAR_BIN_TOL <= dx <= high + NEAR_BIN_TOL
+                and heading_error <= NEAR_BIN_TOL
             ):
                 atoms.add(GroundAtom(NearBin, [robot, target_bin]))
 
@@ -189,24 +216,20 @@ class Tossing3DStateAbstractor:
 
     def goal_deriver(self, state: ObjectCentricState) -> RelationalAbstractGoal:
         """The goal is to toss every cube into the goal region."""
-        movables = state.get_objects(MujocoMovableObjectType)
-        atoms = {
-            GroundAtom(InGoalRegion, [o])
-            for o in movables
-            if o.name.startswith(CUBE_NAME_PREFIX)
-        }
+        atoms = {GroundAtom(InGoalRegion, [o]) for o in self._get_cubes(state)}
         return RelationalAbstractGoal(atoms, self.state_abstractor)
 
-    def _check_in_goal_region(self, state: ObjectCentricState, cube: Object) -> bool:
-        """Check whether a cube's centre lies in the goal region.
+    def _get_cubes(self, state: ObjectCentricState) -> list[Object]:
+        """Get the cubes, told apart from the bin and the barrier by name."""
+        movables = state.get_objects(MujocoMovableObjectType)
+        return [o for o in movables if o.name.startswith(CUBE_NAME_PREFIX)]
 
-        The region is queried per state rather than cached. For a region on the ground
-        the bounding box is state-independent today, so caching would be correct, but
-        querying cannot go stale if that ever changes, and it is the same call
-        _check_goals() makes -- which is what makes this predicate and the environment's
-        own success criterion the same test rather than two tests that happen to agree.
-        The cost is negligible next to a MuJoCo step.
-        """
+    def _check_in_goal_region(self, state: ObjectCentricState, cube: Object) -> bool:
+        """Check whether a cube's centre lies in the goal region."""
+        # The region is queried per state rather than cached, because this is the same
+        # call _check_goals() makes -- which is what makes this predicate and the
+        # environment's own success criterion the same test rather than two tests that
+        # happen to agree.
         ground_fixture = self._sim._ground_fixture  # pylint: disable=protected-access
         assert ground_fixture is not None, "Ground fixture not initialized"
         position = np.array(

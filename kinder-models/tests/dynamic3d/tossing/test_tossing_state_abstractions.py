@@ -29,6 +29,7 @@ def test_tossing3d_state_abstraction():
     num_objects = 1
     env = kinder.make(f"kinder/Tossing3D-o{num_objects}-v0", render_mode="rgb_array")
     if MAKE_VIDEOS:
+        env.unwrapped._object_centric_env.set_render_camera("task_view")  # type: ignore # pylint: disable=protected-access
         env = RecordVideo(
             env,
             "unit_test_videos",
@@ -59,13 +60,26 @@ def test_tossing3d_state_abstraction():
     assert not goal.check_state(state)
     assert not sim._check_goals()  # pylint: disable=protected-access
 
+    # InGoalRegion is checked against the environment's own region object, which is the
+    # task JSON's "ranges" entry inflated by the ground placement threshold (0.05 m) in
+    # every direction. Putting the cube just outside the literal 2.10 but inside the
+    # inflated 2.15 is what tells the two apart: a predicate written against the file
+    # would score this real success as a failure.
+    landed_state = state.copy()
+    landed_state.set(cube, "x", 2.14)
+    landed_state.set(cube, "y", 0.0)
+    landed_state.set(cube, "z", 0.025)
+    landed_atoms = abstractor.state_abstractor(landed_state).atoms
+    assert GroundAtom(InGoalRegion, [cube]) in landed_atoms
+
     # Drive the base to a throw standoff from the bin. NearBin is the one predicate
     # here with no upstream precedent, so it is checked against the controller that is
     # supposed to establish it rather than only against the initial state.
     controllers = create_lifted_controllers(env.action_space)
     lifted_controller = controllers["move_to_target"]
     target_bin = state.get_object_from_name("bin_0")
-    controller = lifted_controller.ground((robot, target_bin))
+    object_parameters = (robot, target_bin)
+    controller = lifted_controller.ground(object_parameters)
     throw_standoff = 1.35
     controller.reset(state, np.array([throw_standoff, 0.0]))
     for _ in range(300):
