@@ -197,7 +197,14 @@ def create_bilevel_planning_models(
         add_effects={
             LiftedAtom(InGoalRegion, [cube]),
             LiftedAtom(HandEmpty, [robot]),
-            LiftedAtom(OnGround, [cube]),
+            # OnGround is deliberately NOT added. It requires the cube to be flat
+            # (|qx|, |qy| <= ON_GROUND_TOL) as well as resting, because the grasp the
+            # pick controller builds is modelled on a flat cube -- and a thrown cube
+            # tumbles, so it comes to rest at an arbitrary orientation. Measured: after
+            # a refined toss the abstract state is {HandEmpty, InGoalRegion, NearBin}
+            # with no OnGround. Claiming it here made every refinement of this skill
+            # fail, since the trajectory sampler requires the achieved abstract state
+            # to equal the predicted one exactly, not merely to contain the effects.
         },
         delete_effects={
             LiftedAtom(Holding, [robot, cube]),
