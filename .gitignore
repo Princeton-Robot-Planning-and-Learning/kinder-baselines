@@ -192,7 +192,6 @@ runs
 outputs
 output
 cleanrl
-CLAUDE.md
 
 # videos
 base_motion_planning.mp4
