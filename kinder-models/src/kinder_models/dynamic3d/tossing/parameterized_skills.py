@@ -62,20 +62,19 @@ TOSS_RELEASE_ARM_CONF = np.deg2rad([0.0, 20.0, 180.0, -35.0, 0.0, 25.0, 90.0])
 # 1.35 m, the standoff both pick-and-toss tests drive to, and sits strictly inside
 # state_abstractions.THROW_STANDOFF_BOUNDS = (1.20, 1.65), the band NearBin treats as
 # throwable-from -- so every draw satisfies NearBin. That containment is the real
-# constraint and is asserted in test_move_to_throw_pose_samples_a_throwable_standoff;
-# it is not imported here because state_abstractions imports this module.
+# constraint and is asserted in test_move_to_throw_pose_samples_a_throwable_standoff.
 TOSS_TARGET_DISTANCE_BOUNDS = (1.25, 1.45)
 
 # The rotations, in radians, that MoveToThrowPoseController draws from. Again not
 # MOVE_TO_TARGET_ROT_BOUNDS, which is (-pi/4, pi/4): that rotation swings the base
 # around the target on an arc, and NearBin requires the base to be on the bin's *axis*
-# (|dy| <= WAYPOINT_TOL) and not merely at the right radius. Since
-# get_target_robot_pose_from_parameters places the base target_distance * sin(rot)
-# off-axis, the widest usable rotation is the one that spends half the tolerance at the
-# furthest standoff; the other half is left to the controller, which stops as soon as it
-# is within WAYPOINT_TOL of the pose it planned. Derived rather than written as a
-# literal so that retuning the distance range or the tolerance cannot silently
-# invalidate it.
+# and not merely at the right radius. Since get_target_robot_pose_from_parameters
+# places the base target_distance * sin(bin_yaw + rot) off-axis, the widest usable
+# rotation is the one that spends half of WAYPOINT_TOL at the furthest standoff; the
+# other half is left to the controller, which stops as soon as it is within
+# WAYPOINT_TOL of the pose it planned, and NearBin's own slack (NEAR_BIN_TOL) covers
+# the sum. Derived rather than written as a literal so that retuning the distance
+# range or the tolerance cannot silently invalidate it.
 _TOSS_MAX_TARGET_ROT = float(
     np.arcsin(0.5 * WAYPOINT_TOL / TOSS_TARGET_DISTANCE_BOUNDS[1])
 )
@@ -220,9 +219,9 @@ class MoveToThrowPoseController(MoveToTargetGroundController):
     standoff from TOSS_TARGET_DISTANCE_BOUNDS instead of returning the single constant
     distance that gives a stable grasp, since a throw has no one right distance to be
     at -- and, more to the point, is thrown from much further away than a grasp is
-    taken from. And it excludes the held
-    object from base collision checking by default, because the robot is carrying that
-    object while it drives, so checking the base against it would reject every plan.
+    taken from. And it excludes the held object from base collision checking by
+    default, because the robot is carrying that object while it drives, so checking
+    the base against it would reject every plan.
     That exclusion is a no-op today: run_base_motion_planning currently leaves its
     obstacle set empty (the two lines that would fill it are commented out in
     dynamic3d/utils.py), so no base plan is collision checked at all. It is here so
