@@ -13,9 +13,10 @@ kinder.register_all_environments()
 def test_tidybot3d_tossing_bilevel_planning():
     """Tests for bilevel planning in the Tossing3D environment.
 
-    The plan shape is fixed: pick the cube off the ground, drive to a throw
-    standoff from the bin, and toss. What bilevel planning has to supply is the
-    continuous parameters of each of those three skills.
+    The plan shape is fixed: pick the cube off the ground, drive to a throw standoff
+    from the bin, and toss. What bilevel planning has to supply is the grasp standoff
+    and the throw standoff; the toss itself samples nothing, so the two demonstrated
+    arm confs are constants that only have to survive refinement.
     """
     num_objects = 1
     env = kinder.make(f"kinder/Tossing3D-o{num_objects}-v0", render_mode="rgb_array")
@@ -63,6 +64,9 @@ def test_tidybot3d_tossing_bilevel_planning():
     # state into a *separate* simulator; that the same actions also reach the goal when
     # replayed in the real env is a different claim and is the one worth pinning.
     assert terminated, "Executed the whole plan without the environment terminating"
+    # And the planner's own abstraction agrees with the environment: InGoalRegion is
+    # checked against the model sim's goal region, so this catches the two drifting
+    # apart, which is what would make a refined plan and a real success diverge.
     final_state = env_models.observation_to_state(obs)
     assert env_models.goal_deriver(final_state).check_state(final_state)
 

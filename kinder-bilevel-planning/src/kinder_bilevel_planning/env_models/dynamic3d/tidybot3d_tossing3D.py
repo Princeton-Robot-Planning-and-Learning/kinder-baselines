@@ -18,7 +18,9 @@ Three things here are unlike the other dynamic3d env models, and each is deliber
 3. Two controller factories are called, shelf's for pick_shelf and tossing's for the
    rest, exactly as the monorepo's own test_pick_ground_toss does. Both are handed the
    same PyBulletSim: RelationalControllerGenerator grounds a fresh controller per
-   sampling attempt, and each unshared client is a leaked PyBullet connection.
+   sampling attempt, so an unshared sim would connect a PyBullet client and reload the
+   robot on every attempt. Since #87 that client is disconnected on collection rather
+   than leaked -- so this is a per-attempt cost, not a leak, but the cost is real.
 """
 
 from pathlib import Path
@@ -43,6 +45,7 @@ from kinder.envs.dynamic3d.robots.tidybot_robot_env import TidyBot3DRobotActionS
 from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
 from kinder_models.dynamic3d.tossing import parameterized_skills as tossing_skills
 from kinder_models.dynamic3d.tossing.state_abstractions import (
+    BARRIER_NAME,
     HandEmpty,
     Holding,
     InGoalRegion,
@@ -64,11 +67,12 @@ from relational_structs import (
 from relational_structs.spaces import ObjectCentricBoxSpace, ObjectCentricStateSpace
 
 # The names the scene uses. All three are MujocoMovableObjectType, so these names are
-# the only thing that distinguishes them -- see the module docstring.
+# the only thing that distinguishes them -- see the module docstring. The barrier's is
+# imported rather than repeated: it is the same literal the state abstractor picks the
+# barrier out by, and Reachable stops being emitted if the two drift apart.
 ROBOT_NAME = "robot"
 CUBE_NAME = "cube_0"
 BIN_NAME = "bin_0"
-BARRIER_NAME = "cuboid_barrier"
 
 
 def create_bilevel_planning_models(
@@ -205,6 +209,13 @@ def create_bilevel_planning_models(
             # with no OnGround. Claiming it here made every refinement of this skill
             # fail, since the trajectory sampler requires the achieved abstract state
             # to equal the predicted one exactly, not merely to contain the effects.
+            #
+            # That cuts both ways and is this model's one soft spot: a cube that
+            # happens to settle flat -- which includes flat on the bin's interior
+            # floor, where z - bb_z/2 = 0.02 is inside ON_GROUND_TOL -- puts OnGround
+            # back and fails refinement, and the toss samples no parameters, so a retry
+            # draws the identical trajectory. Making that impossible means changing
+            # OnGround in state_abstractions, not this operator.
         },
         delete_effects={
             LiftedAtom(Holding, [robot, cube]),
@@ -287,6 +298,13 @@ def _pad_controller(
     """
     num_used = len(controller.variables)
     assert num_used <= len(parameters)
+    # Padding is positional, so the leading parameters must be the controller's own
+    # variables. ground() type-checks against the operator's types, not these, so a
+    # reordered parameter list would otherwise bind the wrong objects in silence.
+    assert all(
+        v.type in (p.type, p.type.parent)
+        for p, v in zip(parameters[:num_used], controller.variables)
+    ), "Padded controller's leading parameters do not match its variables"
 
     controller_cls = controller.controller_cls
 
@@ -295,6 +313,10 @@ def _pad_controller(
 
         def __init__(self, objects: Sequence[Object]) -> None:
             super().__init__(list(objects)[:num_used])
+
+    # Otherwise all three padded controllers report as "_PaddedController", since
+    # LiftedParameterizedController.name is the class's own __name__.
+    _PaddedController.__name__ = f"Padded{controller_cls.__name__}"
 
     return LiftedParameterizedController(
         list(parameters),
