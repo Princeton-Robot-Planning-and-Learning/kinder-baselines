@@ -25,14 +25,34 @@ test_pick_ground_toss drives to, and the test beside this module is what shows i
 the cube in the goal region -- that test prints the landing position without checking
 the goal.
 
-The one precedent in the monorepo is kinder-ds-policies, whose Transport3DScriptedPolicy
-(policies/kinematic3d/transport3d.py) drives the same kind of parameterized skills. It
-is a different interface, not a different implementation of this one: a StatefulPolicy
-maps a vectorized observation straight to an action and owns the step/observe/terminated
-bookkeeping internally, whereas this class only *chooses* the next ground controller and
-its parameters and leaves that loop to the caller -- the same loop the parameterized-
-skill tests already run. Nothing here steps the environment, though constructing one
-does reset it -- see __init__.
+This module lives here and not in kinder-ds-policies, which is the package for
+hand-written policies over these skills and holds the one precedent,
+Transport3DScriptedPolicy (policies/kinematic3d/transport3d.py). That was considered and
+rejected on the interface, which this class cannot satisfy without being rewritten into
+a different class:
+
+- StatefulPolicy (policies/base.py) declares exactly two abstract methods, reset() and
+  __call__(observation: NDArray[float32]) -> NDArray[float32]. This class implements
+  neither. It takes an ObjectCentricState, not a vectorized observation, and returns a
+  (name, ground controller, parameters) triple, not an action -- it *chooses* the next
+  skill and leaves the step/observe/terminated loop to the caller, which is the loop the
+  parameterized-skill tests already run.
+- The loader (policies/__init__.py) discovers a policy by filename, probing
+  <subdir>/{env_name}.py, and requires the module to define
+  create_domain_specific_policy at module scope. Neither this filename nor this module
+  qualifies.
+- experiments/collect_demos_ds.py constructs a policy with observation_space= and
+  action_space= alone. This class needs the ObjectCentricTidyBot3DEnv itself, which that
+  script never has -- the test reaches it through env.unwrapped._object_centric_env.
+- Nothing in that package bridges a selector to an action stream. The ground-reset-and-
+  pump loop exists only inlined in Transport3DScriptedPolicy.__call__, and it indexes a
+  fixed sequence built once up front, whereas this class re-derives its choice from the
+  abstract state on every call.
+
+Moving it would therefore mean adding reset() and __call__, inlining that pumping loop,
+and having the factory build its own simulator -- a StatefulPolicy wrapping this one,
+which is a thing to write when a demo-collection run needs it, not a relocation. Nothing
+here steps the environment, though constructing one does reset it -- see __init__.
 
 The policy is written for the one-cube variant, Tossing3D-o1: with more cubes there is a
 choice of which to throw and which order to throw them in, and this makes neither.
