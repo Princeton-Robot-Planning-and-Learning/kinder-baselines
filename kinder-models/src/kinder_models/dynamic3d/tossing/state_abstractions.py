@@ -14,10 +14,12 @@ from bilevel_planning.structs import (
 )
 from kinder.envs.dynamic3d.envs import ObjectCentricTidyBot3DEnv
 from kinder.envs.dynamic3d.object_types import (
+    MujocoFixtureObjectType,
     MujocoMovableObjectType,
     MujocoObjectType,
     MujocoTidyBotRobotObjectType,
 )
+from prpl_utils.utils import get_signed_angle_distance
 from relational_structs import (
     GroundAtom,
     Object,
@@ -43,8 +45,7 @@ NearBin = Predicate("NearBin", [MujocoTidyBotRobotObjectType, MujocoMovableObjec
 # literal in the file scores real successes as failures.
 GOAL_REGION_NAME = "blocks_goal_region"
 
-# Every rigid body in this domain is a movable, so the manipulable cubes, the bin and
-# the barrier are told apart by name, the way sweep3D tells its wiper from its cubes.
+# Names by which the scene's movables are told apart -- see state_abstractor().
 CUBE_NAME_PREFIX = "cube"
 BIN_NAME_PREFIX = "bin"
 BARRIER_NAME = "cuboid_barrier"
@@ -76,7 +77,18 @@ class Tossing3DStateAbstractor:
         self._sim = sim
 
     def state_abstractor(self, state: ObjectCentricState) -> RelationalAbstractState:
-        """Get the abstract state for the current state."""
+        """Get the abstract state for the current state.
+
+        Two things a caller should know. First, NearBin is not achievable through
+        MoveToTargetGroundController's *sampler*, which hardcodes a 0.5 m grasping
+        standoff; establishing it takes an explicit standoff parameter in the throwable
+        band, so an env model that grounds that skill with its own sampler will never
+        satisfy NearBin. Second, this is not a pure function of its argument: object
+        poses come from `state`, but the goal region is read from the live simulator, so
+        calling it on a stored or hypothetical state evaluates InGoalRegion against
+        today's region. Both are inert for Tossing3D as it stands and are recorded so
+        they do not have to be rediscovered.
+        """
         atoms: set[GroundAtom] = set()
 
         # Sync the pybullet simulator.
@@ -84,7 +96,14 @@ class Tossing3DStateAbstractor:
 
         # Extract the relevant objects.
         robot = state.get_object_from_name(self._robot_name)
+        fixtures = state.get_objects(MujocoFixtureObjectType)
         movables = state.get_objects(MujocoMovableObjectType)
+        all_mujoco_objects = set(fixtures) | set(movables)
+        # The bin and the barrier are movables too, so the cubes -- the only objects
+        # here that are actually manipulated -- are picked out by name, the way sweep3D
+        # picks its wiper out from its cubes. OnGround and InGoalRegion are restricted
+        # to them deliberately: the bin and the barrier are scene furniture, and
+        # asserting where they rest would say nothing a planner can act on.
         cubes = [o for o in movables if o.name.startswith(CUBE_NAME_PREFIX)]
         bins = [o for o in movables if o.name.startswith(BIN_NAME_PREFIX)]
         barriers = [o for o in movables if o.name == BARRIER_NAME]
@@ -128,24 +147,44 @@ class Tossing3DStateAbstractor:
                 if state.get(cube, "x") < state.get(barrier, "x"):
                     atoms.add(GroundAtom(Reachable, [cube, barrier]))
 
-        # NearBin. This is an exact characterisation of the base pose that
-        # MoveToTargetGroundController produces for a bin at zero yaw with zero
-        # rotation offset, namely (bin_x - target_distance, bin_y): the robot is on the
-        # bin's axis, at a standoff a throw can be thrown from. Both conjuncts are
-        # needed. A test on distance alone is satisfied by a whole ring of base poses,
-        # most of which face away from the bin, so it would report that the robot is
-        # ready to throw after any motion that happened to end at the right radius --
-        # for instance a move to a cube that sits off to one side. The lateral conjunct
-        # rules those out. The tolerance is the controller's own WAYPOINT_TOL, i.e.
-        # exactly how far off its own waypoint that controller is willing to stop.
+        # NearBin: the base is standing where a throw can actually be thrown from. All
+        # three conjuncts are load-bearing, and a throw needs all three to be true.
+        #
+        #   dx -- the standoff, signed rather than absolute, because the robot must be
+        #     on the near side of the bin. An absolute value would also accept a base
+        #     past the bin (and so past the barrier), a pose that is unreachable today
+        #     only because WORLD_X_BOUNDS caps base planning short of it.
+        #   dy -- the base is on the bin's axis, not merely at the right radius. A
+        #     radius test alone is satisfied by a whole ring of positions.
+        #   heading -- the base is pointing at the bin. Position does not imply this:
+        #     nothing stops the base sitting at the right (x, y) while turned away, and
+        #     a throw is released along the base's own heading, so a predicate that
+        #     omitted this would call the robot ready to throw when it is not.
+        #
+        # All three tolerances are MoveToTargetGroundController's own WAYPOINT_TOL --
+        # including the heading one, since _robot_is_close_to_pose() applies that same
+        # constant to x, y and theta alike. NearBin therefore admits precisely the poses
+        # that controller is willing to stop at, rather than a tolerance invented here.
         low, high = THROW_STANDOFF_BOUNDS
+        base_x = state.get(robot, "pos_base_x")
+        base_y = state.get(robot, "pos_base_y")
         for target_bin in bins:
-            dx = abs(state.get(robot, "pos_base_x") - state.get(target_bin, "x"))
-            dy = abs(state.get(robot, "pos_base_y") - state.get(target_bin, "y"))
-            if dy <= WAYPOINT_TOL and low - WAYPOINT_TOL <= dx <= high + WAYPOINT_TOL:
+            dx = state.get(target_bin, "x") - base_x
+            dy = abs(state.get(target_bin, "y") - base_y)
+            heading_error = abs(
+                get_signed_angle_distance(
+                    np.arctan2(state.get(target_bin, "y") - base_y, dx),
+                    state.get(robot, "pos_base_rot"),
+                )
+            )
+            if (
+                dy <= WAYPOINT_TOL
+                and low - WAYPOINT_TOL <= dx <= high + WAYPOINT_TOL
+                and heading_error <= WAYPOINT_TOL
+            ):
                 atoms.add(GroundAtom(NearBin, [robot, target_bin]))
 
-        objects = {robot} | set(movables)
+        objects = {robot} | all_mujoco_objects
         return RelationalAbstractState(atoms, objects)
 
     def goal_deriver(self, state: ObjectCentricState) -> RelationalAbstractGoal:

@@ -51,13 +51,6 @@ def test_tossing3d_state_abstraction():
         f"(Reachable cube_0 cuboid_barrier)]"
     )
 
-    # The robot starts far from the bin, so it is not yet in a pose it can throw from,
-    # and nothing is held.
-    assert not any(
-        atom.predicate.name in ("NearBin", "Holding", "InGoalRegion")
-        for atom in abstract_state.atoms
-    )
-
     # The goal is for the cube to land in the goal region, which is exactly the
     # environment's own success criterion.
     cube = state.get_object_from_name("cube_0")
