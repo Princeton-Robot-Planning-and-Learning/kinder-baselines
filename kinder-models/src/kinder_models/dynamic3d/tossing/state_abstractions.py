@@ -1,9 +1,10 @@
 """State abstractions for the Tossing3D environment.
 
 Tossing3D is the one dynamic3d domain whose goal cannot be reached by manipulation
-alone: a 5 m barrier separates the robot from the bin, so a cube that is placed past the
-barrier can never be retrieved. The abstractions below are written to make that
-irreversibility visible to a planner -- Reachable is a one-way door that Toss deletes.
+alone: a barrier spanning the width of the scene separates the robot from the bin, and
+the base cannot pass it, so a cube on the far side can never be retrieved. Reachable
+below exists to make that irreversibility expressible -- an operator model that omits it
+can emit a retrieve-and-retry plan the dynamics will never execute.
 """
 
 import numpy as np
@@ -56,10 +57,11 @@ HOLDING_HEIGHT = 0.1
 ON_GROUND_TOL = 0.05
 EE_TO_OBJECT_TOL = 0.05
 
-# The range of standoffs, in metres, that a throw is thrown from. Unlike the grasping
-# standoff, which MoveToTargetGroundController pins at 0.5 m, a throw standoff has no
-# single right value: the further back the robot stands the flatter the throw has to
-# be, and both ends of this band land a cube in the goal region.
+# The band of base standoffs, in metres, that NearBin treats as throwable-from. Unlike
+# the grasping standoff, which MoveToTargetGroundController pins at 0.5 m, a throw
+# standoff has no single right value, so this is a band rather than a number. It is
+# wider than the 1.35 m the test uses and is the interval a toss sampler would draw
+# from; narrowing it makes NearBin stricter, never unsound.
 THROW_STANDOFF_BOUNDS = (1.20, 1.65)
 
 
@@ -129,11 +131,13 @@ class Tossing3DStateAbstractor:
         # NearBin. This is an exact characterisation of the base pose that
         # MoveToTargetGroundController produces for a bin at zero yaw with zero
         # rotation offset, namely (bin_x - target_distance, bin_y): the robot is on the
-        # bin's axis, at a standoff a throw can be thrown from. A plain distance test is
-        # not enough, because after picking a cube the base sits about 1.76 m from the
-        # bin -- inside the standoff band -- while facing roughly 40 degrees away from
-        # it, and a throw from there misses. The tolerance is the controller's own
-        # WAYPOINT_TOL, i.e. exactly how far off its own waypoint it will stop.
+        # bin's axis, at a standoff a throw can be thrown from. Both conjuncts are
+        # needed. A test on distance alone is satisfied by a whole ring of base poses,
+        # most of which face away from the bin, so it would report that the robot is
+        # ready to throw after any motion that happened to end at the right radius --
+        # for instance a move to a cube that sits off to one side. The lateral conjunct
+        # rules those out. The tolerance is the controller's own WAYPOINT_TOL, i.e.
+        # exactly how far off its own waypoint that controller is willing to stop.
         low, high = THROW_STANDOFF_BOUNDS
         for target_bin in bins:
             dx = abs(state.get(robot, "pos_base_x") - state.get(target_bin, "x"))
