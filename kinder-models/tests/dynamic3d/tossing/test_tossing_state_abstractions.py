@@ -1,11 +1,15 @@
 """Tests for tossing state_abstractions.py."""
 
 import kinder
+import numpy as np
 from conftest import MAKE_VIDEOS  # pylint: disable=import-error
 from gymnasium.wrappers import RecordVideo
 from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
 from relational_structs import GroundAtom, ObjectCentricState
 
+from kinder_models.dynamic3d.tossing.parameterized_skills import (
+    create_lifted_controllers,
+)
 from kinder_models.dynamic3d.tossing.state_abstractions import (
     InGoalRegion,
     Tossing3DStateAbstractor,
@@ -61,5 +65,35 @@ def test_tossing3d_state_abstraction():
     assert goal.atoms == {GroundAtom(InGoalRegion, [cube])}
     assert not goal.check_state(state)
     assert not sim._check_goals()  # pylint: disable=protected-access
+
+    # Drive the base to a throw standoff from the bin. NearBin is the one predicate
+    # here with no upstream precedent, so it is checked against the controller that is
+    # supposed to establish it rather than only against the initial state.
+    controllers = create_lifted_controllers(env.action_space)
+    lifted_controller = controllers["move_to_target"]
+    target_bin = state.get_object_from_name("bin_0")
+    controller = lifted_controller.ground((robot, target_bin))
+    throw_standoff = 1.35
+    controller.reset(state, np.array([throw_standoff, 0.0]))
+    for _ in range(300):
+        action = controller.step()
+        obs, _, _, _, _ = env.step(action)
+        next_state = env.observation_space.devectorize(obs)
+        controller.observe(next_state)
+        state = next_state
+        if controller.terminated():
+            break
+    else:
+        assert False, "Controller did not terminate"
+
+    # The robot is now standing where it can throw from, and nothing else has changed:
+    # the cube is untouched and still on the robot's side of the barrier.
+    abstract_state = abstractor.state_abstractor(state)
+    assert str(sorted(abstract_state.atoms)) == (
+        f"[(HandEmpty {robot.name}), "
+        f"(NearBin {robot.name} bin_0), "
+        f"(OnGround cube_0), "
+        f"(Reachable cube_0 cuboid_barrier)]"
+    )
 
     env.close()
