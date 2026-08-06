@@ -194,9 +194,14 @@ class MoveToThrowPoseController(MoveToTargetGroundController):
 
     This differs from MoveToTargetGroundController in two ways. Its sampler draws a
     standoff instead of returning the single constant distance that gives a stable
-    grasp, since a throw has no one right distance to be at. And it disables collision
-    checking against the held object by default, because the robot is holding that
-    object while it drives, so planning the base against it makes every plan fail.
+    grasp, since a throw has no one right distance to be at. And it excludes the held
+    object from base collision checking by default, because the robot is carrying that
+    object while it drives, so checking the base against it would reject every plan.
+    That exclusion is a no-op today: run_base_motion_planning currently leaves its
+    obstacle set empty (the two lines that would fill it are commented out in
+    dynamic3d/utils.py), so no base plan is collision checked at all. It is here so
+    that the held object is already excluded when that checking is switched back on,
+    which is also why the two pick-and-toss tests pass the same list by hand.
     """
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
@@ -538,10 +543,13 @@ class TossFromWindupController(
         params[1]: the release conf, swung to and released at by TossController.
 
     A toss is those two arm motions back to back, and this runs them as one controller
-    rather than as two skills. Splitting them would need a predicate over the windup
-    conf to chain the two operators, and both sub-controllers terminate on a step count
-    rather than on the state, so running them from here emits the same actions in the
-    same order that running them separately does.
+    rather than as two skills, because splitting them would need a predicate over the
+    windup conf to chain the two operators. Running them from here emits the same
+    actions, in the same order, that running them separately does, for two reasons: the
+    sub-controllers terminate on a step count over a precomputed profile rather than on
+    the state, which fixes both the action count and where the phase boundary falls;
+    and their actions, which are closed loop on the observed state, then agree because
+    the environment is deterministic given identical actions from an identical state.
     """
 
     def __init__(
