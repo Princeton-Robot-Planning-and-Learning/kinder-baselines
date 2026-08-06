@@ -21,14 +21,14 @@ from relational_structs.utils import create_state_from_dict
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.shelf.parameterized_skills import (
-    create_lifted_controllers as shelf_create_lifted_controllers,
-)
+    create_lifted_controllers as shelf_create_lifted_controllers,)
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
+    TOSS_TARGET_DISTANCE_BOUNDS,
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,
 )
+from kinder_models.dynamic3d.tossing.state_abstractions import THROW_STANDOFF_BOUNDS
 from kinder_models.dynamic3d.utils import (
-    MOVE_TO_TARGET_DISTANCE_BOUNDS,
     MOVE_TO_TARGET_ROT_BOUNDS,
     WAYPOINT_TOL,
     PyBulletSim,
@@ -1358,13 +1358,14 @@ def test_move_to_throw_pose_controller(monkeypatch):
     controller = lifted_controller.ground((robot, target, held))
 
     # MoveToTargetGroundController returns the constant [0.5, 0.0], so a planner can
-    # only ever try one base pose. This controller samples. Note that being inside the
-    # bounds is not on its own evidence of that: the constant it replaces is inside
-    # them too, so what distinguishes the two is that both components vary.
+    # only ever try one base pose. This controller samples, and it samples from a throw
+    # range rather than the grasping range -- 0.5 m is not a distance a toss is thrown
+    # from. Both components must also vary, since a constant would sit inside any
+    # interval that contains it.
     rng = np.random.default_rng(123)
     draws = np.array([controller.sample_parameters(state, rng) for _ in range(20)])
-    assert np.all(draws[:, 0] >= MOVE_TO_TARGET_DISTANCE_BOUNDS[0])
-    assert np.all(draws[:, 0] <= MOVE_TO_TARGET_DISTANCE_BOUNDS[1])
+    assert np.all(draws[:, 0] >= TOSS_TARGET_DISTANCE_BOUNDS[0])
+    assert np.all(draws[:, 0] <= TOSS_TARGET_DISTANCE_BOUNDS[1])
     assert np.all(draws[:, 1] >= MOVE_TO_TARGET_ROT_BOUNDS[0])
     assert np.all(draws[:, 1] <= MOVE_TO_TARGET_ROT_BOUNDS[1])
     assert draws[:, 0].min() < draws[:, 0].max()
@@ -1558,5 +1559,45 @@ def test_toss_from_windup_samples_the_demonstrated_confs():
     assert np.array_equal(params, other_params)
     assert np.allclose(params[0], np.deg2rad([0, 50, 180, -110, 0, -100, 90]))
     assert np.allclose(params[1], np.deg2rad([0, 20, 180, -35, 0, 25, 90]))
+
+    env.close()
+
+
+def test_move_to_throw_pose_samples_a_throwable_standoff():
+    """The sampled standoff must be one a throw can actually be thrown from.
+
+    MoveToThrowPoseController originally drew from MOVE_TO_TARGET_DISTANCE_BOUNDS,
+    which is the *grasping* range (0.5-0.6 m). NearBin -- the predicate that says the
+    base is standing somewhere a toss can be released from -- admits only
+    THROW_STANDOFF_BOUNDS (1.20-1.65 m). Those two intervals are disjoint, so no draw
+    from the sampler could ever satisfy NearBin, and any planner asked to reach NearBin
+    through this controller fails no matter how many samples it takes.
+
+    This asserts the containment directly rather than the two numbers, so widening
+    either interval keeps the test meaningful.
+    """
+    num_cubes = 1
+    env = kinder.make(
+        f"kinder/Tossing3D-o{num_cubes}-v0", render_mode="rgb_array", scene_bg=False
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+
+    controllers = create_lifted_controllers(env.action_space)
+    lifted_controller = controllers["move_to_throw_pose"]
+    robot = _get_robot_from_state(state)
+    target = state.get_object_from_name("bin_0")
+    held = state.get_object_from_name("cube_0")
+    controller = lifted_controller.ground((robot, target, held))
+
+    rng = np.random.default_rng(123)
+    draws = np.array([controller.sample_parameters(state, rng) for _ in range(50)])
+
+    low, high = THROW_STANDOFF_BOUNDS
+    assert np.all(draws[:, 0] >= low), draws[:, 0].min()
+    assert np.all(draws[:, 0] <= high), draws[:, 0].max()
+    # Still a sampler, not a constant.
+    assert draws[:, 0].min() < draws[:, 0].max()
 
     env.close()

@@ -38,7 +38,6 @@ from kinder_models.dynamic3d.utils import (
     GRASP_CLOSE_THRESHOLD,
     GRIPPER_CLOSED_THRESHOLD,
     GRIPPER_OPEN_THRESHOLD,
-    MOVE_TO_TARGET_DISTANCE_BOUNDS,
     MOVE_TO_TARGET_ROT_BOUNDS,
     WAYPOINT_TOL,
     WORLD_X_BOUNDS,
@@ -56,6 +55,17 @@ from kinder_models.dynamic3d.utils import (
 # the same configurations the pick-and-toss tests drive the arm through by hand.
 TOSS_WINDUP_ARM_CONF = np.deg2rad([0.0, 50.0, 180.0, -110.0, 0.0, -100.0, 90.0])
 TOSS_RELEASE_ARM_CONF = np.deg2rad([0.0, 20.0, 180.0, -35.0, 0.0, 25.0, 90.0])
+
+# The base-to-target standoffs, in metres, that MoveToThrowPoseController draws from.
+# This is deliberately NOT MOVE_TO_TARGET_DISTANCE_BOUNDS: that interval, (0.5, 0.6), is
+# the range that gives a stable *grasp*, and a robot standing 0.55 m from the bin is
+# standing on top of it, not somewhere a throw is thrown from. The interval brackets
+# 1.35 m, the standoff both pick-and-toss tests drive to, and sits strictly inside
+# state_abstractions.THROW_STANDOFF_BOUNDS = (1.20, 1.65), the band NearBin treats as
+# throwable-from -- so every draw satisfies NearBin. That containment is the real
+# constraint and is asserted in test_move_to_throw_pose_samples_a_throwable_standoff;
+# it is not imported here because state_abstractions imports this module.
+TOSS_TARGET_DISTANCE_BOUNDS = (1.25, 1.45)
 
 
 class MoveToTargetGroundController(
@@ -193,8 +203,10 @@ class MoveToThrowPoseController(MoveToTargetGroundController):
         target_rot: float (radians)
 
     This differs from MoveToTargetGroundController in two ways. Its sampler draws a
-    standoff instead of returning the single constant distance that gives a stable
-    grasp, since a throw has no one right distance to be at. And it excludes the held
+    standoff from TOSS_TARGET_DISTANCE_BOUNDS instead of returning the single constant
+    distance that gives a stable grasp, since a throw has no one right distance to be
+    at -- and, more to the point, is thrown from much further away than a grasp is
+    taken from. And it excludes the held
     object from base collision checking by default, because the robot is carrying that
     object while it drives, so checking the base against it would reject every plan.
     That exclusion is a no-op today: run_base_motion_planning currently leaves its
@@ -205,7 +217,7 @@ class MoveToThrowPoseController(MoveToTargetGroundController):
     """
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
-        distance = rng.uniform(*MOVE_TO_TARGET_DISTANCE_BOUNDS)  # type: ignore
+        distance = rng.uniform(*TOSS_TARGET_DISTANCE_BOUNDS)  # type: ignore
         rot = rng.uniform(*MOVE_TO_TARGET_ROT_BOUNDS)
         return np.array([distance, rot])
 
