@@ -41,9 +41,7 @@ from kinder.envs.dynamic3d.object_types import (
 )
 from kinder.envs.dynamic3d.robots.tidybot_robot_env import TidyBot3DRobotActionSpace
 from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
-from kinder_models.dynamic3d.tossing.parameterized_skills import (
-    create_lifted_controllers as tossing_create_lifted_controllers,
-)
+from kinder_models.dynamic3d.tossing import parameterized_skills as tossing_skills
 from kinder_models.dynamic3d.tossing.state_abstractions import (
     HandEmpty,
     Holding,
@@ -215,7 +213,7 @@ def create_bilevel_planning_models(
     shelf_controllers = shelf_skills.create_lifted_controllers(
         action_space, sim.initial_constant_state, pybullet_sim=pybullet_sim
     )
-    tossing_controllers = tossing_create_lifted_controllers(
+    tossing_controllers = tossing_skills.create_lifted_controllers(
         action_space, sim.initial_constant_state, pybullet_sim=pybullet_sim
     )
 
@@ -265,16 +263,15 @@ def _pad_controller(
 ) -> LiftedParameterizedController:
     """Widen a lifted controller to an operator's parameters.
 
-    The controller's leading variables are the ones that reach it; any trailing
-    operator parameters are bound by the operator and dropped before the ground
-    controller is constructed.
+    The controller's leading variables are the ones that reach it; any trailing operator
+    parameters are bound by the operator and dropped before the ground controller is
+    constructed.
 
     The returned controller always declares the operator's *own* parameters, even when
     the arities already match, because LiftedSkill.__post_init__ asserts
-    `tuple(operator.parameters) == tuple(controller.variables)` and Variables compare
-    by name as well as type. move_to_throw_pose is exactly that case: 3 variables
-    against 3 parameters, but named (?robot, ?target, ?held) against
-    (?robot, ?bin, ?cube).
+    `tuple(operator.parameters) == tuple(controller.variables)` and Variables compare by
+    name as well as type. move_to_throw_pose is exactly that case: 3 variables against 3
+    parameters, but named (?robot, ?target, ?held) against (?robot, ?bin, ?cube).
 
     The types are deliberately not asserted equal either. move_to_throw_pose's ?target
     is MujocoObjectType while the operator's ?bin is MujocoMovableObjectType, which is
