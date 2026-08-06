@@ -14,24 +14,26 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoObjectTypeFeatures,
     MujocoTidyBotRobotObjectType,
 )
+from prpl_utils.utils import get_signed_angle_distance
 from relational_structs import Object, ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
 from relational_structs.utils import create_state_from_dict
 from spatialmath import SE2
 
-from kinder_models.dynamic3d.utils import (
-    MOVE_TO_TARGET_DISTANCE_BOUNDS,
-    MOVE_TO_TARGET_ROT_BOUNDS,
-    WAYPOINT_TOL,
-    PyBulletSim,
-    get_overhead_object_se2_pose,
-)
 from kinder_models.dynamic3d.shelf.parameterized_skills import (
     create_lifted_controllers as shelf_create_lifted_controllers,
 )
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,
+)
+from kinder_models.dynamic3d.utils import (
+    MOVE_TO_TARGET_DISTANCE_BOUNDS,
+    MOVE_TO_TARGET_ROT_BOUNDS,
+    WAYPOINT_TOL,
+    PyBulletSim,
+    get_overhead_object_se2_pose,
+    run_base_motion_planning,
 )
 
 kinder.register_all_environments()
@@ -1330,7 +1332,7 @@ def test_pick_ground_toss():
     env.close()
 
 
-def test_move_to_throw_pose_controller():
+def test_move_to_throw_pose_controller(monkeypatch):
     """Test the throw-pose controller in the tossing environment with 1 cube."""
 
     # Create the environment.
@@ -1355,21 +1357,42 @@ def test_move_to_throw_pose_controller():
     held = state.get_object_from_name("cube_0")
     controller = lifted_controller.ground((robot, target, held))
 
-    # MoveToTargetGroundController returns a constant standoff, so a planner can only
-    # ever try one base pose. This controller samples, so two rngs must disagree.
-    params = controller.sample_parameters(state, np.random.default_rng(123))
-    other_params = controller.sample_parameters(state, np.random.default_rng(456))
-    assert (
-        MOVE_TO_TARGET_DISTANCE_BOUNDS[0]
-        <= params[0]
-        <= MOVE_TO_TARGET_DISTANCE_BOUNDS[1]
+    # MoveToTargetGroundController returns the constant [0.5, 0.0], so a planner can
+    # only ever try one base pose. This controller samples. Note that being inside the
+    # bounds is not on its own evidence of that: the constant it replaces is inside
+    # them too, so what distinguishes the two is that both components vary.
+    rng = np.random.default_rng(123)
+    draws = np.array([controller.sample_parameters(state, rng) for _ in range(20)])
+    assert np.all(draws[:, 0] >= MOVE_TO_TARGET_DISTANCE_BOUNDS[0])
+    assert np.all(draws[:, 0] <= MOVE_TO_TARGET_DISTANCE_BOUNDS[1])
+    assert np.all(draws[:, 1] >= MOVE_TO_TARGET_ROT_BOUNDS[0])
+    assert np.all(draws[:, 1] <= MOVE_TO_TARGET_ROT_BOUNDS[1])
+    assert draws[:, 0].min() < draws[:, 0].max()
+    assert draws[:, 1].min() < draws[:, 1].max()
+    params = draws[0]
+
+    # Record what the controller asks the base planner to ignore. Asserting on the
+    # resulting plan would prove nothing: base collision checking is currently
+    # commented out in run_base_motion_planning (dynamic3d/utils.py), so every plan
+    # succeeds whether or not the held object is excluded. What this pins is that the
+    # controller passes the held object down, which is what will matter when that
+    # checking is switched back on.
+    recorded_disabled: list[list[str] | None] = []
+
+    def _recording_run_base_motion_planning(**kwargs):
+        recorded_disabled.append(kwargs.get("disable_collision_objects"))
+        return run_base_motion_planning(**kwargs)
+
+    monkeypatch.setattr(
+        "kinder_models.dynamic3d.tossing.parameterized_skills"
+        ".run_base_motion_planning",
+        _recording_run_base_motion_planning,
     )
-    assert MOVE_TO_TARGET_ROT_BOUNDS[0] <= params[1] <= MOVE_TO_TARGET_ROT_BOUNDS[1]
-    assert not np.allclose(params, other_params)
 
     # Reset and execute the controller until it terminates. The held object is not
     # passed as a collision object, so this must plan without one being given.
     controller.reset(state, params)
+    assert recorded_disabled == [["cube_0"]]
     for _ in range(400):
         action = controller.step()
         obs, _, _, _, _ = env.step(action)
@@ -1392,6 +1415,15 @@ def test_move_to_throw_pose_controller():
     )
     assert np.isclose(
         state.get(robot, "pos_base_y"), expected_pose.y, atol=WAYPOINT_TOL
+    )
+    # The heading matters as much as the position: the sampled rotation is half of what
+    # this controller newly varies, and a throw is released along the base's heading.
+    assert np.isclose(
+        get_signed_angle_distance(
+            state.get(robot, "pos_base_rot"), expected_pose.theta()
+        ),
+        0.0,
+        atol=WAYPOINT_TOL,
     )
 
     env.close()
