@@ -23,6 +23,7 @@ from kinder_models.dynamic3d.utils import (
     MOVE_TO_TARGET_DISTANCE_BOUNDS,
     MOVE_TO_TARGET_ROT_BOUNDS,
     WAYPOINT_TOL,
+    PyBulletSim,
     get_overhead_object_se2_pose,
 )
 from kinder_models.dynamic3d.shelf.parameterized_skills import (
@@ -1408,13 +1409,15 @@ def test_toss_from_windup_matches_split_controllers():
         scene_bg=False,
     )
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
-    controllers = create_lifted_controllers(env.action_space)
 
     # The two demonstrated arm configurations, exactly as test_pick_toss uses them.
     windup_conf = np.deg2rad([0, 50, 180, -110, 0, -100, 90])  # pre toss
     toss_conf = np.deg2rad([0, 20, 180, -35, 0, 25, 90])  # toss
 
-    def _run_sequence(steps: list[tuple[str, np.ndarray]]) -> list[list[np.ndarray]]:
+    def _run_sequence(
+        steps: list[tuple[str, np.ndarray]],
+        controllers: dict,
+    ) -> list[list[np.ndarray]]:
         """Run controllers back to back from a fresh reset, recording every action.
 
         The actions are returned grouped by controller, so that a caller can tell how
@@ -1441,11 +1444,12 @@ def test_toss_from_windup_matches_split_controllers():
             actions_per_controller.append(actions)
         return actions_per_controller
 
+    controllers = create_lifted_controllers(env.action_space)
     split_phases = _run_sequence(
-        [("move_arm_to_conf", windup_conf), ("toss", toss_conf)]
+        [("move_arm_to_conf", windup_conf), ("toss", toss_conf)], controllers
     )
     composed_phases = _run_sequence(
-        [("toss_from_windup", np.array([windup_conf, toss_conf]))]
+        [("toss_from_windup", np.array([windup_conf, toss_conf]))], controllers
     )
 
     # Both halves did real work, so the comparison below is not vacuous. Measured
@@ -1456,12 +1460,42 @@ def test_toss_from_windup_matches_split_controllers():
     assert min(len(phase) for phase in split_phases) >= 5
 
     split_actions = [action for phase in split_phases for action in phase]
-    (composed_actions,) = composed_phases
+    assert len(composed_phases) == 1
+    composed_actions = composed_phases[0]
     assert len(composed_actions) == len(split_actions)
     for composed_action, split_action in zip(
         composed_actions, split_actions, strict=True
     ):
         assert np.array_equal(composed_action, split_action)
+
+    # Handing the factory a PyBullet sim to share must not change what comes out of
+    # it. Without this, the sim is the client every sub-controller plans in, so a
+    # mistake there would silently change the plans rather than fail loudly.
+    obs, _ = env.reset(seed=125)
+    initial_state = env.observation_space.devectorize(obs)
+    shared_sim = PyBulletSim(initial_state)
+    clients_before = _count_connected_pybullet_clients()
+    shared_controllers = create_lifted_controllers(
+        env.action_space, pybullet_sim=shared_sim
+    )
+    shared_phases = _run_sequence(
+        [("toss_from_windup", np.array([windup_conf, toss_conf]))], shared_controllers
+    )
+    assert len(shared_phases) == 1
+    shared_actions = shared_phases[0]
+    assert len(shared_actions) == len(split_actions)
+    for shared_action, split_action in zip(shared_actions, split_actions, strict=True):
+        assert np.array_equal(shared_action, split_action)
+
+    # The shared sim is still the caller's to reuse: no sub-controller disconnected it
+    # out from under the caller, and nothing was leaked. Note the count check alone is
+    # weak evidence of sharing, since PyBulletSim's finalizer releases a private client
+    # too once the controller is dropped; what shows the shared sim was actually planned
+    # in is that the actions above came out identical.
+    assert p.getConnectionInfo(physicsClientId=shared_sim.physics_client_id)[
+        "isConnected"
+    ]
+    assert _count_connected_pybullet_clients() == clients_before
 
     env.close()
 
