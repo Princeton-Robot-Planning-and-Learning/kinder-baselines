@@ -7,11 +7,12 @@ is a value this repository already publishes:
 
 - ORACLE_PICK_DISTANCE and ORACLE_PICK_ROTATION are the pair that
   PickShelfController.sample_parameters draws from np.random.default_rng(123), the rng
-  test_pick_ground_toss constructs to parameterize this exact grasp. With one cube in
-  the scene the sampler's rejection loop has nothing to reject against, so its first
-  draw is accepted -- so the two numbers do not depend on the seed or on the scene at
-  all. They are literals rather than a draw made here so that the oracle is
-  reproducible without carrying an rng, and
+  test_pick_ground_toss constructs to parameterize this exact grasp. The rejection loop
+  rejects a draw only when the base pose it implies lands within 0.6 m of a *different*
+  cube, so with one cube in the scene the first draw is always accepted and the pair is
+  a function of the seed alone -- it does not depend on the cube's pose. They are
+  literals rather than a draw made here so that the oracle is reproducible without
+  carrying an rng, and
   test_oracle_pick_parameters_match_the_sampler pins them against the sampler itself.
 - ORACLE_THROW_STANDOFF is test_pick_ground_toss's own target_distance for the drive,
   and the arm configurations for the toss are that test's own two confs, already module
@@ -24,17 +25,18 @@ test_pick_ground_toss drives to, and the test beside this module is what shows i
 the cube in the goal region -- that test prints the landing position without checking
 the goal.
 
-There is no other scripted policy in the monorepo to follow, so the shape here is the
-smallest one that keeps the existing test idiom intact: this class only *chooses* the
-next ground controller and its parameters, and the caller runs the same step/observe/
-terminated loop the parameterized-skill tests already run. Nothing here steps the
-environment, though constructing one does reset it -- see __init__.
+The one precedent in the monorepo is kinder-ds-policies, whose Transport3DScriptedPolicy
+(policies/kinematic3d/transport3d.py) drives the same kind of parameterized skills. It
+is a different interface, not a different implementation of this one: a StatefulPolicy
+maps a vectorized observation straight to an action and owns the step/observe/terminated
+bookkeeping internally, whereas this class only *chooses* the next ground controller and
+its parameters and leaves that loop to the caller -- the same loop the parameterized-
+skill tests already run. Nothing here steps the environment, though constructing one
+does reset it -- see __init__.
 
 The policy is written for the one-cube variant, Tossing3D-o1: with more cubes there is a
 choice of which to throw and which order to throw them in, and this makes neither.
 """
-
-from typing import Any
 
 import numpy as np
 from bilevel_planning.structs import GroundParameterizedController
@@ -43,8 +45,9 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoMovableObjectType,
     MujocoTidyBotRobotObjectType,
 )
+from kinder.envs.dynamic3d.robots.tidybot_robot_env import TidyBot3DRobotActionSpace
 from numpy.typing import NDArray
-from relational_structs import GroundAtom, Object, ObjectCentricState
+from relational_structs import Array, GroundAtom, Object, ObjectCentricState
 
 from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
@@ -69,11 +72,19 @@ ORACLE_PICK_ROTATION = -0.7008563047585579
 ORACLE_THROW_STANDOFF = 1.35
 ORACLE_THROW_ROTATION = 0.0
 
+# The name of the chosen controller, the controller already ground on its objects, and
+# the continuous parameters to reset it with. Named because the full form does not fit
+# in 88 columns.
+_ControllerSelection = tuple[
+    str, GroundParameterizedController[ObjectCentricState, Array], NDArray[np.float64]
+]
+
 
 class Tossing3DOraclePolicy:
     """Chooses the next ground controller and its parameters for Tossing3D-o1.
 
-    Reads the abstract state rather than raw features, which also means it inherits
+    Branches on the abstract state rather than on raw features -- it still reads the
+    state directly to find its objects -- which means it inherits
     Tossing3DStateAbstractor's dependence on the live simulator: InGoalRegion is checked
     against the environment's own goal region, not against the state argument.
     """
@@ -81,7 +92,7 @@ class Tossing3DOraclePolicy:
     def __init__(
         self,
         sim: ObjectCentricTidyBot3DEnv,
-        action_space: Any,
+        action_space: TidyBot3DRobotActionSpace,
         pybullet_sim: PyBulletSim | None = None,
         throw_standoff: float = ORACLE_THROW_STANDOFF,
     ) -> None:
@@ -93,6 +104,11 @@ class Tossing3DOraclePolicy:
         Construct this *before* the episode starts. Tossing3DStateAbstractor resets sim
         to read its objects, so building a policy mid-episode discards that episode, and
         it allocates a PyBullet client that lives as long as the policy does.
+
+        pybullet_sim is deliberately not forwarded to the shelf factory, which accepts
+        the same keyword. PickShelfController.reset writes base_link_to_held_obj onto
+        the sim it plans in, so sharing one across the pick and the toss would be a
+        behaviour change rather than only an allocation saving.
         """
         self._abstractor = Tossing3DStateAbstractor(sim)
         self._controllers = create_lifted_controllers(
@@ -103,17 +119,20 @@ class Tossing3DOraclePolicy:
 
     def get_next_controller(
         self, state: ObjectCentricState
-    ) -> tuple[str, GroundParameterizedController, NDArray[np.float64]] | None:
+    ) -> _ControllerSelection | None:
         """The next controller to run, its objects already ground, and its parameters.
 
         Returns None once the goal holds, which is the only terminal condition. There is
-        deliberately no recovery branch: a toss that carries the cube past the barrier
-        is unrecoverable -- the base cannot follow it, so the pick will not plan -- and a
-        fallback skill would hide the irreversibility the environment exists to exhibit.
-        A toss that falls short leaves the cube on the near side instead, where Reachable
-        still holds and the policy simply asks for the pick again, so a caller that
-        cannot tolerate an unbounded retry should cap the number of selections. Neither
-        miss is exercised by a test.
+        deliberately no recovery branch: a toss that carries the cube past the barrier is
+        unrecoverable, and a fallback skill would hide the irreversibility the
+        environment exists to exhibit. Note what that costs: this never reads Reachable,
+        the predicate state_abstractions added to make that irreversibility expressible,
+        so it still selects pick_shelf for a cube it cannot reach, and
+        PickShelfController.reset then fails its `assert base_motion_plan is not None`.
+        The caller sees an AssertionError, not a signal it can act on. A toss that falls
+        short leaves the cube on the near side instead, where the policy simply asks for
+        the pick again, so a caller that cannot tolerate an unbounded retry should cap
+        the number of selections. Neither miss is exercised by a test.
         """
         if self._abstractor.goal_deriver(state).check_state(state):
             return None

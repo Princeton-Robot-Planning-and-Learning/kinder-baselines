@@ -7,9 +7,7 @@ from gymnasium.wrappers import RecordVideo
 from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
 from relational_structs import ObjectCentricState
 
-from kinder_models.dynamic3d.shelf.parameterized_skills import (
-    create_lifted_controllers as shelf_create_lifted_controllers,
-)
+from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
 from kinder_models.dynamic3d.tossing.oracle_policy import (
     ORACLE_PICK_DISTANCE,
     ORACLE_PICK_ROTATION,
@@ -68,14 +66,19 @@ def test_tossing3d_oracle_policy():
             assert False, f"Controller {name} did not terminate"
 
     assert executed == ["pick_shelf", "move_to_throw_pose", "toss_from_windup"]
+    # The cube is already down when the toss controller terminates: release happens at
+    # 0.46 of the swing profile, leaving over half of it -- longer than the flight -- to
+    # run before terminated() is True. No settling loop is needed, but if the profile or
+    # the release fraction is retuned, this is the assertion that will start failing.
     assert sim._check_goals()  # pylint: disable=protected-access
     assert policy.get_next_controller(state) is None
 
-    # The oracle hands move_to_throw_pose an explicit 1.35 m standoff, which is outside
-    # the MOVE_TO_TARGET_DISTANCE_BOUNDS that controller *samples* from. A supplied
-    # parameter is not a sampled one, and this pins that: the base really did stop at
-    # the requested standoff rather than at a clamped 0.5-0.6 m. The base does not move
-    # again after the drive, so the final state carries the same pose.
+    # The oracle hands move_to_throw_pose an explicit 1.35 m standoff rather than
+    # letting it sample one from TOSS_TARGET_DISTANCE_BOUNDS = (1.25, 1.45). Nothing
+    # clamps or re-samples a supplied parameter, and this pins that: the base really did
+    # stop at the requested standoff, not merely somewhere inside the sampler's range.
+    # The base does not move again after the drive, so the final state carries the same
+    # pose.
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     target_bin = state.get_object_from_name("bin_0")
     standoff = np.hypot(
@@ -93,14 +96,14 @@ def test_oracle_pick_parameters_match_the_sampler():
     The package states their provenance in a docstring and cannot check it, since it
     holds them as constants rather than drawing them. This checks it.
     """
-    env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", scene_bg=False)
+    env = kinder.make("kinder/Tossing3D-o1-v0", scene_bg=False)
     obs, _ = env.reset(seed=125)
     state = env.observation_space.devectorize(obs)
     assert isinstance(state, ObjectCentricState)
 
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
-    controllers = shelf_create_lifted_controllers(env.action_space)
+    controllers = shelf_skills.create_lifted_controllers(env.action_space)
     controller = controllers["pick_shelf"].ground((robot, cube))
 
     params = controller.sample_parameters(state, np.random.default_rng(123))
