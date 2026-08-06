@@ -19,6 +19,12 @@ from relational_structs.spaces import ObjectCentricBoxSpace
 from relational_structs.utils import create_state_from_dict
 from spatialmath import SE2
 
+from kinder_models.dynamic3d.utils import (
+    MOVE_TO_TARGET_DISTANCE_BOUNDS,
+    MOVE_TO_TARGET_ROT_BOUNDS,
+    WAYPOINT_TOL,
+    get_overhead_object_se2_pose,
+)
 from kinder_models.dynamic3d.shelf.parameterized_skills import (
     create_lifted_controllers as shelf_create_lifted_controllers,
 )
@@ -1319,5 +1325,154 @@ def test_pick_ground_toss():
     print("cube_orientation", cube_orientation)
     print("robot base position", robot_base_position)
     print("distance", distance)
+
+    env.close()
+
+
+def test_move_to_throw_pose_controller():
+    """Test the throw-pose controller in the tossing environment with 1 cube."""
+
+    # Create the environment.
+    num_cubes = 1
+    env = kinder.make(
+        f"kinder/Tossing3D-o{num_cubes}-v0",
+        render_mode="rgb_array",
+        scene_bg=False,
+    )
+
+    # Reset the environment and get the initial state.
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+
+    # Ground the controller on (robot, target, held).
+    controllers = create_lifted_controllers(env.action_space)
+    lifted_controller = controllers["move_to_throw_pose"]
+    assert len(lifted_controller.variables) == 3
+    robot = _get_robot_from_state(state)
+    target = state.get_object_from_name("bin_0")
+    held = state.get_object_from_name("cube_0")
+    controller = lifted_controller.ground((robot, target, held))
+
+    # MoveToTargetGroundController returns a constant standoff, so a planner can only
+    # ever try one base pose. This controller samples, so two rngs must disagree.
+    params = controller.sample_parameters(state, np.random.default_rng(123))
+    other_params = controller.sample_parameters(state, np.random.default_rng(456))
+    assert (
+        MOVE_TO_TARGET_DISTANCE_BOUNDS[0]
+        <= params[0]
+        <= MOVE_TO_TARGET_DISTANCE_BOUNDS[1]
+    )
+    assert MOVE_TO_TARGET_ROT_BOUNDS[0] <= params[1] <= MOVE_TO_TARGET_ROT_BOUNDS[1]
+    assert not np.allclose(params, other_params)
+
+    # Reset and execute the controller until it terminates. The held object is not
+    # passed as a collision object, so this must plan without one being given.
+    controller.reset(state, params)
+    for _ in range(400):
+        action = controller.step()
+        obs, _, _, _, _ = env.step(action)
+        next_state = env.observation_space.devectorize(obs)
+        controller.observe(next_state)
+        state = next_state
+        if controller.terminated():
+            break
+    else:
+        assert False, "Controller did not terminate"
+
+    # The base ended up the sampled distance from the target, facing it.
+    robot = _get_robot_from_state(state)
+    target_pose = get_overhead_object_se2_pose(state, target)
+    expected_pose = get_target_robot_pose_from_parameters(
+        target_pose, params[0], params[1]
+    )
+    assert np.isclose(state.get(robot, "pos_base_x"), expected_pose.x, atol=WAYPOINT_TOL)
+    assert np.isclose(state.get(robot, "pos_base_y"), expected_pose.y, atol=WAYPOINT_TOL)
+
+    env.close()
+
+
+def test_toss_from_windup_matches_split_controllers():
+    """Test that the composed toss emits the same actions as the two-controller
+    sequence it replaces."""
+
+    # Create the environment.
+    num_cubes = 1
+    env = kinder.make(
+        f"kinder/Tossing3D-o{num_cubes}-v0",
+        render_mode="rgb_array",
+        scene_bg=False,
+    )
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    controllers = create_lifted_controllers(env.action_space)
+
+    # The two demonstrated arm configurations, exactly as test_pick_toss uses them.
+    windup_conf = np.deg2rad([0, 50, 180, -110, 0, -100, 90])  # pre toss
+    toss_conf = np.deg2rad([0, 20, 180, -35, 0, 25, 90])  # toss
+
+    def _run_sequence(steps: list[tuple[str, np.ndarray]]) -> list[np.ndarray]:
+        """Run controllers back to back from a fresh reset, recording every action."""
+        obs, _ = env.reset(seed=125)
+        state = env.observation_space.devectorize(obs)
+        actions: list[np.ndarray] = []
+        for controller_name, params in steps:
+            robot = _get_robot_from_state(state)
+            controller = controllers[controller_name].ground((robot,))
+            controller.reset(state, params)
+            for _ in range(400):
+                action = controller.step()
+                actions.append(np.array(action, dtype=np.float32, copy=True))
+                obs, _, _, _, _ = env.step(action)
+                state = env.observation_space.devectorize(obs)
+                controller.observe(state)
+                if controller.terminated():
+                    break
+            else:
+                assert False, "Controller did not terminate"
+        return actions
+
+    split_actions = _run_sequence(
+        [("move_arm_to_conf", windup_conf), ("toss", toss_conf)]
+    )
+    composed_actions = _run_sequence(
+        [("toss_from_windup", np.array([windup_conf, toss_conf]))]
+    )
+
+    # The sequence did real work, so the comparison below is not vacuous.
+    assert len(split_actions) > 2
+    assert len(composed_actions) == len(split_actions)
+    for composed_action, split_action in zip(
+        composed_actions, split_actions, strict=True
+    ):
+        assert np.array_equal(composed_action, split_action)
+
+    env.close()
+
+
+def test_toss_from_windup_samples_the_demonstrated_confs():
+    """Test that the composed toss samples the two demonstrated confs, deterministically."""
+
+    # Create the environment.
+    num_cubes = 1
+    env = kinder.make(
+        f"kinder/Tossing3D-o{num_cubes}-v0",
+        render_mode="rgb_array",
+        scene_bg=False,
+    )
+
+    # Reset the environment and get the initial state.
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+
+    controllers = create_lifted_controllers(env.action_space)
+    robot = _get_robot_from_state(state)
+    controller = controllers["toss_from_windup"].ground((robot,))
+
+    params = controller.sample_parameters(state, np.random.default_rng(123))
+    other_params = controller.sample_parameters(state, np.random.default_rng(456))
+    assert np.array_equal(params, other_params)
+    assert np.allclose(params[0], np.deg2rad([0, 50, 180, -110, 0, -100, 90]))
+    assert np.allclose(params[1], np.deg2rad([0, 20, 180, -35, 0, 25, 90]))
 
     env.close()
