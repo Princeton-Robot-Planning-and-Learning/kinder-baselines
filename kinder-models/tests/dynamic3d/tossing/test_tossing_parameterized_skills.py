@@ -24,12 +24,12 @@ from kinder_models.dynamic3d.shelf.parameterized_skills import (
     create_lifted_controllers as shelf_create_lifted_controllers,)
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     TOSS_TARGET_DISTANCE_BOUNDS,
+    TOSS_TARGET_ROT_BOUNDS,
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,
 )
 from kinder_models.dynamic3d.tossing.state_abstractions import THROW_STANDOFF_BOUNDS
 from kinder_models.dynamic3d.utils import (
-    MOVE_TO_TARGET_ROT_BOUNDS,
     WAYPOINT_TOL,
     PyBulletSim,
     get_overhead_object_se2_pose,
@@ -1366,8 +1366,8 @@ def test_move_to_throw_pose_controller(monkeypatch):
     draws = np.array([controller.sample_parameters(state, rng) for _ in range(20)])
     assert np.all(draws[:, 0] >= TOSS_TARGET_DISTANCE_BOUNDS[0])
     assert np.all(draws[:, 0] <= TOSS_TARGET_DISTANCE_BOUNDS[1])
-    assert np.all(draws[:, 1] >= MOVE_TO_TARGET_ROT_BOUNDS[0])
-    assert np.all(draws[:, 1] <= MOVE_TO_TARGET_ROT_BOUNDS[1])
+    assert np.all(draws[:, 1] >= TOSS_TARGET_ROT_BOUNDS[0])
+    assert np.all(draws[:, 1] <= TOSS_TARGET_ROT_BOUNDS[1])
     assert draws[:, 0].min() < draws[:, 0].max()
     assert draws[:, 1].min() < draws[:, 1].max()
     params = draws[0]
@@ -1599,5 +1599,46 @@ def test_move_to_throw_pose_samples_a_throwable_standoff():
     assert np.all(draws[:, 0] <= high), draws[:, 0].max()
     # Still a sampler, not a constant.
     assert draws[:, 0].min() < draws[:, 0].max()
+
+    env.close()
+
+
+def test_move_to_throw_pose_samples_a_pose_on_the_bin_axis():
+    """Every sampled pose must be one NearBin accepts, in y as well as in x.
+
+    NearBin has three conjuncts, and the standoff is only one of them. It also
+    requires the base to be on the bin's axis -- |dy| <= WAYPOINT_TOL -- because a
+    radius test alone is satisfied by a whole ring of positions. The sampled rotation
+    is what moves the base off that axis: get_target_robot_pose_from_parameters places
+    the base at target_distance * sin(target_rot) off-axis, so drawing target_rot from
+    MOVE_TO_TARGET_ROT_BOUNDS = (-pi/4, pi/4) puts all but a few percent of draws
+    outside NearBin however good the standoff is.
+
+    The assertion is on the off-axis offset the parameters imply, not on the bounds
+    themselves, so it keeps its meaning if either interval is retuned.
+    """
+    num_cubes = 1
+    env = kinder.make(
+        f"kinder/Tossing3D-o{num_cubes}-v0", render_mode="rgb_array", scene_bg=False
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+
+    controllers = create_lifted_controllers(env.action_space)
+    lifted_controller = controllers["move_to_throw_pose"]
+    robot = _get_robot_from_state(state)
+    target = state.get_object_from_name("bin_0")
+    held = state.get_object_from_name("cube_0")
+    controller = lifted_controller.ground((robot, target, held))
+
+    rng = np.random.default_rng(123)
+    draws = np.array([controller.sample_parameters(state, rng) for _ in range(50)])
+
+    off_axis = np.abs(draws[:, 0] * np.sin(draws[:, 1]))
+    assert np.all(off_axis <= WAYPOINT_TOL), off_axis.max()
+    # Still a sampler, not a constant, in both components.
+    assert draws[:, 0].min() < draws[:, 0].max()
+    assert draws[:, 1].min() < draws[:, 1].max()
 
     env.close()

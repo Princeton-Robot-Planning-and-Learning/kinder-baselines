@@ -38,7 +38,6 @@ from kinder_models.dynamic3d.utils import (
     GRASP_CLOSE_THRESHOLD,
     GRIPPER_CLOSED_THRESHOLD,
     GRIPPER_OPEN_THRESHOLD,
-    MOVE_TO_TARGET_ROT_BOUNDS,
     WAYPOINT_TOL,
     WORLD_X_BOUNDS,
     WORLD_Y_BOUNDS,
@@ -66,6 +65,21 @@ TOSS_RELEASE_ARM_CONF = np.deg2rad([0.0, 20.0, 180.0, -35.0, 0.0, 25.0, 90.0])
 # constraint and is asserted in test_move_to_throw_pose_samples_a_throwable_standoff;
 # it is not imported here because state_abstractions imports this module.
 TOSS_TARGET_DISTANCE_BOUNDS = (1.25, 1.45)
+
+# The rotations, in radians, that MoveToThrowPoseController draws from. Again not
+# MOVE_TO_TARGET_ROT_BOUNDS, which is (-pi/4, pi/4): that rotation swings the base
+# around the target on an arc, and NearBin requires the base to be on the bin's *axis*
+# (|dy| <= WAYPOINT_TOL) and not merely at the right radius. Since
+# get_target_robot_pose_from_parameters places the base target_distance * sin(rot)
+# off-axis, the widest usable rotation is the one that spends half the tolerance at the
+# furthest standoff; the other half is left to the controller, which stops as soon as it
+# is within WAYPOINT_TOL of the pose it planned. Derived rather than written as a
+# literal so that retuning the distance range or the tolerance cannot silently
+# invalidate it.
+_TOSS_MAX_TARGET_ROT = float(
+    np.arcsin(0.5 * WAYPOINT_TOL / TOSS_TARGET_DISTANCE_BOUNDS[1])
+)
+TOSS_TARGET_ROT_BOUNDS = (-_TOSS_MAX_TARGET_ROT, _TOSS_MAX_TARGET_ROT)
 
 
 class MoveToTargetGroundController(
@@ -218,7 +232,7 @@ class MoveToThrowPoseController(MoveToTargetGroundController):
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         distance = rng.uniform(*TOSS_TARGET_DISTANCE_BOUNDS)  # type: ignore
-        rot = rng.uniform(*MOVE_TO_TARGET_ROT_BOUNDS)
+        rot = rng.uniform(*TOSS_TARGET_ROT_BOUNDS)
         return np.array([distance, rot])
 
     def reset(
