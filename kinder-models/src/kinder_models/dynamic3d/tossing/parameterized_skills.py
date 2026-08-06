@@ -25,7 +25,6 @@ from pybullet_helpers.motion_planning import (
 )
 from relational_structs import (
     Array,
-    Object,
     ObjectCentricState,
     Variable,
 )

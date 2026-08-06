@@ -1386,15 +1386,19 @@ def test_move_to_throw_pose_controller():
     expected_pose = get_target_robot_pose_from_parameters(
         target_pose, params[0], params[1]
     )
-    assert np.isclose(state.get(robot, "pos_base_x"), expected_pose.x, atol=WAYPOINT_TOL)
-    assert np.isclose(state.get(robot, "pos_base_y"), expected_pose.y, atol=WAYPOINT_TOL)
+    assert np.isclose(
+        state.get(robot, "pos_base_x"), expected_pose.x, atol=WAYPOINT_TOL
+    )
+    assert np.isclose(
+        state.get(robot, "pos_base_y"), expected_pose.y, atol=WAYPOINT_TOL
+    )
 
     env.close()
 
 
 def test_toss_from_windup_matches_split_controllers():
-    """Test that the composed toss emits the same actions as the two-controller
-    sequence it replaces."""
+    """Test that the composed toss emits the same actions as the two-controller sequence
+    it replaces."""
 
     # Create the environment.
     num_cubes = 1
@@ -1450,7 +1454,8 @@ def test_toss_from_windup_matches_split_controllers():
 
 
 def test_toss_from_windup_samples_the_demonstrated_confs():
-    """Test that the composed toss samples the two demonstrated confs, deterministically."""
+    """Test that the composed toss samples the two demonstrated confs,
+    deterministically."""
 
     # Create the environment.
     num_cubes = 1
