@@ -9,24 +9,29 @@ is a value this repository already publishes:
   PickShelfController.sample_parameters draws from np.random.default_rng(123), the rng
   test_pick_ground_toss constructs to parameterize this exact grasp. With one cube in
   the scene the sampler's rejection loop has nothing to reject against, so its first
-  draw is accepted. They are written out as literals because the linter bans np.random
-  in package code, and test_oracle_pick_parameters_match_the_sampler pins them against
-  the sampler itself.
+  draw is accepted -- so the two numbers do not depend on the seed or on the scene at
+  all. They are literals rather than a draw made here so that the oracle is
+  reproducible without carrying an rng, and
+  test_oracle_pick_parameters_match_the_sampler pins them against the sampler itself.
 - ORACLE_THROW_STANDOFF is test_pick_ground_toss's own target_distance for the drive,
   and the arm configurations for the toss are that test's own two confs, already module
   constants in parameterized_skills.
 
 Note that the standoff is passed explicitly and is deliberately outside
 MOVE_TO_TARGET_DISTANCE_BOUNDS, which MoveToThrowPoseController samples from. Those
-bounds are the grasping range; nothing constrains a caller-supplied parameter to them,
-and 1.35 m is the only standoff in this repository demonstrated to land a cube in the
-goal region.
+bounds are the grasping range; nothing constrains a caller-supplied parameter to them.
+1.35 m is the standoff test_pick_ground_toss drives to, and the test beside this module
+is what shows it lands the cube in the goal region -- that test prints the landing
+position without checking the goal.
 
 There is no other scripted policy in the monorepo to follow, so the shape here is the
 smallest one that keeps the existing test idiom intact: this class only *chooses* the
 next ground controller and its parameters, and the caller runs the same step/observe/
 terminated loop the parameterized-skill tests already run. Nothing here steps the
-environment.
+environment, though constructing one does reset it -- see __init__.
+
+The policy is written for the one-cube variant, Tossing3D-o1: with more cubes there is a
+choice of which to throw and which order to throw them in, and this makes neither.
 """
 
 from typing import Any
@@ -41,9 +46,7 @@ from kinder.envs.dynamic3d.object_types import (
 from numpy.typing import NDArray
 from relational_structs import GroundAtom, Object, ObjectCentricState
 
-from kinder_models.dynamic3d.shelf.parameterized_skills import (
-    create_lifted_controllers as shelf_create_lifted_controllers,
-)
+from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     TOSS_RELEASE_ARM_CONF,
     TOSS_WINDUP_ARM_CONF,
@@ -68,7 +71,12 @@ ORACLE_THROW_ROTATION = 0.0
 
 
 class Tossing3DOraclePolicy:
-    """Chooses the next ground controller and its parameters from the state alone."""
+    """Chooses the next ground controller and its parameters for Tossing3D-o1.
+
+    Reads the abstract state rather than raw features, which also means it inherits
+    Tossing3DStateAbstractor's dependence on the live simulator: InGoalRegion is checked
+    against the environment's own goal region, not against the state argument.
+    """
 
     def __init__(
         self,
@@ -81,12 +89,16 @@ class Tossing3DOraclePolicy:
 
         The pick comes from the shelf package: Tossing3D has no pick controller of its
         own, which is why the two pick-and-toss tests reach into shelf for it too.
+
+        Construct this *before* the episode starts. Tossing3DStateAbstractor resets sim
+        to read its objects, so building a policy mid-episode discards that episode, and
+        it allocates a PyBullet client that lives as long as the policy does.
         """
         self._abstractor = Tossing3DStateAbstractor(sim)
         self._controllers = create_lifted_controllers(
             action_space, pybullet_sim=pybullet_sim
         )
-        self._shelf_controllers = shelf_create_lifted_controllers(action_space)
+        self._shelf_controllers = shelf_skills.create_lifted_controllers(action_space)
         self._throw_standoff = throw_standoff
 
     def get_next_controller(
@@ -94,11 +106,14 @@ class Tossing3DOraclePolicy:
     ) -> tuple[str, GroundParameterizedController, NDArray[np.float64]] | None:
         """The next controller to run, its objects already ground, and its parameters.
 
-        Returns None once the goal holds, which is the only terminal condition: a missed
-        toss leaves the cube on the far side of the barrier, where the policy asks for
-        the pick again and that grasp fails to plan. There is deliberately no recovery
-        branch, because the domain admits no recovery, and a fallback skill would hide
-        the irreversibility the environment exists to exhibit.
+        Returns None once the goal holds, which is the only terminal condition. There is
+        deliberately no recovery branch: a toss that carries the cube past the barrier
+        is unrecoverable -- the base cannot follow it, so the pick will not plan -- and a
+        fallback skill would hide the irreversibility the environment exists to exhibit.
+        A toss that falls short leaves the cube on the near side instead, where Reachable
+        still holds and the policy simply asks for the pick again, so a caller that
+        cannot tolerate an unbounded retry should cap the number of selections. Neither
+        miss is exercised by a test.
         """
         if self._abstractor.goal_deriver(state).check_state(state):
             return None
@@ -137,6 +152,13 @@ class Tossing3DOraclePolicy:
 
     @staticmethod
     def _get_movable_by_prefix(state: ObjectCentricState, prefix: str) -> Object:
+        """Find the one movable whose name starts with prefix.
+
+        The bin, the cube and the barrier are all MujocoMovableObjectType, so they can
+        only be told apart by name, as the state abstractor does. Note how narrowly
+        "cuboid_barrier" misses the "cube" prefix. The assertion is what confines this
+        policy to Tossing3D-o1: with two cubes it fires rather than picking one.
+        """
         matches = [
             obj
             for obj in state.get_objects(MujocoMovableObjectType)
