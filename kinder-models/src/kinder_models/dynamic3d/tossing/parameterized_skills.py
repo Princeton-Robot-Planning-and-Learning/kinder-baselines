@@ -25,6 +25,7 @@ from pybullet_helpers.motion_planning import (
 )
 from relational_structs import (
     Array,
+    Object,
     ObjectCentricState,
     Variable,
 )
@@ -37,6 +38,8 @@ from kinder_models.dynamic3d.utils import (
     GRASP_CLOSE_THRESHOLD,
     GRIPPER_CLOSED_THRESHOLD,
     GRIPPER_OPEN_THRESHOLD,
+    MOVE_TO_TARGET_DISTANCE_BOUNDS,
+    MOVE_TO_TARGET_ROT_BOUNDS,
     WAYPOINT_TOL,
     WORLD_X_BOUNDS,
     WORLD_Y_BOUNDS,
@@ -47,6 +50,12 @@ from kinder_models.dynamic3d.utils import (
     get_target_robot_pose_from_parameters,
     run_base_motion_planning,
 )
+
+# The two demonstrated arm configurations that make up a toss, in the order the toss
+# executes them: wind the arm up and back, then swing it forward and release. These are
+# the same configurations the pick-and-toss tests drive the arm through by hand.
+TOSS_WINDUP_ARM_CONF = np.deg2rad([0.0, 50.0, 180.0, -110.0, 0.0, -100.0, 90.0])
+TOSS_RELEASE_ARM_CONF = np.deg2rad([0.0, 20.0, 180.0, -35.0, 0.0, 25.0, 90.0])
 
 
 class MoveToTargetGroundController(
@@ -168,6 +177,49 @@ class MoveToTargetGroundController(
                 0.0,
                 atol=atol,
             )
+        )
+
+
+class MoveToThrowPoseController(MoveToTargetGroundController):
+    """Controller for motion planning to a base pose to throw a held object from.
+
+    The object parameters are:
+        robot: The robot itself.
+        object: The target object to throw at.
+        held: The object the robot is currently holding.
+
+    The continuous parameters are the same as MoveToTargetGroundController's:
+        target_distance: float
+        target_rot: float (radians)
+
+    This differs from MoveToTargetGroundController in two ways. Its sampler draws a
+    standoff instead of returning the single constant distance that gives a stable
+    grasp, since a throw has no one right distance to be at. And it disables collision
+    checking against the held object by default, because the robot is holding that
+    object while it drives, so planning the base against it makes every plan fail.
+    """
+
+    def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
+        distance = rng.uniform(*MOVE_TO_TARGET_DISTANCE_BOUNDS)  # type: ignore
+        rot = rng.uniform(*MOVE_TO_TARGET_ROT_BOUNDS)
+        return np.array([distance, rot])
+
+    def reset(
+        self,
+        x: ObjectCentricState,
+        params: Any,
+        extend_xy_magnitude: float = 0.025,
+        extend_rot_magnitude: float = np.pi / 8,
+        disable_collision_objects: list[str] | None = None,
+    ) -> None:
+        if disable_collision_objects is None:
+            disable_collision_objects = [self.objects[2].name]
+        super().reset(
+            x,
+            params,
+            extend_xy_magnitude=extend_xy_magnitude,
+            extend_rot_magnitude=extend_rot_magnitude,
+            disable_collision_objects=disable_collision_objects,
         )
 
 
@@ -453,6 +505,95 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
         return dist < 6 * 1e-2
 
 
+class _WindupArmController(MoveArmToConfController):
+    """A MoveArmToConfController that can be handed an existing PyBullet sim."""
+
+    def __init__(
+        self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._pybullet_sim: PyBulletSim | None = pybullet_sim
+
+
+class _ReleaseTossController(TossController):
+    """A TossController that can be handed an existing PyBullet sim."""
+
+    def __init__(
+        self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._pybullet_sim: PyBulletSim | None = pybullet_sim
+
+
+class TossFromWindupController(
+    GroundParameterizedController[ObjectCentricState, Array]
+):
+    """Controller for winding the arm up and then tossing the held object.
+
+    The object parameters are:
+        robot: The robot itself.
+
+    The continuous parameters are a (2, 7) array of arm configurations:
+        params[0]: the windup conf, reached with MoveArmToConfController.
+        params[1]: the release conf, swung to and released at by TossController.
+
+    A toss is those two arm motions back to back, and this runs them as one controller
+    rather than as two skills. Splitting them would need a predicate over the windup
+    conf to chain the two operators, and both sub-controllers terminate on a step count
+    rather than on the state, so running them from here emits the same actions in the
+    same order that running them separately does.
+    """
+
+    def __init__(
+        self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._windup_controller = _WindupArmController(
+            self.objects, pybullet_sim=pybullet_sim
+        )
+        self._toss_controller = _ReleaseTossController(
+            self.objects, pybullet_sim=pybullet_sim
+        )
+        self._last_state: ObjectCentricState | None = None
+        self._toss_params: np.ndarray | None = None
+        self._tossing: bool = False
+
+    def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
+        # The demonstrated configurations, returned as constants. Which arm motion
+        # throws the held object where is not something this samples over.
+        del x, rng  # not used
+        return np.array([TOSS_WINDUP_ARM_CONF, TOSS_RELEASE_ARM_CONF])
+
+    def reset(self, x: ObjectCentricState, params: Any) -> None:
+        current_params = np.asarray(params, dtype=np.float32)
+        assert current_params.shape == (2, 7)
+        self._last_state = x
+        self._toss_params = current_params[1]
+        self._tossing = False
+        # Only the windup is planned now. The toss is planned when the windup ends,
+        # from the state the arm actually reached, which is what running the two
+        # controllers separately plans from too.
+        self._windup_controller.reset(x, current_params[0])
+
+    def terminated(self) -> bool:
+        return self._tossing and self._toss_controller.terminated()
+
+    def step(self) -> Array:
+        if not self._tossing and self._windup_controller.terminated():
+            assert self._last_state is not None
+            assert self._toss_params is not None
+            self._toss_controller.reset(self._last_state, self._toss_params)
+            self._tossing = True
+        if self._tossing:
+            return self._toss_controller.step()
+        return self._windup_controller.step()
+
+    def observe(self, x: ObjectCentricState) -> None:
+        self._last_state = x
+        self._windup_controller.observe(x)
+        self._toss_controller.observe(x)
+
+
 class MoveArmToEndEffectorController(
     GroundParameterizedController[ObjectCentricState, Array]
 ):
@@ -703,10 +844,18 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
 def create_lifted_controllers(
     action_space: TidyBot3DRobotActionSpace,
     init_constant_state: ObjectCentricState | None = None,
+    pybullet_sim: PyBulletSim | None = None,
 ) -> dict[str, LiftedParameterizedController]:
     """Create lifted parameterized controllers for the TidyBot3D ground environment."""
 
     del action_space, init_constant_state  # not used
+
+    # Create wrapper class that captures pybullet_sim
+    class TossFromWindup(TossFromWindupController):
+        """Toss-from-windup controller with pre-configured PyBullet sim."""
+
+        def __init__(self, objects):
+            super().__init__(objects, pybullet_sim=pybullet_sim)
 
     # Controllers.
 
@@ -749,6 +898,28 @@ def create_lifted_controllers(
         TossController,
     )
 
+    # Move to throw pose controller.
+    robot = Variable("?robot", MujocoTidyBotRobotObjectType)
+    target = Variable("?target", MujocoObjectType)
+    held = Variable("?held", MujocoObjectType)
+
+    LiftedMoveToThrowPoseController: LiftedParameterizedController = (
+        LiftedParameterizedController(
+            [robot, target, held],
+            MoveToThrowPoseController,
+        )
+    )
+
+    # Toss from windup controller.
+    robot = Variable("?robot", MujocoTidyBotRobotObjectType)
+
+    LiftedTossFromWindupController: LiftedParameterizedController = (
+        LiftedParameterizedController(
+            [robot],
+            TossFromWindup,
+        )
+    )
+
     # Move arm to end effector controller.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
 
@@ -784,6 +955,8 @@ def create_lifted_controllers(
         "move_to_target_from_other_target": LiftedMoveToTargetFromOtherTargetController,
         "move_arm_to_conf": LiftedMoveArmToConfController,
         "toss": LiftedTossController,
+        "move_to_throw_pose": LiftedMoveToThrowPoseController,
+        "toss_from_windup": LiftedTossFromWindupController,
         "move_arm_to_end_effector": LiftedMoveArmToEndEffectorController,
         "close_gripper": LiftedCloseGripperController,
         "open_gripper": LiftedOpenGripperController,
