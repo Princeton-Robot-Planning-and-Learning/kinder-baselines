@@ -265,18 +265,24 @@ def _pad_controller(
 ) -> LiftedParameterizedController:
     """Widen a lifted controller to an operator's parameters.
 
-    The controller's own variables must be a prefix of the operator's parameters; the
-    trailing ones are bound by the operator and dropped before the ground controller is
-    constructed. If the two already agree, the controller is returned unchanged.
+    The controller's leading variables are the ones that reach it; any trailing
+    operator parameters are bound by the operator and dropped before the ground
+    controller is constructed.
+
+    The returned controller always declares the operator's *own* parameters, even when
+    the arities already match, because LiftedSkill.__post_init__ asserts
+    `tuple(operator.parameters) == tuple(controller.variables)` and Variables compare
+    by name as well as type. move_to_throw_pose is exactly that case: 3 variables
+    against 3 parameters, but named (?robot, ?target, ?held) against
+    (?robot, ?bin, ?cube).
+
+    The types are deliberately not asserted equal either. move_to_throw_pose's ?target
+    is MujocoObjectType while the operator's ?bin is MujocoMovableObjectType, which is
+    the narrower of the two; LiftedParameterizedController.ground makes the real
+    is_instance check at grounding time.
     """
     num_used = len(controller.variables)
     assert num_used <= len(parameters)
-    # NOTE: the types are deliberately not asserted equal. move_to_throw_pose's
-    # ?target is MujocoObjectType while the operator's ?bin is MujocoMovableObjectType,
-    # which is the narrower of the two; LiftedParameterizedController.ground asserts
-    # the real is_instance check at grounding time anyway.
-    if num_used == len(parameters):
-        return controller
 
     controller_cls = controller.controller_cls
 
