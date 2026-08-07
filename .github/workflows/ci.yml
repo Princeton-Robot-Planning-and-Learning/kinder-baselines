@@ -37,7 +37,14 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup
+
+      # pytest imports every test module during collection, before `-m pylint`
+      # deselects it, so linting needs the pddlstream checkout just as tests do.
+      - uses: ./.github/actions/pddlstream
+
       - name: Lint
+        env:
+          PDDLSTREAM_PATH: ~/pddlstream
         run: |
           uv run ./run_in_affected_packages.sh "pytest . --pylint -m pylint --pylint-rcfile=.pylintrc -p no:cacheprovider"
 
@@ -71,9 +78,13 @@ jobs:
             uv run python scripts/preinstall_ikfast.py
             cd ..
           fi
+
+      - uses: ./.github/actions/pddlstream
+
       - name: Pytest
         env:
           MUJOCO_GL: "osmesa"
           PYOPENGL_PLATFORM: ""
+          PDDLSTREAM_PATH: ~/pddlstream
         run: |
           uv run ./run_in_affected_packages.sh "pytest --cache-clear tests/"

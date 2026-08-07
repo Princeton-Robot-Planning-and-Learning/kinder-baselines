@@ -1,0 +1,26 @@
+name: Provision pddlstream
+description: >
+  Clone and build a pddlstream checkout outside the workspace, cached on the upstream
+  HEAD SHA. pddlstream is not pip-installable, so kinder-pddlstream-planning resolves it
+  from this checkout at import time.
+runs:
+  using: composite
+  steps:
+    - name: Resolve the pddlstream revision
+      id: rev
+      shell: bash
+      run: |
+        sha=$(git ls-remote https://github.com/caelan/pddlstream.git HEAD | cut -f1)
+        echo "sha=$sha" >> "$GITHUB_OUTPUT"
+    - name: Restore the pddlstream checkout
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/pddlstream
+        key: pddlstream-${{ runner.os }}-${{ steps.rev.outputs.sha }}
+    - name: Build pddlstream
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        git clone --recursive https://github.com/caelan/pddlstream.git ~/pddlstream
+        ~/pddlstream/downward/build.py
