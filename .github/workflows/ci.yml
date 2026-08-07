@@ -71,9 +71,30 @@ jobs:
             uv run python scripts/preinstall_ikfast.py
             cd ..
           fi
+
+      # pddlstream is not pip-installable, so kinder-pddlstream-planning uses a git
+      # checkout with FastDownward built in-tree. It lives outside the workspace.
+      - name: Resolve the pddlstream revision
+        id: pddlstream-rev
+        run: |
+          sha=$(git ls-remote https://github.com/caelan/pddlstream.git HEAD | cut -f1)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Restore the pddlstream checkout
+        id: pddlstream-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/pddlstream
+          key: pddlstream-${{ runner.os }}-${{ steps.pddlstream-rev.outputs.sha }}
+      - name: Build pddlstream
+        if: steps.pddlstream-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --recursive https://github.com/caelan/pddlstream.git ~/pddlstream
+          ~/pddlstream/downward/build.py
+
       - name: Pytest
         env:
           MUJOCO_GL: "osmesa"
           PYOPENGL_PLATFORM: ""
+          PDDLSTREAM_PATH: ~/pddlstream
         run: |
           uv run ./run_in_affected_packages.sh "pytest --cache-clear tests/"
