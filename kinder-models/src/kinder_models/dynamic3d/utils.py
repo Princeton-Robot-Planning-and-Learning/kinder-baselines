@@ -7,6 +7,7 @@ from typing import Iterable
 import numpy as np
 import pybullet as p
 from kinder.envs.dynamic3d.object_types import (
+    MujocoDrawerObjectType,
     MujocoFixtureObjectType,
     MujocoObjectType,
     MujocoTidyBotRobotObjectType,
@@ -153,6 +154,10 @@ def get_overhead_kinematic2ds(state: ObjectCentricState) -> dict[str, Geom2D]:
         print(obj.name)
         if obj.is_instance(MujocoTidyBotRobotObjectType):
             pose = get_overhead_robot_se2_pose(state, obj)
+        elif obj.is_instance(MujocoDrawerObjectType):
+            # Drawers only expose a slide "pos" feature, not a top-down
+            # pose/bounding box, so they can't be represented as a Geom2D.
+            continue
         elif obj.is_instance(MujocoObjectType):
             pose = get_overhead_object_se2_pose(state, obj)
         else:
@@ -226,10 +231,11 @@ def run_base_motion_planning(
     obstacles = state.get_objects(MujocoObjectType)
     if disable_collision_objects is not None:
         obstacles = [o for o in obstacles if o.name not in disable_collision_objects]
-    obstacle_geoms: set[Geom2D] = set()
-    # uncomment to fully consider the collisions.
-    # geoms = get_overhead_kinematic2ds(state)
-    # obstacle_geoms = {geoms[o.name] for o in obstacles}
+    # Drawers are MujocoObjectType, but get_overhead_kinematic2ds() cannot build a
+    # Geom2D for one, so they are absent from geoms and would KeyError below.
+    obstacles = [o for o in obstacles if not o.is_instance(MujocoDrawerObjectType)]
+    geoms = get_overhead_kinematic2ds(state)
+    obstacle_geoms: set[Geom2D] = {geoms[o.name] for o in obstacles}
 
     # Set up the RRT methods.
     def sample_fn(_: SE2) -> SE2:
