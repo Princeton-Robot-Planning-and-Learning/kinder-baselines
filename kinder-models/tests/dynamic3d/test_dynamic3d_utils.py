@@ -11,6 +11,7 @@ from relational_structs import ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
 from spatialmath import SE2
 from tomsgeoms2d.structs import Rectangle
+from tomsgeoms2d.utils import geom2ds_intersect
 
 from kinder_models.dynamic3d.utils import (
     get_bounding_box,
@@ -234,3 +235,44 @@ def test_run_base_motion_planning():
     # outfile = "base_motion_planning.mp4"
     # iio.mimsave(outfile, imgs)
     # print(f"Wrote out to {outfile}")
+
+
+def test_run_base_motion_planning_avoids_obstacles():
+    """Tests that run_base_motion_planning() avoids scene obstacles."""
+
+    env = kinder.make("kinder/Shelf3D-o1-v0", render_mode="rgb_array")
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    obs, _ = env.reset(seed=123)
+    state = env.observation_space.devectorize(obs)
+    robot = _get_robot_from_state(state)
+
+    # cube1 sits directly between the robot's start pose and this target, so a
+    # straight-line path would drive right through it.
+    target_base_pose = SE2(1.0, 0.17, 0.0)
+    x_bounds = (-1.5, 1.5)
+    y_bounds = (-1.5, 1.5)
+    seed = 123
+    base_motion_plan = run_base_motion_planning(
+        state,
+        target_base_pose,
+        x_bounds,
+        y_bounds,
+        seed,
+        extend_xy_magnitude=0.05,
+        extend_rot_magnitude=np.pi / 2,
+    )
+
+    assert base_motion_plan is not None
+
+    geoms = get_overhead_kinematic2ds(state)
+    cube_geom = geoms["cube1"]
+    robot_width, robot_height, _ = get_bounding_box(state, robot)
+    for pose in base_motion_plan:
+        robot_geom = Rectangle.from_center(
+            pose.x,
+            pose.y,
+            robot_width,
+            robot_height,
+            rotation_about_center=pose.theta(),
+        )
+        assert not geom2ds_intersect(robot_geom, cube_geom)
