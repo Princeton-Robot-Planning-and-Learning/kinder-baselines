@@ -21,7 +21,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Backs the kinematic3d_v2 skills. Optional for the same reason it is optional in
+# kindergarden: it overlaps heavily with pybullet_helpers and both are large. The
+# `planning` extra of prpl_kinematics adds OMPL, which the skills prefer when present
+# and fall back from to BiRRT when absent.
+prpl-kinematics = ["prpl_kinematics[planning]>=0.0.1"]
 develop = [
+    # Installed for development and CI so the kinematic3d_v2 skills are linted, type
+    # checked, and tested.
+    "prpl_kinematics[planning]>=0.0.1",
     "black",
     "docformatter",
     "isort",
@@ -63,6 +71,10 @@ exclude = ["venv/*", ".venv/*", "third-party/*"]
 [[tool.mypy.overrides]]
 module = [
     "matplotlib.*",
+    # Optional; see the prpl-kinematics extra.
+    "prpl_kinematics.*",
+    "spatialmath.*",
+    "pybullet.*",
     "pygame.*",
     "dill.*",
     "mujoco.*",
