@@ -7,8 +7,6 @@ import kinder
 import numpy as np
 from episode_storage import EpisodeWriter
 from kinder.envs.kinematic3d.base_motion3d import ObjectCentricBaseMotion3DEnv
-from kinder.envs.kinematic3d.ground3d import ObjectCentricGround3DEnv
-from kinder.envs.kinematic3d.motion3d import ObjectCentricMotion3DEnv
 from kinder.envs.kinematic3d.obstruction3d import ObjectCentricObstruction3DEnv
 from kinder.envs.kinematic3d.shelf3d import ObjectCentricShelf3DEnv
 from kinder.envs.kinematic3d.transport3d import ObjectCentricTransport3DEnv
@@ -61,13 +59,6 @@ def collect_data(
         from kinder_models.kinematic3d.shelf3d.parameterized_skills import (  # pylint: disable=import-outside-toplevel
             create_lifted_controllers,
         )
-    elif "Ground3D" in env_name:
-        sim = ObjectCentricGround3DEnv(  # type: ignore
-            num_cubes=num_cubes, allow_state_access=True
-        )
-        from kinder_models.kinematic3d.ground3d.parameterized_skills import (  # type: ignore # pylint: disable=import-outside-toplevel
-            create_lifted_controllers,
-        )
     elif "Transport3D" in env_name:
         sim = ObjectCentricTransport3DEnv(  # type: ignore
             num_cubes=num_cubes, allow_state_access=True
@@ -78,11 +69,6 @@ def collect_data(
     elif "BaseMotion3D" in env_name:
         sim = ObjectCentricBaseMotion3DEnv(allow_state_access=True)  # type: ignore
         from kinder_models.kinematic3d.base_motion3d.parameterized_skills import (  # type: ignore # pylint: disable=import-outside-toplevel
-            create_lifted_controllers,
-        )
-    elif "Motion3D" in env_name:
-        sim = ObjectCentricMotion3DEnv(allow_state_access=True)  # type: ignore
-        from kinder_models.kinematic3d.motion3d.parameterized_skills import (  # type: ignore # pylint: disable=import-outside-toplevel
             create_lifted_controllers,
         )
     elif "Obstruction3D" in env_name:
@@ -100,7 +86,7 @@ def collect_data(
         env.action_space,  # type: ignore
         sim,
     )
-    if "Shelf3D" in env_name or "Ground3D" in env_name:
+    if "Shelf3D" in env_name:
         target_object_key = f"cube{num_cubes - 1}"
         lifted_controller = controllers["pick"]
         robot = state.get_object_from_name("robot")
@@ -115,12 +101,6 @@ def collect_data(
     elif "BaseMotion3D" in env_name:
         target_object_key = "target"
         lifted_controller = controllers["move_base_to_target"]
-        robot = state.get_object_from_name("robot")
-        target = state.get_object_from_name("target")
-        object_parameters = (robot, target)
-    elif "Motion3D" in env_name:
-        target_object_key = "target"
-        lifted_controller = controllers["move_to_target"]
         robot = state.get_object_from_name("robot")
         target = state.get_object_from_name("target")
         object_parameters = (robot, target)

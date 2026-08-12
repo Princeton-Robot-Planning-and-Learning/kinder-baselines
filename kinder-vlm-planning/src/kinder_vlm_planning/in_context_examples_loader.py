@@ -98,12 +98,10 @@ def get_in_context_examples_by_env_id(env_id: str) -> str:
     kinematic3d_envs = {
         "basemotion3d",
         "transport3d",
-        "ground3d",
         "obstruction3d",
         "packing3d",
         "shelf3d",
         "table3d",
-        "motion3d",
     }
     dynamic2d_envs = {
         "dynpushpullhook2d",
