@@ -8,8 +8,8 @@ from gymnasium.wrappers import RecordVideo
 from kinder_bilevel_planning.agent import BilevelPlanningAgent
 from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
-# VegaMotion3D needs the optional prpl_kinematics backend, and is not in a kindergarden
-# release yet. Skip the module rather than fail collection when either is missing.
+# VegaMotion3D needs prpl_kinematics, which is an optional extra of both kindergarden and
+# this package. Skip the module rather than fail collection when it is not installed.
 pytest.importorskip("kinder.envs.kinematic3d_v2.vega_motion3d")
 pytest.importorskip("kinder_models.kinematic3d_v2.vega_motion3d.parameterized_skills")
 
