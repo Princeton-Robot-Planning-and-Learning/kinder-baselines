@@ -151,7 +151,6 @@ def get_overhead_kinematic2ds(state: ObjectCentricState) -> dict[str, Geom2D]:
     """Get a mapping from object name to Geom2D from an overhead perspective."""
     geoms: dict[str, Geom2D] = {}
     for obj in state:
-        print(obj.name)
         if obj.is_instance(MujocoTidyBotRobotObjectType):
             pose = get_overhead_robot_se2_pose(state, obj)
         elif obj.is_instance(MujocoDrawerObjectType):

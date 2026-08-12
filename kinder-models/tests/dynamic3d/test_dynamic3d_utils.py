@@ -84,13 +84,16 @@ def test_get_overhead_robot_se2_pose():
     assert np.isclose(pose1.theta(), pose2.theta())
 
 
-def test_get_overhead_kinematic2ds():
+def test_get_overhead_kinematic2ds(capsys):
     """Tests for get_overhead_kinematic2ds()."""
     env = TidyBot3DEnv(task_config_path=str(_TEST_TASKS / "tidybot-ground-o1.json"))
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     obs, _ = env.reset(seed=123)
     state = env.observation_space.devectorize(obs)
+    capsys.readouterr()  # discard anything the env setup above printed
     geoms = get_overhead_kinematic2ds(state)
+    # run_base_motion_planning() calls this on every plan, so it must stay quiet.
+    assert capsys.readouterr().out == ""
     assert len(geoms) == 2
     robot = _get_robot_from_state(state)
     robot_geom = geoms[robot.name]
