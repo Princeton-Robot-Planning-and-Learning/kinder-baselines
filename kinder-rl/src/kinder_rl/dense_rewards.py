@@ -130,7 +130,6 @@ class BaseMotion3DDenseReward(BaseDenseRewardWrapper):
 # Registry: env_id prefix -> wrapper class
 ENV_DENSE_REWARD_WRAPPERS: dict[str, type[BaseDenseRewardWrapper]] = {
     "kinder/BaseMotion3D": BaseMotion3DDenseReward,
-    "kinder/Motion3D": BaseMotion3DDenseReward,
 }
 
 
