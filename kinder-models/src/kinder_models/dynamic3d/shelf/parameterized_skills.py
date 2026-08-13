@@ -34,14 +34,14 @@ from relational_structs import (
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.utils import (
-    _ARM_MAX_ACCEL,
-    _ARM_MAX_VEL,
+    _ARM_MAX_ACCELERATION,
+    _ARM_MAX_VELOCITY,
     ARM_MOVEMENT_CUPBOARD,
     BASE_DISTANCE_TO_CUPBOARD,
     BASE_TO_CUPBOARD_ROTATION,
     GRASP_CLOSE_THRESHOLD,
     GRASP_TRANSFORM_TO_OBJECT,
-    GRIPPER_OPEN_THRESHOLD,
+    GRIPPER_OPEN_COMMAND_TOLERANCE,
     MAX_SAMPLER_ATTEMPTS,
     MOVE_TO_TARGET_DISTANCE_BOUNDS,
     MOVE_TO_TARGET_ROT_BOUNDS,
@@ -49,7 +49,7 @@ from kinder_models.dynamic3d.utils import (
     PLACE_SAMPLER_X_OFFSET_BOUNDS,
     PLACE_SAMPLER_Y_OFFSET_BOUNDS,
     ROBOT_ARM_POSE_TO_BASE,
-    WAYPOINT_TOL,
+    WAYPOINT_TOLERANCE,
     WORLD_X_BOUNDS,
     WORLD_Y_BOUNDS,
     PyBulletSim,
@@ -257,13 +257,13 @@ class PickShelfController(GroundParameterizedController[ObjectCentricState, Arra
         curr = np.array(self._get_current_robot_arm_conf()[:7])
         final = np.array(plan[-1][:7])
         self._approach_trajectory, self._approach_traj_dir = _compute_per_joint_profile(
-            curr, final, _ARM_MAX_VEL, _ARM_MAX_ACCEL
+            curr, final, _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
         )
         self._approach_start_joints = curr.copy()
         self._approach_step_idx = 0
         # Compute trapezoidal velocity profile for retract (grasp conf → home).
         self._retract_trajectory, self._retract_traj_dir = _compute_per_joint_profile(
-            final, self.home_joints[:7], _ARM_MAX_VEL, _ARM_MAX_ACCEL
+            final, self.home_joints[:7], _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
         )
         self._retract_start_joints = final.copy()
         self._retract_step_idx = 0
@@ -381,14 +381,16 @@ class PickShelfController(GroundParameterizedController[ObjectCentricState, Arra
         return 0.0
 
     def _robot_is_close_to_conf(
-        self, conf: JointPositions, atol: float = WAYPOINT_TOL
+        self, conf: JointPositions, atol: float = WAYPOINT_TOLERANCE
     ) -> bool:
         current_conf = self._get_current_robot_arm_conf()
         assert self._pybullet_sim is not None
         dist = self._pybullet_sim.get_joint_distance(current_conf, conf)
         return dist < atol
 
-    def _robot_is_close_to_pose(self, pose: SE2, atol: float = WAYPOINT_TOL) -> bool:
+    def _robot_is_close_to_pose(
+        self, pose: SE2, atol: float = WAYPOINT_TOLERANCE
+    ) -> bool:
         robot_pose = self._get_current_robot_pose()
         return bool(
             np.isclose(robot_pose.x, pose.x, atol=atol)
@@ -594,13 +596,13 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
         curr = np.array(self._get_current_robot_arm_conf()[:7])
         final = np.array(plan[-1][:7])
         self._approach_trajectory, self._approach_traj_dir = _compute_per_joint_profile(
-            curr, final, _ARM_MAX_VEL, _ARM_MAX_ACCEL
+            curr, final, _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
         )
         self._approach_start_joints = curr.copy()
         self._approach_step_idx = 0
         # Compute trapezoidal velocity profile for retract (place conf → home).
         self._retract_trajectory, self._retract_traj_dir = _compute_per_joint_profile(
-            final, self.home_joints[:7], _ARM_MAX_VEL, _ARM_MAX_ACCEL
+            final, self.home_joints[:7], _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
         )
         self._retract_start_joints = final.copy()
         self._retract_step_idx = 0
@@ -651,7 +653,7 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
             self._approach_step_idx += 1
             return action
         if self._pre_place and not self._open_gripper:
-            if self._get_current_robot_gripper_pose() < GRIPPER_OPEN_THRESHOLD:
+            if self._get_current_robot_gripper_pose() < GRIPPER_OPEN_COMMAND_TOLERANCE:
                 self._open_gripper = True
             action = np.zeros(11, dtype=np.float32)
             action[-1] = 0
@@ -714,14 +716,16 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
         return 0.0
 
     def _robot_is_close_to_conf(
-        self, conf: JointPositions, atol: float = WAYPOINT_TOL
+        self, conf: JointPositions, atol: float = WAYPOINT_TOLERANCE
     ) -> bool:
         current_conf = self._get_current_robot_arm_conf()
         assert self._pybullet_sim is not None
         dist = self._pybullet_sim.get_joint_distance(current_conf, conf)
         return dist < atol
 
-    def _robot_is_close_to_pose(self, pose: SE2, atol: float = WAYPOINT_TOL) -> bool:
+    def _robot_is_close_to_pose(
+        self, pose: SE2, atol: float = WAYPOINT_TOLERANCE
+    ) -> bool:
         robot_pose = self._get_current_robot_pose()
         return bool(
             np.isclose(robot_pose.x, pose.x, atol=atol)

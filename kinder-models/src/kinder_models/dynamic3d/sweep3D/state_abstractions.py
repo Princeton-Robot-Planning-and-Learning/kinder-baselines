@@ -19,6 +19,7 @@ from relational_structs import (
 )
 
 from kinder_models.dynamic3d.shelf.parameterized_skills import PyBulletSim
+from kinder_models.dynamic3d.utils import GRIPPER_OPEN_COMMAND_TOLERANCE
 
 # Predicates.
 DrawerOpen = Predicate("DrawerOpen", [MujocoDrawerObjectType])
@@ -87,9 +88,8 @@ class Sweep3DStateAbstractor:
                 atoms.add(GroundAtom(OnTable, [target]))
 
         # HandEmpty.
-        handempty_tol = 1e-3
         gripper_val = state.get(robot, "pos_gripper")
-        if np.isclose(gripper_val, 0.0, atol=handempty_tol):
+        if np.isclose(gripper_val, 0.0, atol=GRIPPER_OPEN_COMMAND_TOLERANCE):
             atoms.add(GroundAtom(HandEmpty, [robot]))
 
         # Holding.

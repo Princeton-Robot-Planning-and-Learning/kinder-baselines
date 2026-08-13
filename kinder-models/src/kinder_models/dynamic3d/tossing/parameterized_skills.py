@@ -31,13 +31,13 @@ from relational_structs import (
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.utils import (
-    _ARM_MAX_ACCEL,
-    _ARM_MAX_VEL,
-    _CONTROL_DT,
+    _ARM_MAX_ACCELERATION,
+    _ARM_MAX_VELOCITY,
+    _CONTROL_TIMESTEP,
     GRASP_CLOSE_THRESHOLD,
     GRIPPER_CLOSED_THRESHOLD,
-    GRIPPER_OPEN_THRESHOLD,
-    WAYPOINT_TOL,
+    GRIPPER_OPEN_COMMAND_TOLERANCE,
+    WAYPOINT_TOLERANCE,
     WORLD_X_BOUNDS,
     WORLD_Y_BOUNDS,
     PyBulletSim,
@@ -158,7 +158,9 @@ class MoveToTargetGroundController(
             return GRASP_CLOSE_THRESHOLD
         return 0.0
 
-    def _robot_is_close_to_pose(self, pose: SE2, atol: float = WAYPOINT_TOL) -> bool:
+    def _robot_is_close_to_pose(
+        self, pose: SE2, atol: float = WAYPOINT_TOLERANCE
+    ) -> bool:
         robot_pose = self._get_current_robot_pose()
         return bool(
             np.isclose(robot_pose.x, pose.x, atol=atol)
@@ -230,8 +232,8 @@ class MoveArmToConfController(GroundParameterizedController[ObjectCentricState, 
         self._trajectory, self._traj_dir = _compute_per_joint_profile(
             curr,
             final,
-            _ARM_MAX_VEL,
-            _ARM_MAX_ACCEL,
+            _ARM_MAX_VELOCITY,
+            _ARM_MAX_ACCELERATION,
         )
         self._start_joint_angles = curr.copy()
         self._step_idx = 0
@@ -248,7 +250,7 @@ class MoveArmToConfController(GroundParameterizedController[ObjectCentricState, 
 
         # Velocity via finite difference.
         if idx > 0:
-            ds = (self._trajectory[idx] - self._trajectory[idx - 1]) / _CONTROL_DT
+            ds = (self._trajectory[idx] - self._trajectory[idx - 1]) / _CONTROL_TIMESTEP
         else:
             ds = 0.0
 
@@ -365,7 +367,7 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
             max_vel=np.deg2rad(140),
             max_accel=np.deg2rad(300),
             max_decel=np.deg2rad(200),
-            step_size=_CONTROL_DT,
+            step_size=_CONTROL_TIMESTEP,
         )
         self._start_joint_angles = np.array(curr_joint_angles[:7])
         self._has_released = False
@@ -385,7 +387,7 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
         s = float(self._trajectory[idx])
         # Compute velocity via finite difference of the profile.
         if idx > 0:
-            ds = (self._trajectory[idx] - self._trajectory[idx - 1]) / _CONTROL_DT
+            ds = (self._trajectory[idx] - self._trajectory[idx - 1]) / _CONTROL_TIMESTEP
         else:
             ds = 0.0
 
@@ -544,8 +546,8 @@ class MoveArmToEndEffectorController(
         self._trajectory, self._traj_dir = _compute_per_joint_profile(
             curr,
             final,
-            _ARM_MAX_VEL,
-            _ARM_MAX_ACCEL,
+            _ARM_MAX_VELOCITY,
+            _ARM_MAX_ACCELERATION,
         )
         self._start_joint_angles = curr.copy()
         self._step_idx = 0
@@ -562,7 +564,7 @@ class MoveArmToEndEffectorController(
 
         # Velocity via finite difference.
         if idx > 0:
-            ds = (self._trajectory[idx] - self._trajectory[idx - 1]) / _CONTROL_DT
+            ds = (self._trajectory[idx] - self._trajectory[idx - 1]) / _CONTROL_TIMESTEP
         else:
             ds = 0.0
 
@@ -695,7 +697,9 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
         robot = self.objects[0]
         return state.get(robot, "pos_gripper")
 
-    def _robot_gripper_is_open(self, atol: float = GRIPPER_OPEN_THRESHOLD) -> bool:
+    def _robot_gripper_is_open(
+        self, atol: float = GRIPPER_OPEN_COMMAND_TOLERANCE
+    ) -> bool:
         current_gripper_pose = self._get_current_gripper_pose()
         return current_gripper_pose < atol
 
