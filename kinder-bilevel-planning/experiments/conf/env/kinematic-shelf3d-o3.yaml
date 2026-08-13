@@ -8,3 +8,6 @@ make_kwargs:
 # Passed into create_bilevel_planning_models() to create the env models.
 env_model_kwargs:
   num_objects: 3
+
+# Bounded base actions need more simulation steps per skill than the global default.
+max_skill_horizon: 1000

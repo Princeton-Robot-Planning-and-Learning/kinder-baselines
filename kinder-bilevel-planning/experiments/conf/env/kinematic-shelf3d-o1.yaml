@@ -10,3 +10,6 @@ env_model_kwargs:
   num_objects: 1
 
 max_eval_steps: 500
+
+# Bounded base actions need more simulation steps per skill than the global default.
+max_skill_horizon: 1000
