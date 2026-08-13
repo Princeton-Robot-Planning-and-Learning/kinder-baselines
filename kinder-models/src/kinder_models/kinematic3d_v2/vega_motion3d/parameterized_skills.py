@@ -1,8 +1,8 @@
 """Parameterized skills for the VegaMotion3D environment.
 
 The only skill is moving the arm to the target, so this is pure motion planning: sample
-an end-effector pose at the target, solve IK for a goal configuration, plan a collision-
-free joint path to it, and emit the path as bounded joint deltas.
+a collision-free goal configuration whose end effector lies in the target sphere, plan a
+collision-free joint path to it, and emit the path as bounded joint deltas.
 """
 
 from __future__ import annotations
@@ -36,15 +36,14 @@ from prpl_kinematics.planning.configuration_space import ConfigurationSpace
 from prpl_kinematics.planning.motion_planner import MotionPlanner
 from prpl_kinematics.tree.kinematic_tree import Configuration
 from relational_structs import Object, ObjectCentricState, Variable
-from spatialmath import SE3, SO3
 
-# Sampled end-effector orientations are drawn within this angle of the orientation the
-# arm holds at home. Vega's analytic IK solves a non-SRS 7R arm, so orientation matters
-# a great deal for whether a reachable-looking target actually admits a solution:
-# measured over the environment's target bounds, uniformly random orientations solve
-# about 27% of the time, this cone about 95%, and the home orientation alone about 97%.
-# A cone keeps the sampler diverse without spending most draws on failures.
-DEFAULT_ORIENTATION_PERTURBATION = np.pi / 6
+# Goal configurations are drawn uniformly within a per-joint window around the current
+# configuration and accepted when the end effector lands inside the target sphere, so
+# acceptance is the fraction of the window whose end effector is on target: roughly
+# 0.2-0.3% per draw at ~0.6 ms per forward-kinematics call, i.e. a few hundred
+# milliseconds per successful sample. This budget makes exhaustion (which raises
+# TrajectorySamplingFailure) a several-sigma event rather than a routine one.
+DEFAULT_NUM_GOAL_CANDIDATES = 10_000
 
 
 def ompl_is_available() -> bool:
@@ -105,12 +104,22 @@ class GroundMoveToTargetController(
         objects: Sequence[Object],
         sim: ObjectCentricVegaMotion3DEnv,
         planner: MotionPlanner,
-        orientation_perturbation: float = DEFAULT_ORIENTATION_PERTURBATION,
+        collision_fn: Callable[[Configuration], bool],
+        goal_joint_window: float | None = None,
+        num_goal_candidates: int = DEFAULT_NUM_GOAL_CANDIDATES,
     ) -> None:
         super().__init__(objects)
         self._sim = sim
         self._planner = planner
-        self._orientation_perturbation = orientation_perturbation
+        self._collision_fn = collision_fn
+        # The window defaults to the environment's target-witness window: targets are
+        # placed at the end effector of a configuration within that window of home, so
+        # sampling the same window around the (initially home) current configuration is
+        # guaranteed a solution for every environment-generated target.
+        if goal_joint_window is None:
+            goal_joint_window = sim.config.target_witness_joint_delta
+        self._goal_joint_window = goal_joint_window
+        self._num_goal_candidates = num_goal_candidates
         self._manipulator = sim.robot.manipulators[sim.config.manipulator]
         self._space = sim.robot.groups[self._manipulator.group]
         self._robot, self._target = objects
@@ -124,20 +133,35 @@ class GroundMoveToTargetController(
         assert isinstance(x, VegaMotion3DObjectCentricState)
         self._sim.set_state(x)
 
-        # Sample an end-effector orientation within a cone around the home orientation.
-        axis = rng.normal(size=3)
-        axis /= np.linalg.norm(axis)
-        angle = self._orientation_perturbation * rng.random()
-        rotation = np.array(SO3.EulerVec(angle * axis))
-        home_pose = self._sim.target_reach_pose(x.target_position)
-        target_pose = SE3.Rt(rotation @ np.array(home_pose.R), x.target_position)
-
-        # Solve IK for a configuration whose end effector reaches that pose.
-        solution = self._manipulator.ik.solve(target_pose, self._sim.configuration)
-        if solution is None:
-            raise TrajectorySamplingFailure(f"IK failed for target pose {target_pose}")
-
-        return self._space.to_vector(solution)
+        # Sample goal configurations directly: draw arm configurations within a
+        # per-joint window around the current configuration and accept ones that are
+        # collision-free with the end effector inside the target sphere. Sampling near
+        # the current configuration keeps goals on the current arm branch, so the
+        # planned motion is commensurate with the goal's distance; solving IK at a
+        # sampled end-effector orientation instead can return solutions on a far
+        # shoulder branch and demand swings of hundreds of degrees (issue #110).
+        target = np.asarray(x.target_position)
+        current = np.asarray(x.arm_joint_positions)
+        lower, upper = self._space.bounds()
+        sample_lower = np.clip(current - self._goal_joint_window, lower, upper)
+        sample_upper = np.clip(current + self._goal_joint_window, lower, upper)
+        base_config = dict(self._sim.configuration)
+        target_radius = self._sim.config.target_radius
+        ee_frame = self._manipulator.ee_frame
+        for _ in range(self._num_goal_candidates):
+            joints = rng.uniform(sample_lower, sample_upper)
+            config = base_config | self._space.to_configuration(joints)
+            position = self._sim.tree.forward_kinematics(ee_frame, config).t
+            if np.linalg.norm(position - target) >= target_radius:
+                continue
+            if self._collision_fn(config):
+                continue
+            return joints
+        raise TrajectorySamplingFailure(
+            f"No goal configuration found for target {tuple(target)} within "
+            f"{self._goal_joint_window} rad per joint of the current configuration "
+            f"after {self._num_goal_candidates} samples"
+        )
 
     def reset(self, x: ObjectCentricState, params: Any) -> None:
         self._current_params = params
@@ -200,9 +224,10 @@ def create_lifted_controllers(
 
     if rng is None:
         rng = np.random.default_rng(0)
+    collision_fn = create_collision_fn(sim)
     planner = create_motion_planner(
         sim.robot.groups[sim.robot.manipulators[sim.config.manipulator].group],
-        create_collision_fn(sim),
+        collision_fn,
         rng,
         prefer_ompl=prefer_ompl,
     )
@@ -211,7 +236,7 @@ def create_lifted_controllers(
         """Controller for moving the robot arm to the target."""
 
         def __init__(self, objects):
-            super().__init__(objects, sim, planner)
+            super().__init__(objects, sim, planner, collision_fn)
 
     # Create variables for lifted controllers.
     robot = Variable("?robot", Kinematic3Dv2ArmRobotType)
