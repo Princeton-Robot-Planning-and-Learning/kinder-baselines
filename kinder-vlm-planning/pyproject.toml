@@ -17,7 +17,7 @@ dependencies = [
    "hydra-joblib-launcher",
    "omegaconf",
    "kindergarden>=0.2.1",
-   "prpl_llm_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git#subdirectory=prpl-llm-utils",
+   "prpl_llm_utils>=0.1.0",
    "bilevel_planning>=0.1.2",
 ]
 
