@@ -70,9 +70,9 @@ from kinder_models.dynamic3d.utils import (
 def _ik_or_resample(*args: Any, **kwargs: Any) -> Any:
     """Solve inverse kinematics, turning an unreachable pose into a resample.
 
-    The backtracking refiner retries a skill with freshly sampled parameters
-    whenever a TrajectorySamplingFailure is raised, so an infeasible target is
-    rejected and resampled instead of aborting the whole episode.
+    The backtracking refiner retries a skill with freshly sampled parameters whenever a
+    TrajectorySamplingFailure is raised, so an infeasible target is rejected and
+    resampled instead of aborting the whole episode.
     """
     try:
         return inverse_kinematics(*args, **kwargs)

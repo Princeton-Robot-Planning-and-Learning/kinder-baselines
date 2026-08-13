@@ -69,7 +69,7 @@ def test_move_to_target_controller(prefer_ompl):
     else:
         assert False, "Controller did not terminate"
 
-    # Reaching the sampled IK solution should also reach the environment's goal.
+    # Reaching the sampled goal configuration should also reach the environment's goal.
     assert terminated
 
     sim.close()
@@ -95,6 +95,64 @@ def test_sampled_parameters_reach_the_target():
 
     sim.close()
     env.close()
+
+
+def test_incident_target_plan_stays_near_start():
+    """Goals and plans for the hardware-incident target must stay near the start.
+
+    Regression test for issue #110 (fix direction 3 from kindergarden#150): for the
+    target (0.5, -0.4, 0.8), the old fixed-orientation IK sampler returned goals on the
+    far shoulder branch, 3.85 rad away on a single joint, and the planner faithfully
+    produced a ~220 degree swing that was first caught on hardware. Goal sampling within
+    a joint window of the current configuration bounds the net displacement by
+    construction; this test pins that down in sim, for the sampled goal and for the
+    executed plan.
+    """
+    env = kinder.make("kinder/VegaMotion3D-v0")
+    obs, _ = env.reset(seed=123)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    target_obj = state.get_object_from_name("target")
+    for feature, value in zip("xyz", (0.5, -0.4, 0.8), strict=True):
+        state.set(target_obj, feature, value)
+    sim, controller = _ground_controller(env, state, prefer_ompl=False)
+    env.close()
+
+    rng = np.random.default_rng(0)
+    start_joints = np.asarray(state.arm_joint_positions)
+    window = sim.config.target_witness_joint_delta
+
+    # The sampled goal stays within the joint window of the start on every joint. The
+    # incident goal violated this bound by nearly a factor of four.
+    params = controller.sample_parameters(state, rng)
+    assert np.max(np.abs(params - start_joints)) <= window
+
+    # Execute the plan in a second sim and bound the trajectory itself: every visited
+    # configuration stays within the window plus planner slack, so the plan cannot
+    # detour through a far branch on the way to a nearby goal.
+    executor = vega_motion3d.ObjectCentricVegaMotion3DEnv(allow_state_access=True)
+    executor.reset(seed=0)
+    executor.set_state(state)
+    controller.reset(state, params)
+    current = state
+    max_excursion = 0.0
+    for _ in range(500):
+        current, _, _, _, _ = executor.step(controller.step())
+        controller.observe(current)
+        joints = np.asarray(current.arm_joint_positions)
+        max_excursion = max(max_excursion, float(np.max(np.abs(joints - start_joints))))
+        if controller.terminated():
+            break
+    else:
+        assert False, "Controller did not terminate"
+
+    assert executor.goal_reached()
+    final_joints = np.asarray(current.arm_joint_positions)
+    assert np.max(np.abs(final_joints - start_joints)) <= window
+    assert max_excursion <= 2 * window
+
+    executor.close()
+    sim.close()
 
 
 def test_ompl_is_preferred_when_available():
