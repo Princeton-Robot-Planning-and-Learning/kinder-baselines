@@ -2055,3 +2055,64 @@ def test_pick_cube_then_move_and_toss_scores():
     sim = env.unwrapped._object_centric_env  # pylint: disable=protected-access
     assert sim._check_goals()  # pylint: disable=protected-access
     env.close()
+
+
+def test_open_gripper_commands_open_until_the_gripper_reads_open():
+    """The controller predates this branch and had no test of its own."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    controller = controllers["open_gripper"].ground((robot,))
+
+    shut = state.copy()
+    shut.set(robot, "pos_gripper", 1.0)
+    controller.reset(shut)
+    assert not controller.terminated()
+    action = controller.step()
+    assert action.shape == (11,)
+    assert action[-1] == 0
+
+    opened = state.copy()
+    opened.set(robot, "pos_gripper", 0.0)
+    controller.observe(opened)
+    assert controller.terminated()
+    env.close()
+
+
+def test_move_to_target_from_other_target_drives_to_the_target_it_names():
+    """Three object parameters, but only the target governs where the base goes: the
+    third exists so an operator can say where the robot came from."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    target_bin = state.get_object_from_name("bin_0")
+    controller = controllers["move_to_target_from_other_target"].ground(
+        (robot, cube, target_bin)
+    )
+    controller.reset(state, np.array([0.5, 0.0]))
+    for _ in range(2000):
+        if controller.terminated():
+            break
+        obs_, _, _, _, _ = env.step(controller.step())
+        state = env.observation_space.devectorize(obs_)
+        controller.observe(state)
+    assert controller.terminated()
+    achieved = np.hypot(
+        state.get(cube, "x") - state.get(robot, "pos_base_x"),
+        state.get(cube, "y") - state.get(robot, "pos_base_y"),
+    )
+    assert abs(achieved - 0.5) < 0.1
+    env.close()
