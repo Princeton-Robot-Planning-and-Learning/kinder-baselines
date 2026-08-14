@@ -34,25 +34,33 @@ from tomsgeoms2d.structs import Geom2D, Rectangle
 from tomsgeoms2d.utils import geom2ds_intersect
 
 # Control period in seconds (10 Hz).
-_CONTROL_DT = 0.1
+_CONTROL_TIMESTEP = 0.1
 
 # Robot geometry.
 ROBOT_ARM_POSE_TO_BASE = Pose((0.12, 0.0, 0.4))
 
 # Arm joint velocity and acceleration limits (rad/s, rad/s²).
-_ARM_MAX_VEL = np.deg2rad(np.array([80.0, 80.0, 80.0, 80.0, 70.0, 70.0, 70.0]))
-_ARM_MAX_ACCEL = np.deg2rad(np.array([297.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0]))
+_ARM_MAX_VELOCITY = np.deg2rad(np.array([80.0, 80.0, 80.0, 80.0, 70.0, 70.0, 70.0]))
+_ARM_MAX_ACCELERATION = np.deg2rad(
+    np.array([297.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0])
+)
 
 # Base motion limits.
 MAX_BASE_MOVEMENT_MAGNITUDE = 1e-1
 
 # Gripper thresholds.
-GRIPPER_OPEN_THRESHOLD = 0.01
 GRASP_CLOSE_THRESHOLD = 1.0  # for stable grasp
 GRIPPER_CLOSED_THRESHOLD = 0.02
 
 # Waypoint tolerance for arm configuration convergence.
-WAYPOINT_TOL = 4 * 1e-2
+WAYPOINT_TOLERANCE = 4 * 1e-2
+
+# State-abstraction tolerances, shared by every dynamic3d state_abstractor.
+GRIPPER_OPEN_COMMAND_TOLERANCE = 1e-3
+ON_GROUND_TOLERANCE = 0.05
+GRIPPER_GRASPING_THRESHOLD = 0.1
+MINIMUM_HOLDING_HEIGHT = 0.1
+END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE = 0.05
 
 # Base navigation sampling bounds.
 MOVE_TO_TARGET_DISTANCE_BOUNDS = (0.5, 0.6)
@@ -393,7 +401,7 @@ def _compute_per_joint_profile(
         max_vel=effective_max_vel,
         max_accel=effective_max_accel,
         max_decel=effective_max_accel,
-        step_size=_CONTROL_DT,
+        step_size=_CONTROL_TIMESTEP,
     )
     return trajectory, direction
 
