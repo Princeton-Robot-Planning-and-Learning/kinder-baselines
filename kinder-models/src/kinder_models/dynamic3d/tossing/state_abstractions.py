@@ -56,8 +56,11 @@ CUBE_NAME_PREFIX = "cube"
 BIN_NAME_PREFIX = "bin"
 BARRIER_NAME = "cuboid_barrier"
 
-# Throwable-from standoffs, not the 0.5 m grasping one. Brackets the test's 1.35 m.
-THROW_STANDOFF_BOUNDS = (1.20, 1.65)
+# The achieved standoff band a toss scores from, in metres. Measured by bisecting
+# _check_goals() over real rollouts on three scene seeds; see the commit message. Both
+# edges move ~9 mm across seeds, so neither is quoted finer than 5 mm. A literal, not a
+# live read of the region, so a scene whose bin or goal region moves needs remeasuring.
+THROW_STANDOFF_BOUNDS = (1.09, 1.375)
 
 # Wider than WAYPOINT_TOLERANCE: the sampler already spends half of it off-axis.
 THROW_POSE_TOLERANCE = 2 * WAYPOINT_TOLERANCE
@@ -173,8 +176,12 @@ class Tossing3DStateAbstractor:
     def _check_at_throw_pose(
         state: ObjectCentricState, robot: Object, target: Object
     ) -> bool:
-        """Whether the base is at a throwable standoff, on axis, facing the target."""
-        low, high = THROW_STANDOFF_BOUNDS
+        """Whether a throw from here would land the object in the goal region.
+
+        A success test, not a reachability test: the band is where a throw was measured
+        to score. Testing the sampler's own interval is the defect this replaced -- every
+        draw satisfied it, so move_to_throw_pose's only add effect could never fail.
+        """
         dx = state.get(target, "x") - state.get(robot, "pos_base_x")
         dy = state.get(target, "y") - state.get(robot, "pos_base_y")
         heading_error = abs(
@@ -182,11 +189,10 @@ class Tossing3DStateAbstractor:
                 np.arctan2(dy, dx), state.get(robot, "pos_base_rot")
             )
         )
-        return bool(
-            abs(dy) <= THROW_POSE_TOLERANCE
-            and low - THROW_POSE_TOLERANCE <= dx <= high + THROW_POSE_TOLERANCE
-            and heading_error <= THROW_POSE_TOLERANCE
-        )
+        if abs(dy) > THROW_POSE_TOLERANCE or heading_error > THROW_POSE_TOLERANCE:
+            return False
+        low, high = THROW_STANDOFF_BOUNDS
+        return bool(low <= dx <= high)
 
     def goal_deriver(self, state: ObjectCentricState) -> RelationalAbstractGoal:
         """The goal is to toss every cube into the goal region."""
