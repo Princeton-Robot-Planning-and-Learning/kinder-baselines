@@ -39,13 +39,15 @@ from relational_structs import (
 )
 from spatialmath import SE2
 
+from kinder_models.dynamic3d.predicate_checks import (
+    GRIPPER_OPEN_COMMAND_TOLERANCE,
+)
 from kinder_models.dynamic3d.utils import (
     _ARM_MAX_ACCELERATION,
     _ARM_MAX_VELOCITY,
     DRAWER_TRANSFORM_TO_OBJECT,
     DRAWER_TRANSFORM_TO_OBJECT_END,
     GRASP_CLOSE_THRESHOLD,
-    GRIPPER_OPEN_COMMAND_TOLERANCE,
     OPEN_DRAWER_DISTANCE_BOUNDS,
     OPEN_DRAWER_ROT_BOUNDS,
     PICK_WIPER_DISTANCE_BOUNDS,

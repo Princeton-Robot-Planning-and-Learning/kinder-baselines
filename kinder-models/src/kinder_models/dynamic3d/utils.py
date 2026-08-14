@@ -55,12 +55,9 @@ GRIPPER_CLOSED_THRESHOLD = 0.02
 # Waypoint tolerance for arm configuration convergence.
 WAYPOINT_TOLERANCE = 4 * 1e-2
 
-# State-abstraction tolerances, shared by every dynamic3d state_abstractor.
-GRIPPER_OPEN_COMMAND_TOLERANCE = 1e-3
-ON_GROUND_TOLERANCE = 0.05
-GRIPPER_GRASPING_THRESHOLD = 0.1
-MINIMUM_HOLDING_HEIGHT = 0.1
-END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE = 0.05
+# The state-abstraction tolerances moved to predicate_checks.py, which imports numpy and
+# nothing else. Reading one should not cost a PyBullet import, and importing them from
+# here would have kept that cost while hiding it.
 
 # Base navigation sampling bounds.
 MOVE_TO_TARGET_DISTANCE_BOUNDS = (0.5, 0.6)

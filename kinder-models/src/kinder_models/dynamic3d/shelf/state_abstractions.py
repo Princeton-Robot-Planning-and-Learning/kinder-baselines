@@ -18,14 +18,14 @@ from relational_structs import (
     Predicate,
 )
 
-from kinder_models.dynamic3d.shelf.parameterized_skills import PyBulletSim
-from kinder_models.dynamic3d.utils import (
+from kinder_models.dynamic3d.predicate_checks import (
     END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE,
     GRIPPER_GRASPING_THRESHOLD,
     GRIPPER_OPEN_COMMAND_TOLERANCE,
     MINIMUM_HOLDING_HEIGHT,
     ON_GROUND_TOLERANCE,
 )
+from kinder_models.dynamic3d.shelf.parameterized_skills import PyBulletSim
 
 # Predicates.
 OnFixture = Predicate("OnFixture", [MujocoObjectType, MujocoFixtureObjectType])

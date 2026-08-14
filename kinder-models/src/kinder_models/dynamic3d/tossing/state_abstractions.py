@@ -27,12 +27,14 @@ from relational_structs import (
     Predicate,
 )
 
+from kinder_models.dynamic3d.predicate_checks import (
+    check_end_effector_at_object,
+    check_grasped_and_lifted,
+    check_gripper_open,
+    check_is_down_x,
+    check_on_ground,
+)
 from kinder_models.dynamic3d.utils import (
-    END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE,
-    GRIPPER_GRASPING_THRESHOLD,
-    GRIPPER_OPEN_COMMAND_TOLERANCE,
-    MINIMUM_HOLDING_HEIGHT,
-    ON_GROUND_TOLERANCE,
     WAYPOINT_TOLERANCE,
     PyBulletSim,
 )
@@ -116,50 +118,40 @@ class Tossing3DStateAbstractor:
 
     @staticmethod
     def _check_gripper_open(state: ObjectCentricState, robot: Object) -> bool:
-        """Whether the gripper is commanded open, which implies an empty hand.
-
-        Reads the command, not finger pose, so this and Holding are not complementary.
-        """
-        return bool(
-            np.isclose(
-                state.get(robot, "pos_gripper"),
-                0.0,
-                atol=GRIPPER_OPEN_COMMAND_TOLERANCE,
-            )
-        )
+        """Whether the gripper is commanded open, which implies an empty hand."""
+        return check_gripper_open(state.get(robot, "pos_gripper"))
 
     @staticmethod
     def _check_on_ground(state: ObjectCentricState, movable: Object) -> bool:
-        """Whether a movable rests flat on the ground.
-
-        Flat because the bounding box is pose-independent, so the bottom-face
-        arithmetic only holds while axis-aligned. A toss cannot predict this.
-        """
-        z = state.get(movable, "z")
-        bounding_box_height = state.get(movable, "bb_z")
-        return bool(
-            np.isclose(z - bounding_box_height / 2, 0.0, atol=ON_GROUND_TOLERANCE)
-            and np.isclose(state.get(movable, "qx"), 0.0, atol=ON_GROUND_TOLERANCE)
-            and np.isclose(state.get(movable, "qy"), 0.0, atol=ON_GROUND_TOLERANCE)
+        """Whether a movable rests flat on the ground."""
+        return check_on_ground(
+            state.get(movable, "z"),
+            state.get(movable, "bb_z"),
+            state.get(movable, "qx"),
+            state.get(movable, "qy"),
         )
 
     def _check_holding(
         self, state: ObjectCentricState, robot: Object, movable: Object
     ) -> bool:
-        """Whether the gripper is closed on this movable and lifting it."""
-        z = state.get(movable, "z")
-        if (
-            state.get(robot, "pos_gripper") <= GRIPPER_GRASPING_THRESHOLD
-            or z <= MINIMUM_HOLDING_HEIGHT
+        """Whether the gripper is closed on this movable and lifting it.
+
+        The forward kinematics is why this one is not entirely in predicate_checks:
+        the end-effector pose comes from the PyBullet mirror of the state, so only the
+        comparison against it is simulator-free.
+        """
+        if not check_grasped_and_lifted(
+            state.get(robot, "pos_gripper"), state.get(movable, "z")
         ):
             return False
         ee_pose = self._pybullet_sim.get_ee_pose()
-        return bool(
-            abs(ee_pose.position[0] - state.get(movable, "x"))
-            < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
-            and abs(ee_pose.position[1] - state.get(movable, "y"))
-            < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
-            and abs(ee_pose.position[2] - z) < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
+        return check_end_effector_at_object(
+            ee_pose.position,
+            (
+                state.get(movable, "x"),
+                state.get(movable, "y"),
+                state.get(movable, "z"),
+            ),
         )
 
     @staticmethod
@@ -167,7 +159,7 @@ class Tossing3DStateAbstractor:
         state: ObjectCentricState, movable: Object, other: Object
     ) -> bool:
         """Whether a movable is at lower x than another, read live rather than fixed."""
-        return state.get(movable, "x") < state.get(other, "x")
+        return check_is_down_x(state.get(movable, "x"), state.get(other, "x"))
 
     @staticmethod
     def _check_at_throw_pose(

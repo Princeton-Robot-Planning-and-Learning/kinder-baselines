@@ -18,8 +18,8 @@ from relational_structs import (
     Predicate,
 )
 
+from kinder_models.dynamic3d.predicate_checks import GRIPPER_OPEN_COMMAND_TOLERANCE
 from kinder_models.dynamic3d.shelf.parameterized_skills import PyBulletSim
-from kinder_models.dynamic3d.utils import GRIPPER_OPEN_COMMAND_TOLERANCE
 
 # Predicates.
 DrawerOpen = Predicate("DrawerOpen", [MujocoDrawerObjectType])
