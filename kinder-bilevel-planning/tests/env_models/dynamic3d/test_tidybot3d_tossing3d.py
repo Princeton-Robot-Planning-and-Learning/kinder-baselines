@@ -1,5 +1,7 @@
 """Tests for tidybot3d_tossing3D.py."""
 
+from pathlib import Path
+
 import kinder
 import pytest
 from conftest import MAKE_VIDEOS
@@ -13,6 +15,8 @@ from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 kinder.register_all_environments()
 
 ENV_MODEL_NAME = "tidybot3d_tossing3D"
+
+_TEST_TASKS = Path(__file__).parent.parent.parent / "test_tasks"
 
 
 def test_tidybot3d_tossing_bilevel_planning():
@@ -86,6 +90,33 @@ def test_tidybot3d_tossing_skills_ground_with_every_operator_parameter():
         assert tuple(ground_skill.controller.objects) == tuple(
             ground_operator.parameters
         )
+
+    env.close()
+
+
+def test_tidybot3d_tossing_abstracts_against_the_scene_it_was_given():
+    """A model built from an explicit scene reads that scene's goal region."""
+    env = kinder.make("kinder/Tossing3D-o1-v0")
+    obs, _ = env.reset(seed=125)
+
+    variant_models = create_bilevel_planning_models(
+        ENV_MODEL_NAME,
+        env.observation_space,
+        env.action_space,
+        num_objects=1,
+        task_config_path=str(_TEST_TASKS / "tidybot-tossing3d_near_goal-o1.json"),
+    )
+    default_models = create_bilevel_planning_models(
+        ENV_MODEL_NAME, env.observation_space, env.action_space, num_objects=1
+    )
+
+    # The variant's goal region covers where the cube starts, so an untouched reset
+    # satisfies the goal under it and cannot under the installed scene.
+    state = variant_models.observation_to_state(obs)
+    cube = state.get_object_from_name("cube_0")
+    in_goal_region = GroundAtom(MovableInGoalRegion, [cube])
+    assert in_goal_region in variant_models.state_abstractor(state).atoms
+    assert in_goal_region not in default_models.state_abstractor(state).atoms
 
     env.close()
 

@@ -1,4 +1,8 @@
-"""Bilevel planning models for the TidyBot3D Tossing3D environment."""
+"""Bilevel planning models for the TidyBot3D Tossing3D environment.
+
+TODO: support Tossing3D-o2. It needs a goal naming each cube and operators that say
+which cube a throw is aimed at; the state abstractor asserts one cube today.
+"""
 
 from collections.abc import Sequence
 from pathlib import Path
@@ -49,8 +53,14 @@ def create_bilevel_planning_models(
     observation_space: Space,
     action_space: Space,
     num_objects: int = 1,
+    task_config_path: str | None = None,
 ) -> SesameModels:
-    """Create the env models for TidyBot Tossing3D."""
+    """Create the env models for TidyBot Tossing3D.
+
+    `task_config_path` defaults to the installed scene. Pass one to plan against a
+    variant, which must be the same scene the caller's env was built from -- the model
+    and the env disagreeing about geometry is silent, not an error.
+    """
     if num_objects != 1:
         raise NotImplementedError(
             f"Tossing3D bilevel planning supports one cube, got {num_objects}. The "
@@ -60,11 +70,12 @@ def create_bilevel_planning_models(
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, TidyBot3DRobotActionSpace)
 
-    task_config_path = str(
-        Path(kinder.__file__).parent
-        / "envs/dynamic3d/tasks/Tossing3D"
-        / f"Tossing3D-o{num_objects}.json"
-    )
+    if task_config_path is None:
+        task_config_path = str(
+            Path(kinder.__file__).parent
+            / "envs/dynamic3d/tasks/Tossing3D"
+            / f"Tossing3D-o{num_objects}.json"
+        )
     sim = ObjectCentricTidyBot3DEnv(
         task_config_path=task_config_path,
         num_objects=num_objects,
