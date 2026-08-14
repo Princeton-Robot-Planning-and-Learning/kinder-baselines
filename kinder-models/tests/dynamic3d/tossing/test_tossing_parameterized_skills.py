@@ -27,6 +27,7 @@ from kinder_models.dynamic3d.tossing.parameterized_skills import (
     TOSS_MAX_ACCELERATION,
     TOSS_MAX_DECELERATION,
     TOSS_MAX_VELOCITY,
+    THROW_POSE_TOLERANCE,
     TOSS_RELEASE_ARM_CONFIGURATION,
     TOSS_SLICES_PER_CONTROL_STEP,
     TOSS_TARGET_DISTANCE_BOUNDS,
@@ -35,9 +36,6 @@ from kinder_models.dynamic3d.tossing.parameterized_skills import (
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,
     toss_profile_limits,
-)
-from kinder_models.dynamic3d.tossing.state_abstractions import (
-    THROW_POSE_TOLERANCE,
 )
 from kinder_models.dynamic3d.utils import (
     _CONTROL_TIMESTEP,
@@ -1615,11 +1613,10 @@ def test_move_to_throw_pose_samples_a_throwable_standoff():
 
 
 def test_move_to_throw_pose_samples_a_pose_on_the_bin_axis():
-    """Every sampled pose must be one RobotAtThrowPose accepts, in y as well as in x.
+    """Every sampled pose must be on the bin axis, in y as well as in x.
 
-    A standoff test alone is satisfied by a whole ring of positions, so the predicate
-    also requires |dy| <= THROW_POSE_TOLERANCE. Asserted on the offset the parameters
-    imply, not the bounds, so it keeps its meaning if either is retuned.
+    A standoff test alone is satisfied by a whole ring of positions. Asserted on the
+    offset the parameters imply, not the bounds, so it survives a retune.
     """
     num_cubes = 1
     env = kinder.make(
