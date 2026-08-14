@@ -89,6 +89,13 @@ GRASP_RADIUS_MARGIN = 0.9
 # patch half extents, so the drop cannot land on the patch boundary.
 PLACE_EXTENT_MARGIN = 0.7
 
+# A released cube drops kinematically to its resting height from wherever it is, so
+# nothing in the environment forces a gentle set-down. The sampler bounds the release
+# height itself: the cube must hang no more than this far above its resting height
+# when the arm lets go, so placements happen near the surface instead of as long
+# drops.
+PLACE_MAX_RELEASE_HEIGHT = 0.10
+
 # The handover region: the holding arm carries the cube to a point sampled here, in
 # front of the robot where both arms can reach. Bounds are on the cube center, with y
 # centered on the robot's sagittal plane and z relative to the table top.
@@ -397,25 +404,53 @@ class GroundPlaceController(_VegaPickPlaceControllerBase):
         half_x, half_y = self._sim.config.target_half_extents
         resting_z = self._sim.cube_resting_z
 
-        def accept(config: Configuration) -> bool:
-            # The cube is attached to this arm's end effector, so its position under a
-            # candidate configuration comes from forward kinematics of its tree node.
-            cube = self._sim.tree.forward_kinematics(CUBE_NODE, config).t
+        def cube_accepted(cube: np.ndarray) -> bool:
             return bool(
                 abs(cube[0] - target[0]) < PLACE_EXTENT_MARGIN * half_x
                 and abs(cube[1] - target[1]) < PLACE_EXTENT_MARGIN * half_y
-                and cube[2] >= resting_z
+                and resting_z <= cube[2] <= resting_z + PLACE_MAX_RELEASE_HEIGHT
             )
 
-        joints = self._sample_arm_configuration(
-            side, accept, rng, self._num_goal_candidates
+        # The bounded release height makes the acceptance region a thin slab just
+        # above the patch, so raw draws are refined like grasp reaches: aim the cube
+        # (via the end effector, which carries it at a fixed offset) at the slab
+        # center and re-check. The cube is attached to this arm's end effector, so its
+        # position under a candidate configuration comes from forward kinematics of
+        # its tree node.
+        place_point = np.array(
+            [target[0], target[1], resting_z + PLACE_MAX_RELEASE_HEIGHT / 2]
         )
-        if joints is None:
-            raise TrajectorySamplingFailure(
-                f"No place configuration found for the {side} arm over target "
-                f"{tuple(target)} after {self._num_goal_candidates} samples"
+        space = self._arm_space(side)
+        lower, upper = space.bounds()
+        base = dict(self._sim.configuration)
+        ee_frame = self._sim.robot.manipulators[side].ee_frame
+        refiner = self._ik_refiners[side]
+        for _ in range(self._num_goal_candidates):
+            joints = rng.uniform(lower, upper)
+            config = base | space.to_configuration(joints)
+            cube = self._sim.tree.forward_kinematics(CUBE_NODE, config).t
+            if np.linalg.norm(cube - place_point) >= LOOSE_REACH_RADIUS:
+                continue
+            if cube_accepted(cube) and not self._collision_fn(config):
+                return joints
+            # The end-effector target that carries the cube to the place point,
+            # assuming the refinement preserves the draw's orientation.
+            ee_pose = self._sim.tree.forward_kinematics(ee_frame, config)
+            refined = refiner.solve(
+                SE3.Rt(ee_pose.R, place_point - (cube - ee_pose.t)), config
             )
-        return joints
+            if refined is None:
+                continue
+            refined_cube = self._sim.tree.forward_kinematics(CUBE_NODE, refined).t
+            if not cube_accepted(refined_cube):
+                continue
+            if self._collision_fn(refined):
+                continue
+            return space.to_vector(refined)
+        raise TrajectorySamplingFailure(
+            f"No place configuration found for the {side} arm over target "
+            f"{tuple(target)} after {self._num_goal_candidates} samples"
+        )
 
     def _create_motion_segments(
         self, params: np.ndarray
