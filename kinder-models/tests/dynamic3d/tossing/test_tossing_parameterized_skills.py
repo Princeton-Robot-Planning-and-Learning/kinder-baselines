@@ -2208,3 +2208,29 @@ def test_move_to_toss_location_and_toss_holds_no_sub_controllers():
     ]
     assert not nested, f"holds sub-controllers: {nested}"
     env.close()
+
+
+def test_move_to_toss_location_and_toss_plans_every_phase_in_reset():
+    """As pick_shelf does: a planning failure surfaces from reset rather than from the
+    middle of a throw, where a refiner would see a crash instead of a rejected sample.
+    """
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    target_bin = state.get_object_from_name("bin_0")
+    controller = controllers["move_to_toss_location_and_toss"].ground(
+        (robot, target_bin, cube)
+    )
+    controller.reset(state, np.array([1.30, 0.0, TOSS_MAX_VELOCITY, 720.0]))
+    # Every phase is planned before the first action is asked for.
+    assert controller._current_base_motion_plan is not None
+    assert len(controller._windup_trajectory) > 0
+    assert controller._swing is not None
+    env.close()
