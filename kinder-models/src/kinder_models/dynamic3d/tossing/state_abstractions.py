@@ -33,6 +33,7 @@ from kinder_models.dynamic3d.predicate_checks import (
     check_gripper_open,
     check_is_down_x,
     check_on_ground,
+    check_reach_interval_hits_box,
 )
 from kinder_models.dynamic3d.utils import (
     WAYPOINT_TOLERANCE,
@@ -58,8 +59,51 @@ CUBE_NAME_PREFIX = "cube"
 BIN_NAME_PREFIX = "bin"
 BARRIER_NAME = "cuboid_barrier"
 
-# Throwable-from standoffs, not the 0.5 m grasping one. Brackets the test's 1.35 m.
+# Throwable-from standoffs, not the 0.5 m grasping one: the range a base sampler may
+# draw from, which is about where a throw is *possible at all*.
+#
+# **This is the sampler's range only, and RobotAtThrowPose deliberately does not accept
+# it.** The two were the same interval until this predicate was rewritten, and that
+# identity is a defect rather than a convenience: MoveToThrowPose's only add effect is
+# RobotAtThrowPose, so a predicate accepting every standoff the sampler can draw is an
+# add effect satisfied by construction on every attempt. Downstream, hitl-pmp measured
+# what that costs on its port of this domain -- 16/16 attempts labelled success against
+# 0/16 informed draws, versus 7/20 informed for a pick skill in the same run -- because
+# a per-skill success classifier trained on a constant-true label has one class to learn
+# from. Widening this constant must not widen the predicate.
 THROW_STANDOFF_BOUNDS = (1.20, 1.65)
+
+# The distance the shipped toss carries the cube before its first ground contact, in
+# metres. A property of the controller -- the two fixed arm configurations and the
+# cube's mass -- not of the scene, so the band below can be recomputed from live
+# geometry on every call and stays correct when the bin or the goal region moves.
+#
+# Calibrated downstream in hitl-pmp, against where success breaks rather than in free
+# flight, and the difference is a trap: throwing onto open floor and recording where the
+# cube comes to rest gives 1.3499 m (sd 0.0024, n = 12), which is ~0.075 m longer
+# because it includes post-impact roll. The goal-region test needs the *impact* range,
+# since a cube landing inside the region is caught by the bin rather than rolling on.
+# Two independent sweeps bracket the impact range to (1.2608, 1.3090) and, from the two
+# edges of partial solving independently, to 1.2749 from each end.
+#
+# That calibration was taken with the gripper opening on the first control step past
+# release fraction 0.46, which is exactly what TossController does, so it describes this
+# controller rather than approximating it.
+THROW_REACH = 1.275
+
+# **The band is the region's own edges, untrimmed, and the trimming a downstream port
+# applies is deliberately not copied here.** hitl-pmp narrows this box by two margins it
+# measured (0.025 m and 0.05 m), because a 5-seed sweep found the standoffs solving on
+# every seed to be narrower than the geometric prediction at both ends. Those margins
+# were measured against its own hand-composed throw and indexed by *commanded* standoff,
+# and commanded standoff is not what this predicate reads: driving move_to_target to a
+# commanded 1.35 m leaves the base 1.3778 m from the bin, 27.8 mm short, well inside
+# WAYPOINT_TOLERANCE but a third of the width either margin would trim. Transplanting
+# them would import a 28 mm indexing error along with the measurement.
+#
+# The untrimmed band is already what fixes the defect: it is derived from the scored
+# region rather than from the sampler's range, so the add effect can fail. A consumer
+# with its own reliability measurement can pass an already-trimmed box.
 
 # Wider than WAYPOINT_TOLERANCE: the sampler already spends half of it off-axis.
 THROW_POSE_TOLERANCE = 2 * WAYPOINT_TOLERANCE
@@ -161,12 +205,18 @@ class Tossing3DStateAbstractor:
         """Whether a movable is at lower x than another, read live rather than fixed."""
         return check_is_down_x(state.get(movable, "x"), state.get(other, "x"))
 
-    @staticmethod
     def _check_at_throw_pose(
-        state: ObjectCentricState, robot: Object, target: Object
+        self, state: ObjectCentricState, robot: Object, target: Object
     ) -> bool:
-        """Whether the base is at a throwable standoff, on axis, facing the target."""
-        low, high = THROW_STANDOFF_BOUNDS
+        """Whether a throw from the base's pose would land the object in the region.
+
+        A success test, not a reachability test. The standoff conjunct asks whether the
+        throw's own displacement carries the object into the scored box, read live off
+        the goal region, rather than whether the standoff lies in the interval a sampler
+        draws from -- see THROW_STANDOFF_BOUNDS for why the latter cannot be learned
+        from. Move the bin, resize the region or change the ground placement threshold
+        and the band follows on its own.
+        """
         dx = state.get(target, "x") - state.get(robot, "pos_base_x")
         dy = state.get(target, "y") - state.get(robot, "pos_base_y")
         heading_error = abs(
@@ -174,11 +224,35 @@ class Tossing3DStateAbstractor:
                 np.arctan2(dy, dx), state.get(robot, "pos_base_rot")
             )
         )
-        return bool(
-            abs(dy) <= THROW_POSE_TOLERANCE
-            and low - THROW_POSE_TOLERANCE <= dx <= high + THROW_POSE_TOLERANCE
-            and heading_error <= THROW_POSE_TOLERANCE
+        if abs(dy) > THROW_POSE_TOLERANCE or heading_error > THROW_POSE_TOLERANCE:
+            return False
+        x_min, _, _, x_max, _, _ = self._goal_region_bbox()
+        return check_reach_interval_hits_box(
+            state.get(robot, "pos_base_x"), THROW_REACH, THROW_REACH, x_min, x_max
         )
+
+    def _goal_region_bbox(self) -> tuple[float, float, float, float, float, float]:
+        """The live world-frame box _check_goals() scores containment in.
+
+        Region.bbox only reads the site's simulated position when the region carries an
+        env; ground regions are constructed with env=None, so it otherwise falls back to
+        an XML/parent-frame value. check_in_region handles that by swapping env in and
+        back out, and so does this, rather than leaving a sim reference behind on a
+        region that was deliberately left bare.
+        """
+        ground_fixture = self._sim._ground_fixture  # pylint: disable=protected-access
+        assert ground_fixture is not None, "Ground fixture not initialized"
+        found = ground_fixture.region_objects.get(GOAL_REGION_NAME, [])
+        assert len(found) == 1, f"expected one {GOAL_REGION_NAME}, found {len(found)}"
+        region = found[0]
+        original = region.env
+        region.env = self._sim._robot_env  # pylint: disable=protected-access
+        try:
+            bbox = tuple(float(value) for value in region.bbox)
+        finally:
+            region.env = original
+        assert len(bbox) == 6, f"{GOAL_REGION_NAME} is not a single box: {bbox}"
+        return bbox  # type: ignore[return-value]
 
     def goal_deriver(self, state: ObjectCentricState) -> RelationalAbstractGoal:
         """The goal is to toss every cube into the goal region."""

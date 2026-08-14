@@ -84,3 +84,30 @@ def check_end_effector_at_object(
 def check_is_down_x(x: float, other_x: float) -> bool:
     """Whether a movable is at lower x than another, read live rather than fixed."""
     return bool(x < other_x)
+
+
+def check_reach_interval_hits_box(
+    base_x: float,
+    reach_min: float,
+    reach_max: float,
+    box_x_min: float,
+    box_x_max: float,
+) -> bool:
+    """Whether a throw from base_x can land inside [box_x_min, box_x_max].
+
+    A throw from a fixed windup displaces the object by a distance set by the toss
+    parameters and not by the scene, so the set of x it can reach from base_x is the
+    interval [base_x + reach_min, base_x + reach_max]. The pose is throwable-from iff
+    that interval meets the box -- iff *some* toss parameterisation scores from here.
+    A controller with a single fixed toss passes reach_min == reach_max, which
+    degenerates to a point and is the same test.
+
+    **Deriving the acceptance band this way, rather than accepting the range the base
+    sampler draws from, is the whole point of the function.** The two are easy to
+    conflate and the failure is silent: if a "robot is at a throw pose" predicate
+    accepts exactly the standoffs the sampler can produce, then the move-to-throw-pose
+    operator's only add effect holds after every attempt by construction. A learner
+    that trains a per-skill success classifier on that label sees a single class and
+    never improves on its uniform prior, and nothing about the run looks wrong.
+    """
+    return bool(base_x + reach_min <= box_x_max and box_x_min <= base_x + reach_max)

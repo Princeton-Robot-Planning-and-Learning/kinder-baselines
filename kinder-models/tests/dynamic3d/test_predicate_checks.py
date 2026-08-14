@@ -16,6 +16,7 @@ from kinder_models.dynamic3d.predicate_checks import (
     check_gripper_open,
     check_is_down_x,
     check_on_ground,
+    check_reach_interval_hits_box,
 )
 
 
@@ -83,6 +84,32 @@ def test_end_effector_at_object_is_a_per_axis_box_not_a_sphere():
     assert not check_end_effector_at_object(
         np.array([2 * END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE, 0.0, 0.0]), np.zeros(3)
     )
+
+
+def test_reach_interval_hits_box_is_an_interval_intersection_not_containment():
+    """Reaching *into* the box is enough; the whole interval need not fit inside."""
+    assert check_reach_interval_hits_box(0.0, 0.5, 5.0, 1.0, 2.0)
+    assert check_reach_interval_hits_box(0.0, 1.2, 1.8, 1.0, 2.0)
+    assert not check_reach_interval_hits_box(0.0, 2.5, 3.0, 1.0, 2.0)
+    assert not check_reach_interval_hits_box(0.0, 0.1, 0.9, 1.0, 2.0)
+
+
+def test_reach_interval_hits_box_is_inclusive_at_both_edges():
+    """Touching an edge counts, matching the region test the band has to agree with."""
+    assert check_reach_interval_hits_box(0.0, 2.0, 3.0, 1.0, 2.0)
+    assert check_reach_interval_hits_box(0.0, 0.5, 1.0, 1.0, 2.0)
+
+
+def test_a_single_fixed_throw_is_the_degenerate_interval():
+    """reach_min == reach_max reduces to asking whether one landing point is in box."""
+    assert check_reach_interval_hits_box(0.6, 1.275, 1.275, 1.85, 2.15)
+    assert not check_reach_interval_hits_box(0.4, 1.275, 1.275, 1.85, 2.15)
+
+
+def test_the_band_tracks_the_box_rather_than_the_reach():
+    """Shifting the box shifts exactly which base positions are accepted."""
+    assert check_reach_interval_hits_box(1.6, 1.275, 1.275, 2.85, 3.15)
+    assert not check_reach_interval_hits_box(0.6, 1.275, 1.275, 2.85, 3.15)
 
 
 def test_is_down_x_is_strict_so_equal_positions_do_not_hold():
