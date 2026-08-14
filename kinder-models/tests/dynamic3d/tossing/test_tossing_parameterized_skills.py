@@ -30,7 +30,9 @@ from kinder_models.dynamic3d.tossing.parameterized_skills import (
     TOSS_MAX_VELOCITY,
     THROW_POSE_TOLERANCE,
     TOSS_RELEASE_ARM_CONFIGURATION,
+    TOSS_RELEASE_MS_BOUNDS,
     TOSS_SLICES_PER_CONTROL_STEP,
+    TOSS_SPEED_BOUNDS,
     TOSS_TARGET_DISTANCE_BOUNDS,
     TOSS_TARGET_ROTATION_BOUNDS,
     TOSS_WINDUP_ARM_CONFIGURATION,
@@ -1970,4 +1972,86 @@ def test_pick_cube_releases_when_the_grasp_closed_on_nothing():
     opened.set(robot, "pos_gripper", 0.0)
     controller.observe(opened)
     assert controller.terminated()
+    env.close()
+
+
+def test_move_to_toss_location_and_toss_samples_four_parameters():
+    """Standoff, rotation, release speed and release millisecond, all in bounds."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    target_bin = state.get_object_from_name("bin_0")
+    controller = controllers["move_to_toss_location_and_toss"].ground(
+        (robot, target_bin, cube)
+    )
+    draws = np.array(
+        [
+            controller.sample_parameters(state, np.random.default_rng(seed))
+            for seed in range(50)
+        ]
+    )
+    assert draws.shape == (50, 4)
+    for column, (low, high) in enumerate(
+        [
+            TOSS_TARGET_DISTANCE_BOUNDS,
+            TOSS_TARGET_ROTATION_BOUNDS,
+            TOSS_SPEED_BOUNDS,
+            TOSS_RELEASE_MS_BOUNDS,
+        ]
+    ):
+        assert draws[:, column].min() >= low
+        assert draws[:, column].max() <= high
+        # A sampler, not a constant, in every component.
+        assert draws[:, column].min() < draws[:, column].max()
+    env.close()
+
+
+def test_the_release_speeds_the_sampler_draws_are_never_clamped():
+    """TOSS_SPEED_BOUNDS' top edge is the clamp point, so it must pass through."""
+    for speed in np.linspace(*TOSS_SPEED_BOUNDS, 25):
+        assert np.isclose(toss_profile_limits(speed)[0], speed)
+
+
+def test_pick_cube_then_move_and_toss_scores():
+    """The whole domain, end to end: two skills and no third."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    target_bin = state.get_object_from_name("bin_0")
+
+    def run(controller, params):
+        nonlocal state
+        controller.reset(state, params)
+        for _ in range(3000):
+            if controller.terminated():
+                return
+            obs_, _, _, _, _ = env.step(controller.step())
+            state = env.observation_space.devectorize(obs_)
+            controller.observe(state)
+        raise AssertionError("controller did not terminate")
+
+    pick = controllers["pick_cube"].ground((robot, cube))
+    run(pick, pick.sample_parameters(state, np.random.default_rng(0)))
+    assert state.get(cube, "z") > MINIMUM_HOLDING_HEIGHT
+
+    toss = controllers["move_to_toss_location_and_toss"].ground(
+        (robot, target_bin, cube)
+    )
+    run(toss, np.array([1.30, 0.0, TOSS_MAX_VELOCITY, 720.0]))
+    sim = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    assert sim._check_goals()  # pylint: disable=protected-access
     env.close()
