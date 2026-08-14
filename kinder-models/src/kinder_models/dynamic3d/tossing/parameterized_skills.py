@@ -87,6 +87,12 @@ TOSS_MAX_TARGET_ROTATION = float(
 )
 TOSS_TARGET_ROTATION_BOUNDS = (-TOSS_MAX_TARGET_ROTATION, TOSS_MAX_TARGET_ROTATION)
 
+# The two dials TossController already takes, opened up as sampled parameters. The
+# speed tops out at the profile's own clamp; the millisecond window is centred on the
+# demonstrated default.
+TOSS_SPEED_BOUNDS = (np.deg2rad(60.0), TOSS_MAX_VELOCITY)
+TOSS_RELEASE_MS_BOUNDS = (600.0, 840.0)
+
 
 def toss_profile_limits(
     release_speed: float = TOSS_MAX_VELOCITY,
@@ -618,17 +624,27 @@ class TossFromWindupController(
         self._toss_controller = TossController(self.objects, pybullet_sim=pybullet_sim)
         self._last_state: ObjectCentricState | None = None
         self._toss_params: np.ndarray | None = None
+        self._release_speed: float = TOSS_MAX_VELOCITY
+        self._gripper_release_ms: int = TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS
         self._tossing: bool = False
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         del x, rng  # not used
         return np.array([TOSS_WINDUP_ARM_CONFIGURATION, TOSS_RELEASE_ARM_CONFIGURATION])
 
-    def reset(self, x: ObjectCentricState, params: Any) -> None:
+    def reset(
+        self,
+        x: ObjectCentricState,
+        params: Any,
+        release_speed: float = TOSS_MAX_VELOCITY,
+        gripper_release_ms: int = TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
+    ) -> None:
         current_params = np.asarray(params, dtype=np.float32)
         assert current_params.shape == (2, 7)
         self._last_state = x
         self._toss_params = current_params[1]
+        self._release_speed = release_speed
+        self._gripper_release_ms = gripper_release_ms
         self._tossing = False
         # The toss is planned when the windup ends, from the state actually reached.
         self._windup_controller.reset(x, current_params[0])
@@ -640,7 +656,12 @@ class TossFromWindupController(
         if not self._tossing and self._windup_controller.terminated():
             assert self._last_state is not None
             assert self._toss_params is not None
-            self._toss_controller.reset(self._last_state, self._toss_params)
+            self._toss_controller.reset(
+                self._last_state,
+                self._toss_params,
+                release_speed=self._release_speed,
+                gripper_release_ms=self._gripper_release_ms,
+            )
             self._tossing = True
         if self._tossing:
             return self._toss_controller.step()
@@ -931,12 +952,23 @@ class PickCubeController(PickShelfController):
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         return np.zeros(0, dtype=np.float32)
 
-    def reset(self, x: ObjectCentricState, params: Any, **kwargs: Any) -> None:
+    def reset(
+        self,
+        x: ObjectCentricState,
+        params: Any,
+        extend_xy_magnitude: float = 0.025,
+        extend_rot_magnitude: float = np.pi / 8,
+    ) -> None:
         del params
         self._releasing = False
         for distance, rot in PICK_STANDOFF_LADDER:
             try:
-                super().reset(x, np.array([distance, rot]), **kwargs)
+                super().reset(
+                    x,
+                    np.array([distance, rot]),
+                    extend_xy_magnitude=extend_xy_magnitude,
+                    extend_rot_magnitude=extend_rot_magnitude,
+                )
                 return
             except (AssertionError, ValueError, RuntimeError):
                 continue
@@ -967,6 +999,85 @@ class PickCubeController(PickShelfController):
         assert self._last_state is not None
         pos = self._last_state.get(self.objects[0], "pos_gripper")
         return bool(pos < GRIPPER_OPEN_COMMAND_TOLERANCE)
+
+
+class MoveToTossLocationAndTossController(
+    GroundParameterizedController[ObjectCentricState, Array]
+):
+    """Drive to a pose to throw from and throw, as one skill.
+
+    The object parameters are:
+        robot: The robot itself.
+        target: The object to throw at.
+        held: The movable the robot is holding.
+
+    The continuous parameters are:
+        distance_to_target: float (metres)
+        rotation_to_target: float (radians)
+        tossing_speed: float (radians/second)
+        tossing_ms: float (milliseconds into the swing that the gripper opens)
+
+    Composed rather than split so that no predicate has to name the pose between them.
+    The cost is that a standoff which cannot score is only discovered by throwing from
+    it, where a separate move could have been rejected first.
+    """
+
+    def __init__(
+        self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._move_controller = MoveToThrowPoseController(self.objects)
+        self._toss_controller = TossFromWindupController(
+            self.objects, pybullet_sim=pybullet_sim
+        )
+        self._last_state: ObjectCentricState | None = None
+        self._release_speed: float = TOSS_MAX_VELOCITY
+        self._gripper_release_ms: int = TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS
+        self._tossing: bool = False
+
+    def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
+        del x  # not used
+        return np.array(
+            [
+                rng.uniform(*TOSS_TARGET_DISTANCE_BOUNDS),
+                rng.uniform(*TOSS_TARGET_ROTATION_BOUNDS),
+                rng.uniform(*TOSS_SPEED_BOUNDS),
+                rng.uniform(*TOSS_RELEASE_MS_BOUNDS),
+            ]
+        )
+
+    def reset(self, x: ObjectCentricState, params: Any, **kwargs: Any) -> None:
+        current_params = np.asarray(params, dtype=np.float32)
+        assert current_params.shape == (4,)
+        self._last_state = x
+        self._release_speed = float(current_params[2])
+        self._gripper_release_ms = int(round(float(current_params[3])))
+        self._tossing = False
+        self._move_controller.reset(x, current_params[:2], **kwargs)
+
+    def terminated(self) -> bool:
+        return self._tossing and self._toss_controller.terminated()
+
+    def step(self) -> Array:
+        if not self._tossing and self._move_controller.terminated():
+            assert self._last_state is not None
+            self._toss_controller.reset(
+                self._last_state,
+                self._toss_controller.sample_parameters(
+                    self._last_state, np.random.default_rng(0)
+                ),
+                release_speed=self._release_speed,
+                gripper_release_ms=self._gripper_release_ms,
+            )
+            self._tossing = True
+        if self._tossing:
+            return self._toss_controller.step()
+        return self._move_controller.step()
+
+    def observe(self, x: ObjectCentricState) -> None:
+        self._last_state = x
+        self._move_controller.observe(x)
+        self._toss_controller.observe(x)
 
 
 def create_lifted_controllers(
@@ -1088,6 +1199,23 @@ def create_lifted_controllers(
         )
     )
 
+    class MoveToTossLocationAndToss(MoveToTossLocationAndTossController):
+        """Composed move-and-toss with pre-configured PyBullet sim."""
+
+        def __init__(self, objects):
+            super().__init__(objects, pybullet_sim=pybullet_sim)
+
+    robot = Variable("?robot", MujocoTidyBotRobotObjectType)
+    target = Variable("?target", MujocoObjectType)
+    held = Variable("?held", MujocoMovableObjectType)
+
+    LiftedMoveToTossLocationAndTossController: LiftedParameterizedController = (
+        LiftedParameterizedController(
+            [robot, target, held],
+            MoveToTossLocationAndToss,
+        )
+    )
+
     return {
         "move_to_target": LiftedMoveToTargetController,
         "move_to_target_from_other_target": LiftedMoveToTargetFromOtherTargetController,
@@ -1099,4 +1227,5 @@ def create_lifted_controllers(
         "close_gripper": LiftedCloseGripperController,
         "open_gripper": LiftedOpenGripperController,
         "pick_cube": LiftedPickCubeController,
+        "move_to_toss_location_and_toss": LiftedMoveToTossLocationAndTossController,
     }
