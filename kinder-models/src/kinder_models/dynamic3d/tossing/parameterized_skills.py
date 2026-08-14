@@ -34,6 +34,7 @@ from relational_structs import (
 )
 from spatialmath import SE2
 
+from kinder_models.dynamic3d.shelf.parameterized_skills import PickShelfController
 from kinder_models.dynamic3d.utils import (
     _ARM_MAX_ACCELERATION,
     _ARM_MAX_VELOCITY,
@@ -41,6 +42,7 @@ from kinder_models.dynamic3d.utils import (
     GRASP_CLOSE_THRESHOLD,
     GRIPPER_CLOSED_THRESHOLD,
     GRIPPER_OPEN_COMMAND_TOLERANCE,
+    MINIMUM_HOLDING_HEIGHT,
     WAYPOINT_TOLERANCE,
     WORLD_X_BOUNDS,
     WORLD_Y_BOUNDS,
@@ -899,6 +901,74 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
         return current_gripper_pose < atol
 
 
+# Pick standoffs to try in order, nominal first, spanning what the shelf pick used to
+# sample. Fixed rather than drawn, so the skill takes no continuous parameters.
+PICK_STANDOFF_LADDER = tuple(
+    (distance, rot)
+    for rot in (0.0, np.pi / 8, -np.pi / 8, np.pi / 4, -np.pi / 4)
+    for distance in (0.55, 0.5, 0.6)
+)
+
+
+class PickCubeController(PickShelfController):
+    """Pick a cube up off the ground, taking no continuous parameters.
+
+    The object parameters are:
+        robot: The robot itself.
+        cube: The cube to pick up.
+
+    Where to stand is derived rather than sampled: PICK_STANDOFF_LADDER is walked from
+    the nominal pose outwards until one plans, so a caller cannot draw an unreachable
+    pose and there is nothing for a refiner to backtrack over. A grasp that closes on
+    nothing releases before terminating, leaving the hand empty rather than commanded
+    shut on air.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._releasing: bool = False
+
+    def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
+        return np.zeros(0, dtype=np.float32)
+
+    def reset(self, x: ObjectCentricState, params: Any, **kwargs: Any) -> None:
+        del params
+        self._releasing = False
+        for distance, rot in PICK_STANDOFF_LADDER:
+            try:
+                super().reset(x, np.array([distance, rot]), **kwargs)
+                return
+            except (AssertionError, ValueError, RuntimeError):
+                continue
+        raise ValueError(
+            f"no reachable pick pose among {len(PICK_STANDOFF_LADDER)} candidates"
+        )
+
+    def terminated(self) -> bool:
+        if not super().terminated():
+            return False
+        if self._grasp_took():
+            return True
+        self._releasing = True
+        return self._gripper_is_open()
+
+    def step(self) -> Array:
+        if self._releasing:
+            action = np.zeros(11, dtype=np.float32)
+            action[-1] = 0
+            return action
+        return super().step()
+
+    def _grasp_took(self) -> bool:
+        assert self._last_state is not None
+        return bool(self._last_state.get(self.objects[1], "z") > MINIMUM_HOLDING_HEIGHT)
+
+    def _gripper_is_open(self) -> bool:
+        assert self._last_state is not None
+        pos = self._last_state.get(self.objects[0], "pos_gripper")
+        return bool(pos < GRIPPER_OPEN_COMMAND_TOLERANCE)
+
+
 def create_lifted_controllers(
     action_space: TidyBot3DRobotActionSpace,
     init_constant_state: ObjectCentricState | None = None,
@@ -1008,6 +1078,16 @@ def create_lifted_controllers(
         )
     )
 
+    robot = Variable("?robot", MujocoTidyBotRobotObjectType)
+    cube = Variable("?cube", MujocoMovableObjectType)
+
+    LiftedPickCubeController: LiftedParameterizedController = (
+        LiftedParameterizedController(
+            [robot, cube],
+            PickCubeController,
+        )
+    )
+
     return {
         "move_to_target": LiftedMoveToTargetController,
         "move_to_target_from_other_target": LiftedMoveToTargetFromOtherTargetController,
@@ -1018,4 +1098,5 @@ def create_lifted_controllers(
         "move_arm_to_end_effector": LiftedMoveArmToEndEffectorController,
         "close_gripper": LiftedCloseGripperController,
         "open_gripper": LiftedOpenGripperController,
+        "pick_cube": LiftedPickCubeController,
     }

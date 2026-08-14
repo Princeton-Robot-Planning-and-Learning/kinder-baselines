@@ -23,6 +23,7 @@ from spatialmath import SE2
 import kinder_models.dynamic3d.tossing.parameterized_skills
 from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
+    PICK_STANDOFF_LADDER,
     TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
     TOSS_MAX_ACCELERATION,
     TOSS_MAX_DECELERATION,
@@ -39,6 +40,9 @@ from kinder_models.dynamic3d.tossing.parameterized_skills import (
 )
 from kinder_models.dynamic3d.utils import (
     _CONTROL_TIMESTEP,
+    MINIMUM_HOLDING_HEIGHT,
+    MOVE_TO_TARGET_DISTANCE_BOUNDS,
+    MOVE_TO_TARGET_ROT_BOUNDS,
     WAYPOINT_TOLERANCE,
     PyBulletSim,
     _trapezoidal_motion_profile,
@@ -1877,4 +1881,93 @@ def test_toss_schedules_its_release_at_the_requested_millisecond():
     assert all(action[10] > 0.0 for action in actions[:expected_step])
     assert all(action[10] == 0.0 for action in actions[expected_step + 1 :])
 
+    env.close()
+
+
+def test_pick_cube_takes_no_continuous_parameters():
+    """The sampler has nothing to draw, so a refiner has nothing to backtrack over."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    controller = controllers["pick_cube"].ground((robot, cube))
+    for seed in range(5):
+        params = controller.sample_parameters(state, np.random.default_rng(seed))
+        assert np.asarray(params).shape == (0,)
+    env.close()
+
+
+def test_pick_cube_walks_the_ladder_from_the_nominal_pose():
+    """The first candidate is the nominal one, and every candidate is in the range the
+    shelf pick used to sample."""
+    assert PICK_STANDOFF_LADDER[0] == (0.55, 0.0)
+    distances = [d for d, _ in PICK_STANDOFF_LADDER]
+    rots = [r for _, r in PICK_STANDOFF_LADDER]
+    assert min(distances) >= MOVE_TO_TARGET_DISTANCE_BOUNDS[0]
+    assert max(distances) <= MOVE_TO_TARGET_DISTANCE_BOUNDS[1]
+    assert min(rots) >= MOVE_TO_TARGET_ROT_BOUNDS[0]
+    assert max(rots) <= MOVE_TO_TARGET_ROT_BOUNDS[1]
+
+
+def test_pick_cube_lifts_the_cube_off_the_ground():
+    """End to end, with no parameters supplied by the caller."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    controller = controllers["pick_cube"].ground((robot, cube))
+    controller.reset(
+        state, controller.sample_parameters(state, np.random.default_rng(0))
+    )
+    for _ in range(2000):
+        if controller.terminated():
+            break
+        obs, _, _, _, _ = env.step(controller.step())
+        state = env.observation_space.devectorize(obs)
+        controller.observe(state)
+    assert controller.terminated()
+    assert state.get(cube, "z") > MINIMUM_HOLDING_HEIGHT
+    env.close()
+
+
+def test_pick_cube_releases_when_the_grasp_closed_on_nothing():
+    """Otherwise the hand is neither empty nor holding, and no operator applies."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    controller = controllers["pick_cube"].ground((robot, cube))
+    controller.reset(
+        state, controller.sample_parameters(state, np.random.default_rng(0))
+    )
+    # The arm finished its retract with the cube still on the floor and the gripper
+    # commanded shut: a grasp that closed on nothing.
+    missed = state.copy()
+    missed.set(robot, "pos_gripper", 1.0)
+    controller.observe(missed)
+    controller._lifted = True  # pylint: disable=protected-access
+    assert not controller.terminated()
+    assert controller.step()[-1] == 0
+    opened = missed.copy()
+    opened.set(robot, "pos_gripper", 0.0)
+    controller.observe(opened)
+    assert controller.terminated()
     env.close()
