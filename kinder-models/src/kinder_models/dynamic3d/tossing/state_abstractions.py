@@ -42,6 +42,11 @@ MovableInGoalRegion = Predicate("MovableInGoalRegion", [MujocoMovableObjectType]
 OnGround = Predicate("OnGround", [MujocoObjectType])
 Holding = Predicate("Holding", [MujocoTidyBotRobotObjectType, MujocoMovableObjectType])
 HandEmpty = Predicate("HandEmpty", [MujocoTidyBotRobotObjectType])
+# Named for the command because that is what it reads: a grasp that closes on nothing
+# leaves this true while Holding stays false.
+GripperCommandedClosed = Predicate(
+    "GripperCommandedClosed", [MujocoTidyBotRobotObjectType]
+)
 MovableIsDownX = Predicate(
     "MovableIsDownX", [MujocoMovableObjectType, MujocoMovableObjectType]
 )
@@ -98,6 +103,8 @@ class Tossing3DStateAbstractor:
 
         if self._check_gripper_open(state, robot):
             atoms.add(GroundAtom(HandEmpty, [robot]))
+        else:
+            atoms.add(GroundAtom(GripperCommandedClosed, [robot]))
 
         for cube in cubes:
             if self._check_on_ground(state, cube):

@@ -6,11 +6,12 @@ import kinder
 import pytest
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
-from kinder_models.dynamic3d.tossing.state_abstractions import MovableInGoalRegion
-from relational_structs import GroundAtom
-
+from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
 from kinder_bilevel_planning.agent import BilevelPlanningAgent
 from kinder_bilevel_planning.env_models import create_bilevel_planning_models
+from relational_structs import GroundAtom
+
+from kinder_models.dynamic3d.tossing.state_abstractions import MovableInGoalRegion
 
 kinder.register_all_environments()
 
@@ -117,6 +118,52 @@ def test_tidybot3d_tossing_abstracts_against_the_scene_it_was_given():
     in_goal_region = GroundAtom(MovableInGoalRegion, [cube])
     assert in_goal_region in variant_models.state_abstractor(state).atoms
     assert in_goal_region not in default_models.state_abstractor(state).atoms
+
+    env.close()
+
+
+def _shut_on_nothing_atoms(env, env_models):
+    """The abstract state left by a grasp that closed with the cube still on the
+    floor: the command is shut, so neither HandEmpty nor Holding holds."""
+    obs, _ = env.reset(seed=125)
+    state = env_models.observation_to_state(obs)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    shut = state.copy()
+    shut.set(robot, "pos_gripper", 1.0)
+    return env_models.state_abstractor(shut).atoms
+
+
+def test_open_gripper_is_applicable_after_a_grasp_closes_on_nothing():
+    """Without it this state has no applicable operator at all."""
+    env = kinder.make("kinder/Tossing3D-o1-v0")
+    env_models = create_bilevel_planning_models(
+        ENV_MODEL_NAME, env.observation_space, env.action_space, num_objects=1
+    )
+    atoms = _shut_on_nothing_atoms(env, env_models)
+
+    assert env_models.ground_operators is not None
+    applicable = {
+        op.name for op in env_models.ground_operators if op.preconditions <= atoms
+    }
+    assert applicable == {"open_gripper"}
+
+    env.close()
+
+
+def test_open_gripper_is_inapplicable_while_the_gripper_is_already_open():
+    """It must recover the dead end without becoming a free no-op everywhere."""
+    env = kinder.make("kinder/Tossing3D-o1-v0")
+    env_models = create_bilevel_planning_models(
+        ENV_MODEL_NAME, env.observation_space, env.action_space, num_objects=1
+    )
+    obs, _ = env.reset(seed=125)
+    atoms = env_models.state_abstractor(env_models.observation_to_state(obs)).atoms
+
+    assert env_models.ground_operators is not None
+    applicable = {
+        op.name for op in env_models.ground_operators if op.preconditions <= atoms
+    }
+    assert "open_gripper" not in applicable
 
     env.close()
 

@@ -16,6 +16,7 @@ from kinder_models.dynamic3d.tossing.parameterized_skills import (
 )
 from kinder_models.dynamic3d.tossing.state_abstractions import (
     THROW_STANDOFF_BOUNDS,
+    GripperCommandedClosed,
     HandEmpty,
     Holding,
     MovableInGoalRegion,
@@ -81,6 +82,33 @@ def test_on_ground_fails_for_a_tilted_cube_at_the_same_height():
     tilted.set(cube, "qx", 0.5)
     atoms = abstractor.state_abstractor(tilted).atoms
     assert GroundAtom(OnGround, [cube]) not in atoms
+    env.close()
+
+
+def test_gripper_commanded_closed_is_absent_while_the_gripper_is_open():
+    """It is the negation of HandEmpty, so it must not hold at reset."""
+    env, abstractor, state = _make_env_and_abstractor()
+    robot = _get_robot_from_state(state)
+    atoms = abstractor.state_abstractor(state).atoms
+    assert GroundAtom(GripperCommandedClosed, [robot]) not in atoms
+    env.close()
+
+
+def test_gripper_commanded_closed_holds_after_a_grasp_closes_on_nothing():
+    """The command stays shut while the cube stays on the floor.
+
+    HandEmpty and Holding are both false here, which is the dead end this predicate
+    exists to name.
+    """
+    env, abstractor, state = _make_env_and_abstractor()
+    robot = _get_robot_from_state(state)
+    cube = state.get_object_from_name("cube_0")
+    shut = state.copy()
+    shut.set(robot, "pos_gripper", 1.0)
+    atoms = abstractor.state_abstractor(shut).atoms
+    assert GroundAtom(GripperCommandedClosed, [robot]) in atoms
+    assert GroundAtom(HandEmpty, [robot]) not in atoms
+    assert GroundAtom(Holding, [robot, cube]) not in atoms
     env.close()
 
 
@@ -295,7 +323,7 @@ def test_robot_at_throw_pose_agrees_with_whether_the_throw_scores(standoff, expe
 
 
 def test_the_abstractor_rejects_the_two_cube_variant():
-    """o2 is out of scope: no operator says which cube a throw is aimed at."""
+    """O2 is out of scope: no operator says which cube a throw is aimed at."""
     kinder.register_all_environments()
     env = kinder.make("kinder/Tossing3D-o2-v0", render_mode="rgb_array")
     sim = env.unwrapped._object_centric_env  # pylint: disable=protected-access

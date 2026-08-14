@@ -28,6 +28,7 @@ from kinder_models.dynamic3d.tossing.state_abstractions import (
     BARRIER_NAME,
     BIN_NAME_PREFIX,
     CUBE_NAME_PREFIX,
+    GripperCommandedClosed,
     HandEmpty,
     Holding,
     MovableInGoalRegion,
@@ -122,6 +123,7 @@ def create_bilevel_planning_models(
         OnGround,
         Holding,
         HandEmpty,
+        GripperCommandedClosed,
         MovableIsDownX,
         RobotAtThrowPose,
     }
@@ -137,11 +139,35 @@ def create_bilevel_planning_models(
             LiftedAtom(HandEmpty, [robot]),
             LiftedAtom(OnGround, [held]),
         },
-        add_effects={LiftedAtom(Holding, [robot, held])},
+        add_effects={
+            LiftedAtom(Holding, [robot, held]),
+            LiftedAtom(GripperCommandedClosed, [robot]),
+        },
         delete_effects={
             LiftedAtom(HandEmpty, [robot]),
             LiftedAtom(OnGround, [held]),
         },
+    )
+
+    # Open gripper operator, which is what makes a grasp that closed on nothing
+    # recoverable: the command stays shut, so HandEmpty and Holding are false at once
+    # and nothing else is applicable.
+    robot = Variable("?robot", MujocoTidyBotRobotObjectType)
+    held = Variable("?held", MujocoMovableObjectType)
+
+    # OnGround confines this to the case where the cube is already down, so the
+    # operator asserts nothing about where a released cube would land -- a cube that
+    # comes to rest on any face but its original one is not OnGround, and pick_shelf
+    # cannot grasp it.
+    OpenGripperOperator = LiftedOperator(
+        "open_gripper",
+        [robot, held],
+        preconditions={
+            LiftedAtom(GripperCommandedClosed, [robot]),
+            LiftedAtom(OnGround, [held]),
+        },
+        add_effects={LiftedAtom(HandEmpty, [robot])},
+        delete_effects={LiftedAtom(GripperCommandedClosed, [robot])},
     )
 
     # Move to throw pose operator.
@@ -179,6 +205,7 @@ def create_bilevel_planning_models(
         delete_effects={
             LiftedAtom(Holding, [robot, held]),
             LiftedAtom(MovableIsDownX, [held, barrier]),
+            LiftedAtom(GripperCommandedClosed, [robot]),
         },
     )
 
@@ -203,19 +230,28 @@ def create_bilevel_planning_models(
     LiftedTossFromWindupController = _restate_controller_variables(
         tossing_controllers["toss_from_windup"], TossFromWindupOperator.parameters
     )
+    LiftedOpenGripperController = _restate_controller_variables(
+        tossing_controllers["open_gripper"], OpenGripperOperator.parameters
+    )
 
     # Finalize the skills.
     skills = {
         LiftedSkill(PickCubeOperator, LiftedPickCubeController),
         LiftedSkill(MoveToThrowPoseOperator, LiftedMoveToThrowPoseController),
         LiftedSkill(TossFromWindupOperator, LiftedTossFromWindupController),
+        LiftedSkill(OpenGripperOperator, LiftedOpenGripperController),
     }
 
     # Every scene object is a movable, so lifted typing cannot tell the bin from the
     # barrier and grounding exhaustively offers the planner throws at the barrier.
     ground_operators = _create_ground_operators(
         initial_state,
-        [PickCubeOperator, MoveToThrowPoseOperator, TossFromWindupOperator],
+        [
+            PickCubeOperator,
+            MoveToThrowPoseOperator,
+            TossFromWindupOperator,
+            OpenGripperOperator,
+        ],
     )
 
     # Finalize the models.
