@@ -72,9 +72,11 @@ TOSS_SLICES_PER_CONTROL_STEP = int(round(_CONTROL_TIMESTEP / CONTROL_SCHEDULE_TI
 TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS = 720
 
 
-# Where a throw is possible; whether one *succeeds* is RobotAtThrowPose's own question,
-# and it answers no for the upper part of this range.
+# Where a throw is possible; the upper part does not score.
 TOSS_TARGET_DISTANCE_BOUNDS = (1.25, 1.45)
+
+# Wider than WAYPOINT_TOLERANCE: the sampler already spends half of it off-axis.
+THROW_POSE_TOLERANCE = 2 * WAYPOINT_TOLERANCE
 
 # The widest rotation that still spends only half of WAYPOINT_TOLERANCE off the bin
 # axis at the furthest standoff. Derived, so retuning either cannot invalidate it.
@@ -903,7 +905,6 @@ def create_lifted_controllers(
     pybullet_sim: PyBulletSim | None = None,
 ) -> dict[str, LiftedParameterizedController]:
     """Create lifted parameterized controllers for the TidyBot3D ground environment."""
-
     del action_space, init_constant_state  # not used
 
     class TossFromWindup(TossFromWindupController):

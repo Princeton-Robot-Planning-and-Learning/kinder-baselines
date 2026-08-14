@@ -19,7 +19,6 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoObjectType,
     MujocoTidyBotRobotObjectType,
 )
-from prpl_utils.utils import get_signed_angle_distance
 from relational_structs import (
     GroundAtom,
     Object,
@@ -33,7 +32,6 @@ from kinder_models.dynamic3d.utils import (
     GRIPPER_OPEN_COMMAND_TOLERANCE,
     MINIMUM_HOLDING_HEIGHT,
     ON_GROUND_TOLERANCE,
-    WAYPOINT_TOLERANCE,
     PyBulletSim,
 )
 
@@ -45,25 +43,12 @@ HandEmpty = Predicate("HandEmpty", [MujocoTidyBotRobotObjectType])
 MovableIsDownX = Predicate(
     "MovableIsDownX", [MujocoMovableObjectType, MujocoMovableObjectType]
 )
-RobotAtThrowPose = Predicate(
-    "RobotAtThrowPose", [MujocoTidyBotRobotObjectType, MujocoMovableObjectType]
-)
 
 # The environment's inflated region, not the task JSON's "ranges".
 GOAL_REGION_NAME = "blocks_goal_region"
 
 CUBE_NAME_PREFIX = "cube"
-BIN_NAME_PREFIX = "bin"
 BARRIER_NAME = "cuboid_barrier"
-
-# The achieved standoff band a toss scores from, in metres. Measured by bisecting
-# _check_goals() over real rollouts on three scene seeds; see the commit message. Both
-# edges move ~9 mm across seeds, so neither is quoted finer than 5 mm. A literal, not a
-# live read of the region, so a scene whose bin or goal region moves needs remeasuring.
-THROW_STANDOFF_BOUNDS = (1.09, 1.375)
-
-# Wider than WAYPOINT_TOLERANCE: the sampler already spends half of it off-axis.
-THROW_POSE_TOLERANCE = 2 * WAYPOINT_TOLERANCE
 
 
 class Tossing3DStateAbstractor:
@@ -93,7 +78,6 @@ class Tossing3DStateAbstractor:
         movables = state.get_objects(MujocoMovableObjectType)
         all_mujoco_objects = set(fixtures) | set(movables)
         cubes = self._get_cubes(state)
-        bins = [o for o in movables if o.name.startswith(BIN_NAME_PREFIX)]
         barriers = [o for o in movables if o.name == BARRIER_NAME]
 
         if self._check_gripper_open(state, robot):
@@ -109,10 +93,6 @@ class Tossing3DStateAbstractor:
             for barrier in barriers:
                 if self._check_is_down_x(state, cube, barrier):
                     atoms.add(GroundAtom(MovableIsDownX, [cube, barrier]))
-
-        for target_bin in bins:
-            if self._check_at_throw_pose(state, robot, target_bin):
-                atoms.add(GroundAtom(RobotAtThrowPose, [robot, target_bin]))
 
         objects = {robot} | all_mujoco_objects
         return RelationalAbstractState(atoms, objects)
@@ -135,8 +115,8 @@ class Tossing3DStateAbstractor:
     def _check_on_ground(state: ObjectCentricState, movable: Object) -> bool:
         """Whether a movable rests flat on the ground.
 
-        Flat because the bounding box is pose-independent, so the bottom-face
-        arithmetic only holds while axis-aligned. A toss cannot predict this.
+        Flat because the bounding box is pose-independent, so the bottom-face arithmetic
+        only holds while axis-aligned. A toss cannot predict this.
         """
         z = state.get(movable, "z")
         bounding_box_height = state.get(movable, "bb_z")
@@ -171,28 +151,6 @@ class Tossing3DStateAbstractor:
     ) -> bool:
         """Whether a movable is at lower x than another, read live rather than fixed."""
         return state.get(movable, "x") < state.get(other, "x")
-
-    @staticmethod
-    def _check_at_throw_pose(
-        state: ObjectCentricState, robot: Object, target: Object
-    ) -> bool:
-        """Whether a throw from here would land the object in the goal region.
-
-        A success test, not a reachability test: the band is where a throw was measured
-        to score. Testing the sampler's own interval is the defect this replaced -- every
-        draw satisfied it, so move_to_throw_pose's only add effect could never fail.
-        """
-        dx = state.get(target, "x") - state.get(robot, "pos_base_x")
-        dy = state.get(target, "y") - state.get(robot, "pos_base_y")
-        heading_error = abs(
-            get_signed_angle_distance(
-                np.arctan2(dy, dx), state.get(robot, "pos_base_rot")
-            )
-        )
-        if abs(dy) > THROW_POSE_TOLERANCE or heading_error > THROW_POSE_TOLERANCE:
-            return False
-        low, high = THROW_STANDOFF_BOUNDS
-        return bool(low <= dx <= high)
 
     def goal_deriver(self, state: ObjectCentricState) -> RelationalAbstractGoal:
         """The goal is to toss every cube into the goal region."""
