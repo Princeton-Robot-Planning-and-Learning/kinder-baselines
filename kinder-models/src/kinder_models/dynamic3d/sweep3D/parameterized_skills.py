@@ -40,8 +40,8 @@ from relational_structs import (
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.utils import (
-    _ARM_MAX_ACCELERATION,
-    _ARM_MAX_VELOCITY,
+    ARM_MAX_ACCELERATION,
+    ARM_MAX_VELOCITY,
     DRAWER_TRANSFORM_TO_OBJECT,
     DRAWER_TRANSFORM_TO_OBJECT_END,
     GRASP_CLOSE_THRESHOLD,
@@ -287,19 +287,19 @@ class OpenDrawerSweepController(
         grasp_conf = np.array(plan[-1][:7])
         open_conf = np.array(open_plan[-1][:7])
         self._approach_trajectory, self._approach_traj_dir = _compute_per_joint_profile(
-            curr, grasp_conf, _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
+            curr, grasp_conf, ARM_MAX_VELOCITY, ARM_MAX_ACCELERATION
         )
         self._approach_start_joints = curr.copy()
         self._approach_step_idx = 0
         # Compute trapezoidal velocity profile for open-drawer (grasp conf -> open conf).
         self._open_trajectory, self._open_traj_dir = _compute_per_joint_profile(
-            grasp_conf, open_conf, _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
+            grasp_conf, open_conf, ARM_MAX_VELOCITY, ARM_MAX_ACCELERATION
         )
         self._open_start_joints = grasp_conf.copy()
         self._open_step_idx = 0
         # Compute trapezoidal velocity profile for retract (open conf -> home).
         self._retract_trajectory, self._retract_traj_dir = _compute_per_joint_profile(
-            open_conf, self.home_joints[:7], _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
+            open_conf, self.home_joints[:7], ARM_MAX_VELOCITY, ARM_MAX_ACCELERATION
         )
         self._retract_start_joints = open_conf.copy()
         self._retract_step_idx = 0
@@ -624,13 +624,13 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
         curr = np.array(self._get_current_robot_arm_conf()[:7])
         grasp_conf = np.array(plan[-1][:7])
         self._approach_trajectory, self._approach_traj_dir = _compute_per_joint_profile(
-            curr, grasp_conf, _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
+            curr, grasp_conf, ARM_MAX_VELOCITY, ARM_MAX_ACCELERATION
         )
         self._approach_start_joints = curr.copy()
         self._approach_step_idx = 0
         # Compute trapezoidal velocity profile for retract (grasp conf -> home).
         self._retract_trajectory, self._retract_traj_dir = _compute_per_joint_profile(
-            grasp_conf, self.home_joints[:7], _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
+            grasp_conf, self.home_joints[:7], ARM_MAX_VELOCITY, ARM_MAX_ACCELERATION
         )
         self._retract_start_joints = grasp_conf.copy()
         self._retract_step_idx = 0
@@ -958,13 +958,13 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         sweep_start_conf = np.array(plan[-1][:7])
         sweep_end_conf = np.array(retract_plan[-1][:7])
         self._approach_trajectory, self._approach_traj_dir = _compute_per_joint_profile(
-            curr, sweep_start_conf, _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
+            curr, sweep_start_conf, ARM_MAX_VELOCITY, ARM_MAX_ACCELERATION
         )
         self._approach_start_joints = curr.copy()
         self._approach_step_idx = 0
         # Compute trapezoidal velocity profile for sweep (sweep start -> sweep end conf).
         self._sweep_trajectory, self._sweep_traj_dir = _compute_per_joint_profile(
-            sweep_start_conf, sweep_end_conf, _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
+            sweep_start_conf, sweep_end_conf, ARM_MAX_VELOCITY, ARM_MAX_ACCELERATION
         )
         self._sweep_start_joints = sweep_start_conf.copy()
         self._sweep_step_idx = 0

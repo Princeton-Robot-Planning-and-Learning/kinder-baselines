@@ -34,14 +34,14 @@ from tomsgeoms2d.structs import Geom2D, Rectangle
 from tomsgeoms2d.utils import geom2ds_intersect
 
 # Control period in seconds (10 Hz).
-_CONTROL_TIMESTEP = 0.1
+CONTROL_TIMESTEP = 0.1
 
 # Robot geometry.
 ROBOT_ARM_POSE_TO_BASE = Pose((0.12, 0.0, 0.4))
 
 # Arm joint velocity and acceleration limits (rad/s, rad/s²).
-_ARM_MAX_VELOCITY = np.deg2rad(np.array([80.0, 80.0, 80.0, 80.0, 70.0, 70.0, 70.0]))
-_ARM_MAX_ACCELERATION = np.deg2rad(
+ARM_MAX_VELOCITY = np.deg2rad(np.array([80.0, 80.0, 80.0, 80.0, 70.0, 70.0, 70.0]))
+ARM_MAX_ACCELERATION = np.deg2rad(
     np.array([297.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0])
 )
 
@@ -401,7 +401,7 @@ def _compute_per_joint_profile(
         max_vel=effective_max_vel,
         max_accel=effective_max_accel,
         max_decel=effective_max_accel,
-        step_size=_CONTROL_TIMESTEP,
+        step_size=CONTROL_TIMESTEP,
     )
     return trajectory, direction
 

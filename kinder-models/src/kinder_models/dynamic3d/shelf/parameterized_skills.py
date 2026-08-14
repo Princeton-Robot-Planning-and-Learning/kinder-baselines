@@ -34,8 +34,8 @@ from relational_structs import (
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.utils import (
-    _ARM_MAX_ACCELERATION,
-    _ARM_MAX_VELOCITY,
+    ARM_MAX_ACCELERATION,
+    ARM_MAX_VELOCITY,
     ARM_MOVEMENT_CUPBOARD,
     BASE_DISTANCE_TO_CUPBOARD,
     BASE_TO_CUPBOARD_ROTATION,
@@ -257,13 +257,13 @@ class PickShelfController(GroundParameterizedController[ObjectCentricState, Arra
         curr = np.array(self._get_current_robot_arm_conf()[:7])
         final = np.array(plan[-1][:7])
         self._approach_trajectory, self._approach_traj_dir = _compute_per_joint_profile(
-            curr, final, _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
+            curr, final, ARM_MAX_VELOCITY, ARM_MAX_ACCELERATION
         )
         self._approach_start_joints = curr.copy()
         self._approach_step_idx = 0
         # Compute trapezoidal velocity profile for retract (grasp conf → home).
         self._retract_trajectory, self._retract_traj_dir = _compute_per_joint_profile(
-            final, self.home_joints[:7], _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
+            final, self.home_joints[:7], ARM_MAX_VELOCITY, ARM_MAX_ACCELERATION
         )
         self._retract_start_joints = final.copy()
         self._retract_step_idx = 0
@@ -596,13 +596,13 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
         curr = np.array(self._get_current_robot_arm_conf()[:7])
         final = np.array(plan[-1][:7])
         self._approach_trajectory, self._approach_traj_dir = _compute_per_joint_profile(
-            curr, final, _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
+            curr, final, ARM_MAX_VELOCITY, ARM_MAX_ACCELERATION
         )
         self._approach_start_joints = curr.copy()
         self._approach_step_idx = 0
         # Compute trapezoidal velocity profile for retract (place conf → home).
         self._retract_trajectory, self._retract_traj_dir = _compute_per_joint_profile(
-            final, self.home_joints[:7], _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
+            final, self.home_joints[:7], ARM_MAX_VELOCITY, ARM_MAX_ACCELERATION
         )
         self._retract_start_joints = final.copy()
         self._retract_step_idx = 0

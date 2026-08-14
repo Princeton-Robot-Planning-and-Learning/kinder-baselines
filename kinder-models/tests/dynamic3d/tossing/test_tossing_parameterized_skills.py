@@ -29,6 +29,8 @@ from kinder_models.dynamic3d.tossing.parameterized_skills import (
     TOSS_MAX_VELOCITY,
     TOSS_RELEASE_ARM_CONFIGURATION,
     TOSS_SLICES_PER_CONTROL_STEP,
+    TOSS_TARGET_DISTANCE_BOUNDS,
+    TOSS_TARGET_ROTATION_BOUNDS,
     TOSS_WINDUP_ARM_CONFIGURATION,
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,
@@ -36,10 +38,9 @@ from kinder_models.dynamic3d.tossing.parameterized_skills import (
 )
 from kinder_models.dynamic3d.tossing.state_abstractions import (
     THROW_POSE_TOLERANCE,
-    THROW_STANDOFF_BOUNDS,
 )
 from kinder_models.dynamic3d.utils import (
-    _CONTROL_TIMESTEP,
+    CONTROL_TIMESTEP,
     WAYPOINT_TOLERANCE,
     PyBulletSim,
     _trapezoidal_motion_profile,
@@ -1374,8 +1375,7 @@ def test_move_to_throw_pose_controller():
     controller = lifted_controller.ground((robot, target, held))
 
     # MoveToTargetGroundController returns the constant [0.5, 0.0]; this controller
-    # samples, and both components must vary. Where the draws land is asserted in the
-    # two tests below, against the predicate rather than the sampler's own bounds.
+    # samples, and both components must vary.
     rng = np.random.default_rng(123)
     draws = np.array([controller.sample_parameters(state, rng) for _ in range(20)])
     assert draws[:, 0].min() < draws[:, 0].max()
@@ -1384,7 +1384,6 @@ def test_move_to_throw_pose_controller():
 
     # Record what the controller asks the base planner to ignore: the argument passed
     # down is the thing under test, where a plan could succeed for unrelated reasons.
-    # Base collision checking is live in run_base_motion_planning (dynamic3d/utils.py).
     recorded_disabled: list[list[str] | None] = []
 
     def _recording_run_base_motion_planning(**kwargs):
@@ -1494,9 +1493,8 @@ def test_toss_from_windup_matches_split_controllers():
         [("toss_from_windup", np.array([windup_conf, toss_conf]))], controllers
     )
 
-    # Both halves did real work, so the comparison below is not vacuous. Measured
-    # locally: 16 windup actions then 18 toss actions, 34 in total. Not asserted
-    # exactly, since they follow from a motion plan.
+    # Both halves did real work, so the comparison below is not vacuous. Not asserted
+    # exactly, since the counts follow from a motion plan.
     assert len(split_phases) == 2
     assert min(len(phase) for phase in split_phases) >= 5
 
@@ -1531,8 +1529,7 @@ def test_toss_from_windup_matches_split_controllers():
         assert np.array_equal(shared_action, split_action)
 
     # The shared sim is still the caller's to reuse, and nothing was leaked. The count
-    # alone is weak evidence of sharing, since the finalizer releases a private client
-    # too; what shows the shared sim was planned in is the identical actions above.
+    # alone is weak evidence of sharing; the identical actions above are the strong one.
     assert p.getConnectionInfo(physicsClientId=shared_sim.physics_client_id)[
         "isConnected"
     ]
@@ -1574,10 +1571,8 @@ def test_toss_from_windup_samples_the_demonstrated_confs():
 def test_move_to_throw_pose_samples_a_throwable_standoff():
     """The sampled standoff must be one a throw can actually be thrown from.
 
-    The grasping range (0.5-0.6 m) and THROW_STANDOFF_BOUNDS (1.20-1.65 m), which is
-    what RobotAtThrowPose admits, are disjoint. Asserts the containment directly
-    rather than
-    the two numbers, so widening either interval keeps the test meaningful.
+    Asserted against the interval this sampler really draws from, not a wider envelope,
+    so the bound is tight enough to fail if the sampler drifts.
     """
     num_cubes = 1
     env = kinder.make(
@@ -1597,10 +1592,8 @@ def test_move_to_throw_pose_samples_a_throwable_standoff():
     rng = np.random.default_rng(123)
     draws = np.array([controller.sample_parameters(state, rng) for _ in range(50)])
 
-    # Measured on the pose the parameters imply, not the sampled distance:
-    # RobotAtThrowPose's dx
-    # is bin.x - base.x = target_distance * cos(bin_yaw + rot). The two agree only
-    # because bin_init_region pins the bin's yaw at 0.
+    # Measured on the pose the parameters imply, not the sampled distance: the two agree
+    # only because bin_init_region pins the bin's yaw at 0.
     target_pose = get_overhead_object_se2_pose(state, target)
     standoff = np.array(
         [
@@ -1609,7 +1602,10 @@ def test_move_to_throw_pose_samples_a_throwable_standoff():
             for distance, rot in draws
         ]
     )
-    low, high = THROW_STANDOFF_BOUNDS
+    # Rotation shrinks the x-component, so the lower bound is the furthest the widest
+    # rotation can pull the nearest draw in; the upper bound is reached at rot = 0.
+    low, high = TOSS_TARGET_DISTANCE_BOUNDS
+    low *= np.cos(max(abs(bound) for bound in TOSS_TARGET_ROTATION_BOUNDS))
     assert np.all(standoff >= low), standoff.min()
     assert np.all(standoff <= high), standoff.max()
     # Still a sampler, not a constant.
@@ -1621,11 +1617,9 @@ def test_move_to_throw_pose_samples_a_throwable_standoff():
 def test_move_to_throw_pose_samples_a_pose_on_the_bin_axis():
     """Every sampled pose must be one RobotAtThrowPose accepts, in y as well as in x.
 
-    RobotAtThrowPose also requires |dy| <= THROW_POSE_TOLERANCE, since a radius test
-    alone is satisfied
-    by a whole ring of positions. get_target_robot_pose_from_parameters places the base
-    at target_distance * sin(target_rot) off-axis. Asserted on the offset the
-    parameters imply, not the bounds, so it keeps its meaning if either is retuned.
+    A standoff test alone is satisfied by a whole ring of positions, so the predicate
+    also requires |dy| <= THROW_POSE_TOLERANCE. Asserted on the offset the parameters
+    imply, not the bounds, so it keeps its meaning if either is retuned.
     """
     num_cubes = 1
     env = kinder.make(
@@ -1645,10 +1639,8 @@ def test_move_to_throw_pose_samples_a_pose_on_the_bin_axis():
     rng = np.random.default_rng(123)
     draws = np.array([controller.sample_parameters(state, rng) for _ in range(50)])
 
-    # Measured on the pose the parameters imply: RobotAtThrowPose's dy is
-    # bin.y - base.y in
-    # world coordinates = target_distance * sin(bin_yaw + target_rot). The two agree
-    # only because bin_init_region pins the bin's yaw at 0.
+    # Measured on the pose the parameters imply: the two agree only because
+    # bin_init_region pins the bin's yaw at 0.
     target_pose = get_overhead_object_se2_pose(state, target)
     off_axis = np.array(
         [
@@ -1681,7 +1673,7 @@ def test_toss_release_speed_default_rebuilds_the_unscaled_profile():
         max_vel=np.deg2rad(140),
         max_accel=np.deg2rad(300),
         max_decel=np.deg2rad(200),
-        step_size=_CONTROL_TIMESTEP,
+        step_size=CONTROL_TIMESTEP,
     )
     max_vel, max_accel, max_decel = toss_profile_limits()
     actual = _trapezoidal_motion_profile(
@@ -1689,7 +1681,7 @@ def test_toss_release_speed_default_rebuilds_the_unscaled_profile():
         max_vel=max_vel,
         max_accel=max_accel,
         max_decel=max_decel,
-        step_size=_CONTROL_TIMESTEP,
+        step_size=CONTROL_TIMESTEP,
     )
     assert np.array_equal(actual, expected)
 
@@ -1697,25 +1689,20 @@ def test_toss_release_speed_default_rebuilds_the_unscaled_profile():
 def test_toss_release_speed_scales_every_limit_by_the_same_factor():
     """A release speed is an effort scale on the whole profile, not on max_vel alone.
 
-    Scaling max_vel while max_accel and max_decel stay put moves the release point out
-    of the cruise phase, where the acceleration limits set the speed instead, so the
-    commanded release speed stops tracking max_vel.
+    Scaling max_vel alone moves the release out of the cruise phase, where the
+    acceleration limits set the speed instead, so it stops tracking max_vel.
     """
-    # The invariant: the profile's shape. One factor on all three keeps the
-    # accel-to-vel and decel-to-vel ratios the same at every speed.
-    #
-    # Asserted a few ULP wide rather than bitwise: recovering a ratio divides back out
-    # a factor, and a/(b*c)*c need not return the starting bits. At 1.7x the three
-    # recovered ratios differ in the final bit.
+    # The invariant is the profile's shape. Asserted a few ULP wide rather than bitwise:
+    # recovering a ratio divides a factor back out, and a/(b*c)*c need not round back.
     shape = np.array([TOSS_MAX_ACCELERATION, TOSS_MAX_DECELERATION]) / TOSS_MAX_VELOCITY
     for scale in (0.25, 0.5, 1.0, 1.7, 2.0, 3.0):
         max_vel, max_accel, max_decel = toss_profile_limits(scale * TOSS_MAX_VELOCITY)
         assert np.allclose([max_accel, max_decel] / max_vel, shape, rtol=1e-15), scale
         assert max_vel == min(scale, 1.0) * TOSS_MAX_VELOCITY
 
-    # Linear and proportional through the origin, not merely affine: an offset would
-    # make "twice the speed" mean other than twice the effort. Only below the clamp --
-    # clamping is deliberately not homogeneous.
+    # Proportional through the origin, not merely affine, or "twice the speed" would
+    # mean other than twice the effort. Below the clamp only; clamping is not
+    # homogeneous.
     rng = np.random.default_rng(0)
     for _ in range(200):
         factor = rng.uniform(0.05, 1.0)
@@ -1738,11 +1725,9 @@ def test_toss_release_speed_clamps_the_effort_to_zero_and_one():
 def test_toss_release_speed_raises_the_speed_the_profile_commands_at_release():
     """The point of the parameter: a higher setting must actually release faster.
 
-    Compared below the ceiling rather than above it. TOSS_MAX_VELOCITY is both the
-    default and the clamp, so the dial can only slow the throw down.
-
-    Asserted against the profile, not a thrown cube: this is the controller's
-    arithmetic, and whether the arm tracks it is measured elsewhere.
+    Compared below the ceiling, since TOSS_MAX_VELOCITY is both the default and the
+    clamp. Asserted against the profile rather than a thrown cube: whether the arm
+    tracks it is measured elsewhere.
     """
     total_dist = float(
         np.linalg.norm(TOSS_RELEASE_ARM_CONFIGURATION - TOSS_WINDUP_ARM_CONFIGURATION)
@@ -1756,11 +1741,11 @@ def test_toss_release_speed_raises_the_speed_the_profile_commands_at_release():
             max_vel=max_vel,
             max_accel=max_accel,
             max_decel=max_decel,
-            step_size=_CONTROL_TIMESTEP,
+            step_size=CONTROL_TIMESTEP,
         )
         final = trajectory[-1]
         idx = int(np.argmax(trajectory / final >= release_fraction))
-        return (trajectory[idx] - trajectory[idx - 1]) / _CONTROL_TIMESTEP
+        return (trajectory[idx] - trajectory[idx - 1]) / CONTROL_TIMESTEP
 
     default = commanded_release_speed(TOSS_MAX_VELOCITY)
     slower = commanded_release_speed(0.4 * TOSS_MAX_VELOCITY)
@@ -1778,7 +1763,7 @@ def _default_speed_trajectory():
         max_vel=max_vel,
         max_accel=max_accel,
         max_decel=max_decel,
-        step_size=_CONTROL_TIMESTEP,
+        step_size=CONTROL_TIMESTEP,
     )
     return trajectory, s_total
 
@@ -1796,17 +1781,9 @@ def test_gripper_release_ms_splits_into_a_control_step_and_a_slice():
 def test_the_default_release_ms_falls_at_fraction_046_of_the_swing():
     """720 ms is where fraction 0.46 of the swing falls at the default speed.
 
-    Measured on the motion-planned path, not the nominal
-    TOSS_RELEASE_ARM_CONFIGURATION - TOSS_WINDUP_ARM_CONFIGURATION difference:
-    reset() profiles both
-    endpoints through run_motion_planning, which moves the crossing 3 ms. Nominal
-    arithmetic gives 723, and a live rollout lands the cube 52 mm further with 723.
-
-    The 0.005 tolerance holds on either path, so this does not distinguish 720 from
-    723; the consuming repo's live-rollout fidelity test is what does.
-
-    Not the real robot's own 600: that normalises by L-infinity (125.0 deg) and
-    finishes in 1476 ms, so its 600 ms is fraction 0.4107, while 600 ms here is 0.3449.
+    720 and not the nominal 723 because reset() profiles the motion-planned path, which
+    moves the crossing 3 ms; a live rollout lands the cube 52 mm further with 723. The
+    tolerance here holds on either path, so only that rollout distinguishes them.
     """
     assert TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS == 720
 
@@ -1824,9 +1801,8 @@ def test_the_default_release_ms_falls_at_fraction_046_of_the_swing():
 def test_a_release_ms_past_the_swing_never_opens_the_gripper():
     """The degenerate corner is reachable on purpose, not clamped away.
 
-    The swing lasts 1700 ms at 140 deg/s, so a release at 2400 ms means the cube is
-    still held when the controller terminates -- a real region of the
-    (release_speed, gripper_release_ms) space a characterisation sweep must reach.
+    A release past the swing's end leaves the cube still held when the controller
+    terminates -- a real region of the parameter space a sweep must be able to reach.
     """
     trajectory, _ = _default_speed_trajectory()
     duration_ms = (len(trajectory) - 1) * TOSS_SLICES_PER_CONTROL_STEP
@@ -1838,10 +1814,8 @@ def test_a_release_ms_past_the_swing_never_opens_the_gripper():
 def test_toss_schedules_its_release_at_the_requested_millisecond():
     """End to end: exactly one action of a real toss is a control schedule.
 
-    That the schedule reaches the simulator, lands on the millisecond
-    gripper_release_ms asked for rather than the next control-step boundary, and holds
-    the gripper closed for that step's slices but the last. Every other action is the
-    plain (18,) vector.
+    That schedule has to reach the simulator and land on the millisecond asked for
+    rather than the next control-step boundary. Every other action is a plain (18,).
     """
     requested_ms = 812  # deliberately not a multiple of 100
     expected_step, expected_slice = divmod(requested_ms, TOSS_SLICES_PER_CONTROL_STEP)

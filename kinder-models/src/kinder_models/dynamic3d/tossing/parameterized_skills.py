@@ -35,9 +35,9 @@ from relational_structs import (
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.utils import (
-    _ARM_MAX_ACCELERATION,
-    _ARM_MAX_VELOCITY,
-    _CONTROL_TIMESTEP,
+    ARM_MAX_ACCELERATION,
+    ARM_MAX_VELOCITY,
+    CONTROL_TIMESTEP,
     GRASP_CLOSE_THRESHOLD,
     GRIPPER_CLOSED_THRESHOLD,
     GRIPPER_OPEN_COMMAND_TOLERANCE,
@@ -58,10 +58,30 @@ TOSS_WINDUP_ARM_CONFIGURATION = np.deg2rad(
 )
 TOSS_RELEASE_ARM_CONFIGURATION = np.deg2rad([0.0, 20.0, 180.0, -35.0, 0.0, 25.0, 90.0])
 
-# Deliberately over-driving _ARM_MAX_VELOCITY: a toss throws hard on purpose.
+# Deliberately over-driving ARM_MAX_VELOCITY: a toss throws hard on purpose.
 TOSS_MAX_VELOCITY = np.deg2rad(140.0)
 TOSS_MAX_ACCELERATION = np.deg2rad(300.0)
 TOSS_MAX_DECELERATION = np.deg2rad(200.0)
+
+
+# 1 ms, matching the real robot's 1 kHz servo loop.
+TOSS_SLICES_PER_CONTROL_STEP = int(round(CONTROL_TIMESTEP / CONTROL_SCHEDULE_TIMESTEP))
+
+# Milliseconds from the start of the swing, as movej_primitive.execute() takes.
+# Re-derive by running the swing, not by recomputing from the confs.
+TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS = 720
+
+
+# Where a throw is possible; whether one *succeeds* is RobotAtThrowPose's own question,
+# and it answers no for the upper part of this range.
+TOSS_TARGET_DISTANCE_BOUNDS = (1.25, 1.45)
+
+# The widest rotation that still spends only half of WAYPOINT_TOLERANCE off the bin
+# axis at the furthest standoff. Derived, so retuning either cannot invalidate it.
+TOSS_MAX_TARGET_ROTATION = float(
+    np.arcsin(0.5 * WAYPOINT_TOLERANCE / TOSS_TARGET_DISTANCE_BOUNDS[1])
+)
+TOSS_TARGET_ROTATION_BOUNDS = (-TOSS_MAX_TARGET_ROTATION, TOSS_MAX_TARGET_ROTATION)
 
 
 def toss_profile_limits(
@@ -69,13 +89,9 @@ def toss_profile_limits(
 ) -> tuple[float, float, float]:
     """The (max_vel, max_accel, max_decel) triple a toss at release_speed is timed by.
 
-    Scaling all three by one factor is what makes this an effort and not a speed cap:
-    raising max_vel alone turns the profile triangular and moves the release into the
-    acceleration phase, where max_accel sets the speed at release.
-
-    effort is clamped to [0, 1], and release_speed with it: capping only effort would
-    leave max_vel above TOSS_MAX_VELOCITY while the acceleration limits stopped
-    rising, which is the very case above. 1 is the real arm's own ceiling.
+    One factor on all three, so this is an effort and not a speed cap: raising max_vel
+    alone turns the profile triangular and moves the release into the acceleration
+    phase. Clamped at 1, the real arm's own ceiling.
     """
     effort = min(max(release_speed / TOSS_MAX_VELOCITY, 0.0), 1.0)
     return (
@@ -83,28 +99,6 @@ def toss_profile_limits(
         TOSS_MAX_ACCELERATION * effort,
         TOSS_MAX_DECELERATION * effort,
     )
-
-
-# 1 ms, matching the real robot's 1 kHz servo loop.
-TOSS_SLICES_PER_CONTROL_STEP = int(round(_CONTROL_TIMESTEP / CONTROL_SCHEDULE_TIMESTEP))
-
-# Milliseconds from the start of the swing, as movej_primitive.execute() takes. Not
-# the robot's 600, and not 723 -- 723 lands the cube 52 mm further. Re-derive by
-# running the swing, not by recomputing from the confs.
-TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS = 720
-
-
-# Not the (0.5, 0.6) grasping range. Sits inside THROW_STANDOFF_BOUNDS, so every draw
-# satisfies RobotAtThrowPose.
-TOSS_TARGET_DISTANCE_BOUNDS = (1.25, 1.45)
-
-# Not (-pi/4, pi/4), which swings the base off the axis RobotAtThrowPose requires. The
-# widest usable rotation spends half of WAYPOINT_TOLERANCE at the furthest standoff.
-# Derived, not a literal, so retuning either cannot invalidate it.
-_TOSS_MAX_TARGET_ROTATION = float(
-    np.arcsin(0.5 * WAYPOINT_TOLERANCE / TOSS_TARGET_DISTANCE_BOUNDS[1])
-)
-TOSS_TARGET_ROTATION_BOUNDS = (-_TOSS_MAX_TARGET_ROTATION, _TOSS_MAX_TARGET_ROTATION)
 
 
 class MoveToTargetGroundController(
@@ -243,10 +237,8 @@ class MoveToThrowPoseController(MoveToTargetGroundController):
         target_distance: float
         target_rot: float (radians)
 
-    Excludes the held object from base collision checking by default:
-    run_base_motion_planning does collision check the base against the scene's
-    obstacle geoms, so the robot's own cargo would reject every plan. sweep3D's wipe
-    controller excludes its carried wiper for the same reason.
+    Excludes the held object from base collision checking by default, or the robot's own
+    cargo rejects every plan. sweep3D's wipe controller excludes its wiper likewise.
     """
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
@@ -336,8 +328,8 @@ class MoveArmToConfController(GroundParameterizedController[ObjectCentricState, 
         self._trajectory, self._traj_dir = _compute_per_joint_profile(
             curr,
             final,
-            _ARM_MAX_VELOCITY,
-            _ARM_MAX_ACCELERATION,
+            ARM_MAX_VELOCITY,
+            ARM_MAX_ACCELERATION,
         )
         self._start_joint_angles = curr.copy()
         self._step_idx = 0
@@ -354,7 +346,7 @@ class MoveArmToConfController(GroundParameterizedController[ObjectCentricState, 
 
         # Velocity via finite difference.
         if idx > 0:
-            ds = (self._trajectory[idx] - self._trajectory[idx - 1]) / _CONTROL_TIMESTEP
+            ds = (self._trajectory[idx] - self._trajectory[idx - 1]) / CONTROL_TIMESTEP
         else:
             ds = 0.0
 
@@ -448,13 +440,9 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
     ) -> None:
         """Plan the swing, and fix the millisecond the gripper opens on.
 
-        release_speed and gripper_release_ms are the two knobs the real robot's
-        movej_primitive.execute() takes, as max_vel and gripper_release_ms.
-
-        gripper_release_ms is NOT clamped to the swing's duration: a value at or past
-        the end means the gripper never opens and the cube is never thrown. The swing
-        lasts 1700 ms at 140 deg/s and 3100 ms at 60 deg/s, so where that boundary
-        falls depends on both parameters at once.
+        The two knobs the real robot's movej_primitive.execute() takes.
+        gripper_release_ms is deliberately NOT clamped to the swing's duration: a value
+        at or past the end means the gripper never opens and the cube is never thrown.
         """
         # Initialize the PyBullet interface if this is the first time ever.
         if self._pybullet_sim is None:
@@ -494,7 +482,7 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
             max_vel=max_vel,
             max_accel=max_accel,
             max_decel=max_decel,
-            step_size=_CONTROL_TIMESTEP,
+            step_size=CONTROL_TIMESTEP,
         )
         self._start_joint_angles = np.array(curr_joint_angles[:7])
         self._release_step, self._release_slice = divmod(
@@ -510,10 +498,9 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
     def step(self) -> Array:
         """The swing's command for one control step, opening the gripper mid-step.
 
-        Returns the usual (18,) action, except on the control step the release falls
-        inside, where it returns a (TOSS_SLICES_PER_CONTROL_STEP, 18) schedule holding
-        the cube for the first release_slice milliseconds and open for the rest, so
-        gripper_release_ms means the millisecond it names.
+        The usual (18,) action, except on the step the release falls inside, which
+        returns a (TOSS_SLICES_PER_CONTROL_STEP, 18) schedule so gripper_release_ms
+        means the millisecond it names rather than the next step boundary.
         """
         assert self._current_arm_joint_plan is not None
         gripper_pose = self._get_current_robot_gripper_pose()
@@ -524,7 +511,7 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
         s = float(self._trajectory[idx])
         # Compute velocity via finite difference of the profile.
         if idx > 0:
-            ds = (self._trajectory[idx] - self._trajectory[idx - 1]) / _CONTROL_TIMESTEP
+            ds = (self._trajectory[idx] - self._trajectory[idx - 1]) / CONTROL_TIMESTEP
         else:
             ds = 0.0
 
@@ -614,10 +601,7 @@ class TossFromWindupController(
         params[1]: the release conf, swung to and released at by TossController.
 
     Run as one controller rather than two skills, since splitting them would need a
-    predicate over the windup conf to chain the operators. Emits the same actions in
-    the same order as running them separately: the sub-controllers terminate on a step
-    count over a precomputed profile rather than on the state, and the environment is
-    deterministic given identical actions from an identical state.
+    predicate over the windup conf to chain the operators.
     """
 
     def __init__(
@@ -755,8 +739,8 @@ class MoveArmToEndEffectorController(
         self._trajectory, self._traj_dir = _compute_per_joint_profile(
             curr,
             final,
-            _ARM_MAX_VELOCITY,
-            _ARM_MAX_ACCELERATION,
+            ARM_MAX_VELOCITY,
+            ARM_MAX_ACCELERATION,
         )
         self._start_joint_angles = curr.copy()
         self._step_idx = 0
@@ -773,7 +757,7 @@ class MoveArmToEndEffectorController(
 
         # Velocity via finite difference.
         if idx > 0:
-            ds = (self._trajectory[idx] - self._trajectory[idx - 1]) / _CONTROL_TIMESTEP
+            ds = (self._trajectory[idx] - self._trajectory[idx - 1]) / CONTROL_TIMESTEP
         else:
             ds = 0.0
 
