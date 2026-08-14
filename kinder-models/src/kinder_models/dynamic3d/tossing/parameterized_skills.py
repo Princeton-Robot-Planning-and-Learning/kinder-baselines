@@ -1,6 +1,6 @@
 """Parameterized skills for the TidyBot3D tossing environment."""
 
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 from bilevel_planning.structs import (
@@ -109,6 +109,93 @@ def toss_profile_limits(
         TOSS_MAX_ACCELERATION * effort,
         TOSS_MAX_DECELERATION * effort,
     )
+
+
+class TossSwing(NamedTuple):
+    """A planned swing: where the arm goes, and when the gripper opens."""
+
+    trajectory: np.ndarray
+    direction: np.ndarray
+    start_joint_angles: np.ndarray
+    release_step: int
+    release_slice: int
+
+
+def plan_toss_swing(
+    joint_plan: list[JointPositions],
+    current_joint_angles: JointPositions,
+    release_speed: float,
+    gripper_release_ms: int,
+) -> TossSwing:
+    """Time a motion plan as a toss, and fix the millisecond the gripper opens on.
+
+    gripper_release_ms is deliberately NOT clamped to the swing's duration: a value at
+    or past the end means the gripper never opens and the cube is never thrown.
+    """
+    dq = np.subtract(joint_plan[-1], current_joint_angles)[:7]
+    s_total = float(np.linalg.norm(dq))
+    # Not the real robot's controller: the parameter space matches, the trajectory does
+    # not. Do not align this with the _compute_per_joint_profile siblings.
+    direction = dq / s_total if s_total > 1e-4 else np.zeros(7)
+    max_vel, max_accel, max_decel = toss_profile_limits(release_speed)
+    trajectory = _trapezoidal_motion_profile(
+        s_total,
+        max_vel=max_vel,
+        max_accel=max_accel,
+        max_decel=max_decel,
+        step_size=_CONTROL_TIMESTEP,
+    )
+    release_step, release_slice = divmod(
+        int(gripper_release_ms), TOSS_SLICES_PER_CONTROL_STEP
+    )
+    return TossSwing(
+        trajectory,
+        direction,
+        np.array(current_joint_angles[:7]),
+        release_step,
+        release_slice,
+    )
+
+
+def toss_swing_action(
+    swing: TossSwing,
+    step_idx: int,
+    current_joint_angles: JointPositions,
+    gripper_pose: float,
+    has_released: bool,
+) -> Array:
+    """The swing's command for one control step, opening the gripper mid-step.
+
+    The usual (18,) action, except on the step the release falls inside, which returns
+    a (TOSS_SLICES_PER_CONTROL_STEP, 18) schedule so gripper_release_ms means the
+    millisecond it names rather than the next step boundary.
+    """
+    action = np.zeros(18, dtype=np.float32)
+    idx = min(step_idx, len(swing.trajectory) - 1)
+    s = float(swing.trajectory[idx])
+    if idx > 0:
+        ds = (swing.trajectory[idx] - swing.trajectory[idx - 1]) / _CONTROL_TIMESTEP
+    else:
+        ds = 0.0
+    kp = 2.0
+    kv = 2.0
+    target_joint_angles = swing.start_joint_angles + swing.direction * s
+    action[3:10] = kp * (target_joint_angles - np.array(current_joint_angles[:7]))
+    action[11:18] = swing.direction * (ds * kv)
+
+    if has_released or step_idx > swing.release_step:
+        action[10] = 0.0
+        return action
+    if step_idx != swing.release_step:
+        action[10] = gripper_pose
+        return action
+    if swing.release_slice == 0:
+        action[10] = 0.0
+        return action
+    schedule = np.repeat(action[None], TOSS_SLICES_PER_CONTROL_STEP, axis=0)
+    schedule[: swing.release_slice, 10] = gripper_pose
+    schedule[swing.release_slice :, 10] = 0.0
+    return schedule
 
 
 class MoveToTargetGroundController(
@@ -428,13 +515,8 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
         # See MoveArmToConfController.__init__ for why this is injectable.
         self._pybullet_sim: PyBulletSim | None = pybullet_sim
         self._step_idx: int = 0
-        self._toss_dir: np.ndarray = np.zeros(7)
-        self._trajectory: np.ndarray = np.array([])
         self._has_released: bool = False
-        self._start_joint_angles: np.ndarray = np.zeros(7)
-        # The control step the gripper opens on, and the millisecond within it.
-        self._release_step: int = 0
-        self._release_slice: int = 0
+        self._swing: TossSwing | None = None
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         # We can later implement sampling if it's helpful, but usually the user would
@@ -475,35 +557,19 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
         )
         assert plan is not None, "Motion planning failed"
         self._current_arm_joint_plan = plan
-        # Compute trapezoidal velocity profile along the path.
-        curr_joint_angles = self._get_current_robot_arm_conf()
-        final_joint_angles = self._current_arm_joint_plan[-1]
-        dq = np.subtract(final_joint_angles, curr_joint_angles)[:7]
-        # Not the real robot's controller: the parameter space matches, the trajectory
-        # does not. Do not align this with the _compute_per_joint_profile siblings.
-        s_total = float(np.linalg.norm(dq))
-        if s_total > 1e-4:
-            self._toss_dir = dq / s_total
-        else:
-            self._toss_dir = np.zeros(7)
-        max_vel, max_accel, max_decel = toss_profile_limits(release_speed)
-        self._trajectory = _trapezoidal_motion_profile(
-            s_total,
-            max_vel=max_vel,
-            max_accel=max_accel,
-            max_decel=max_decel,
-            step_size=_CONTROL_TIMESTEP,
-        )
-        self._start_joint_angles = np.array(curr_joint_angles[:7])
-        self._release_step, self._release_slice = divmod(
-            int(gripper_release_ms), TOSS_SLICES_PER_CONTROL_STEP
+        self._swing = plan_toss_swing(
+            plan,
+            self._get_current_robot_arm_conf(),
+            release_speed,
+            gripper_release_ms,
         )
         self._has_released = False
         self._step_idx = 0
 
     def terminated(self) -> bool:
         # Terminate when we've gone through the entire profile.
-        return self._step_idx >= len(self._trajectory)
+        assert self._swing is not None
+        return self._step_idx >= len(self._swing.trajectory)
 
     def step(self) -> Array:
         """The swing's command for one control step, opening the gripper mid-step.
@@ -512,49 +578,18 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
         returns a (TOSS_SLICES_PER_CONTROL_STEP, 18) schedule so gripper_release_ms
         means the millisecond it names rather than the next step boundary.
         """
-        assert self._current_arm_joint_plan is not None
-        gripper_pose = self._get_current_robot_gripper_pose()
-        action = np.zeros(18, dtype=np.float32)
-
-        # Look up target distance along path from precomputed trapezoidal profile.
-        idx = min(self._step_idx, len(self._trajectory) - 1)
-        s = float(self._trajectory[idx])
-        # Compute velocity via finite difference of the profile.
-        if idx > 0:
-            ds = (self._trajectory[idx] - self._trajectory[idx - 1]) / _CONTROL_TIMESTEP
-        else:
-            ds = 0.0
-
-        # Position target with feedforward gain to compensate for tracking lag.
-        kp = 2.0
-        kv = 2.0
-        curr_joint_angles = self._get_current_robot_arm_conf()
-        target_joint_angles = self._start_joint_angles + self._toss_dir * s
-        action[3:10] = kp * (target_joint_angles - np.array(curr_joint_angles[:7]))
-
-        # Velocity feedforward along the toss direction.
-        action[11:18] = self._toss_dir * (ds * kv)
-
-        # Open the gripper on the step reset() computed, at the millisecond it computed.
-        released_before_now = self._has_released or self._step_idx > self._release_step
-        opens_this_step = self._step_idx == self._release_step
+        assert self._swing is not None
+        action = toss_swing_action(
+            self._swing,
+            self._step_idx,
+            self._get_current_robot_arm_conf(),
+            self._get_current_robot_gripper_pose(),
+            self._has_released,
+        )
+        if self._step_idx == self._swing.release_step:
+            self._has_released = True
         self._step_idx += 1
-
-        if released_before_now:
-            action[10] = 0.0
-            return action
-        if not opens_this_step:
-            action[10] = gripper_pose
-            return action
-
-        self._has_released = True
-        if self._release_slice == 0:
-            action[10] = 0.0
-            return action
-        schedule = np.repeat(action[None], TOSS_SLICES_PER_CONTROL_STEP, axis=0)
-        schedule[: self._release_slice, 10] = gripper_pose
-        schedule[self._release_slice :, 10] = 0.0
-        return schedule
+        return action
 
     def observe(self, x: ObjectCentricState) -> None:
         self._last_state = x
@@ -1020,20 +1055,30 @@ class MoveToTossLocationAndTossController(
     Composed rather than split so that no predicate has to name the pose between them.
     The cost is that a standoff which cannot score is only discovered by throwing from
     it, where a separate move could have been rejected first.
+
+    One flat controller over phase flags, as pick_shelf is: base motion, then the
+    windup, then the swing. The swing is planned at the windup's end rather than in
+    reset, because it has to start from the arm conf actually reached.
     """
 
     def __init__(
         self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
     ) -> None:
         super().__init__(*args, **kwargs)
-        self._move_controller = MoveToThrowPoseController(self.objects)
-        self._toss_controller = TossFromWindupController(
-            self.objects, pybullet_sim=pybullet_sim
-        )
         self._last_state: ObjectCentricState | None = None
+        self._pybullet_sim: PyBulletSim | None = pybullet_sim
         self._release_speed: float = TOSS_MAX_VELOCITY
         self._gripper_release_ms: int = TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS
-        self._tossing: bool = False
+        self._navigated: bool = False
+        self._wound_up: bool = False
+        self._current_base_motion_plan: list[SE2] | None = None
+        self._windup_trajectory: np.ndarray = np.array([])
+        self._windup_dir: np.ndarray = np.zeros(7)
+        self._windup_start_joint_angles: np.ndarray = np.zeros(7)
+        self._windup_step_idx: int = 0
+        self._swing: TossSwing | None = None
+        self._swing_step_idx: int = 0
+        self._has_released: bool = False
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         del x  # not used
@@ -1046,38 +1091,189 @@ class MoveToTossLocationAndTossController(
             ]
         )
 
-    def reset(self, x: ObjectCentricState, params: Any, **kwargs: Any) -> None:
+    def reset(
+        self,
+        x: ObjectCentricState,
+        params: Any,
+        extend_xy_magnitude: float = 0.025,
+        extend_rot_magnitude: float = np.pi / 8,
+        disable_collision_objects: list[str] | None = None,
+    ) -> None:
+        if self._pybullet_sim is None:
+            self._pybullet_sim = PyBulletSim(x)
         current_params = np.asarray(params, dtype=np.float32)
         assert current_params.shape == (4,)
         self._last_state = x
         self._release_speed = float(current_params[2])
         self._gripper_release_ms = int(round(float(current_params[3])))
-        self._tossing = False
-        self._move_controller.reset(x, current_params[:2], **kwargs)
+        self._navigated = False
+        self._wound_up = False
+        self._windup_step_idx = 0
+        self._swing = None
+        self._swing_step_idx = 0
+        self._has_released = False
+
+        # The robot's own cargo would otherwise reject every base plan.
+        if disable_collision_objects is None:
+            disable_collision_objects = [self.objects[2].name]
+        target_object_pose = get_overhead_object_se2_pose(x, self.objects[1])
+        target_base_pose = get_target_robot_pose_from_parameters(
+            target_object_pose, current_params[0], current_params[1]
+        )
+        base_motion_plan = run_base_motion_planning(
+            state=x,
+            target_base_pose=target_base_pose,
+            x_bounds=WORLD_X_BOUNDS,
+            y_bounds=WORLD_Y_BOUNDS,
+            seed=0,
+            extend_xy_magnitude=extend_xy_magnitude,
+            extend_rot_magnitude=extend_rot_magnitude,
+            disable_collision_objects=disable_collision_objects,
+        )
+        assert base_motion_plan is not None
+        self._current_base_motion_plan = base_motion_plan
 
     def terminated(self) -> bool:
-        return self._tossing and self._toss_controller.terminated()
+        return self._swing is not None and self._swing_step_idx >= len(
+            self._swing.trajectory
+        )
 
     def step(self) -> Array:
-        if not self._tossing and self._move_controller.terminated():
-            assert self._last_state is not None
-            self._toss_controller.reset(
-                self._last_state,
-                self._toss_controller.sample_parameters(
-                    self._last_state, np.random.default_rng(0)
-                ),
-                release_speed=self._release_speed,
-                gripper_release_ms=self._gripper_release_ms,
-            )
-            self._tossing = True
-        if self._tossing:
-            return self._toss_controller.step()
-        return self._move_controller.step()
+        assert self._current_base_motion_plan is not None
+        if not self._navigated:
+            return self._base_motion_step()
+        if not self._wound_up:
+            return self._windup_step()
+        return self._swing_step()
 
     def observe(self, x: ObjectCentricState) -> None:
         self._last_state = x
-        self._move_controller.observe(x)
-        self._toss_controller.observe(x)
+
+    def _base_motion_step(self) -> Array:
+        assert self._current_base_motion_plan is not None
+        while len(self._current_base_motion_plan) > 1:
+            peek_pose = self._current_base_motion_plan[0]
+            if self._robot_is_close_to_pose(peek_pose):
+                self._current_base_motion_plan.pop(0)
+            break
+        if self._robot_is_close_to_pose(self._current_base_motion_plan[-1]):
+            self._navigated = True
+            self._plan_windup()
+        robot_pose = self._get_current_robot_pose()
+        next_pose = self._current_base_motion_plan[0]
+        action = np.zeros(11, dtype=np.float32)
+        action[0] = next_pose.x - robot_pose.x
+        action[1] = next_pose.y - robot_pose.y
+        action[2] = get_signed_angle_distance(next_pose.theta(), robot_pose.theta())
+        action[-1] = self._get_current_robot_gripper_pose()
+        return action
+
+    def _plan_windup(self) -> None:
+        assert self._last_state is not None and self._pybullet_sim is not None
+        self._pybullet_sim.set_state(self._last_state)
+        plan = run_motion_planning(
+            self._pybullet_sim.robot,
+            self._pybullet_sim.get_robot_joints(),
+            list(TOSS_WINDUP_ARM_CONFIGURATION) + [0.0] * 6,
+            collision_bodies=self._pybullet_sim.get_collision_bodies(),
+            seed=0,
+            physics_client_id=self._pybullet_sim.physics_client_id,
+        )
+        assert plan is not None, "Motion planning failed"
+        curr = np.array(self._get_current_robot_arm_conf()[:7])
+        self._windup_trajectory, self._windup_dir = _compute_per_joint_profile(
+            curr,
+            np.array(plan[-1][:7]),
+            _ARM_MAX_VELOCITY,
+            _ARM_MAX_ACCELERATION,
+        )
+        self._windup_start_joint_angles = curr.copy()
+        self._windup_step_idx = 0
+
+    def _windup_step(self) -> Array:
+        action = np.zeros(18, dtype=np.float32)
+        idx = min(self._windup_step_idx, len(self._windup_trajectory) - 1)
+        s = float(self._windup_trajectory[idx])
+        if idx > 0:
+            ds = (
+                self._windup_trajectory[idx] - self._windup_trajectory[idx - 1]
+            ) / _CONTROL_TIMESTEP
+        else:
+            ds = 0.0
+        kp = 2.0
+        kv = 2.0
+        curr = np.array(self._get_current_robot_arm_conf()[:7])
+        target = self._windup_start_joint_angles + self._windup_dir * s
+        action[3:10] = kp * (target - curr)
+        action[11:18] = self._windup_dir * (ds * kv)
+        action[10] = self._get_current_robot_gripper_pose()
+        self._windup_step_idx += 1
+        if self._windup_step_idx >= len(self._windup_trajectory):
+            self._wound_up = True
+            self._plan_swing()
+        return action
+
+    def _plan_swing(self) -> None:
+        assert self._last_state is not None and self._pybullet_sim is not None
+        self._pybullet_sim.set_state(self._last_state)
+        plan = run_motion_planning(
+            self._pybullet_sim.robot,
+            self._pybullet_sim.get_robot_joints(),
+            list(TOSS_RELEASE_ARM_CONFIGURATION) + [0.0] * 6,
+            collision_bodies=self._pybullet_sim.get_collision_bodies(),
+            seed=0,
+            physics_client_id=self._pybullet_sim.physics_client_id,
+        )
+        assert plan is not None, "Motion planning failed"
+        self._swing = plan_toss_swing(
+            plan,
+            self._get_current_robot_arm_conf(),
+            self._release_speed,
+            self._gripper_release_ms,
+        )
+        self._swing_step_idx = 0
+
+    def _swing_step(self) -> Array:
+        assert self._swing is not None
+        action = toss_swing_action(
+            self._swing,
+            self._swing_step_idx,
+            self._get_current_robot_arm_conf(),
+            self._get_current_robot_gripper_pose(),
+            self._has_released,
+        )
+        if self._swing_step_idx == self._swing.release_step:
+            self._has_released = True
+        self._swing_step_idx += 1
+        return action
+
+    def _get_current_robot_pose(self) -> SE2:
+        assert self._last_state is not None
+        robot = self.objects[0]
+        return SE2(
+            self._last_state.get(robot, "pos_base_x"),
+            self._last_state.get(robot, "pos_base_y"),
+            self._last_state.get(robot, "pos_base_rot"),
+        )
+
+    def _robot_is_close_to_pose(self, pose: SE2) -> bool:
+        robot_pose = self._get_current_robot_pose()
+        return bool(
+            np.hypot(pose.x - robot_pose.x, pose.y - robot_pose.y) < WAYPOINT_TOLERANCE
+            and abs(get_signed_angle_distance(pose.theta(), robot_pose.theta()))
+            < WAYPOINT_TOLERANCE
+        )
+
+    def _get_current_robot_arm_conf(self) -> JointPositions:
+        assert self._last_state is not None
+        robot = self.objects[0]
+        return [
+            self._last_state.get(robot, f"pos_arm_joint{i}") for i in range(1, 8)
+        ] + [0.0] * 6
+
+    def _get_current_robot_gripper_pose(self) -> float:
+        assert self._last_state is not None
+        return float(self._last_state.get(self.objects[0], "pos_gripper"))
 
 
 def create_lifted_controllers(

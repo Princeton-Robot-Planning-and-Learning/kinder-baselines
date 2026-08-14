@@ -6,6 +6,7 @@ from pathlib import Path
 import kinder
 import numpy as np
 import pybullet as p
+from bilevel_planning.structs import GroundParameterizedController
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from kinder.envs.dynamic3d.envs import TidyBot3DEnv
@@ -24,11 +25,11 @@ import kinder_models.dynamic3d.tossing.parameterized_skills
 from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     PICK_STANDOFF_LADDER,
+    THROW_POSE_TOLERANCE,
     TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
     TOSS_MAX_ACCELERATION,
     TOSS_MAX_DECELERATION,
     TOSS_MAX_VELOCITY,
-    THROW_POSE_TOLERANCE,
     TOSS_RELEASE_ARM_CONFIGURATION,
     TOSS_RELEASE_MS_BOUNDS,
     TOSS_SLICES_PER_CONTROL_STEP,
@@ -38,7 +39,9 @@ from kinder_models.dynamic3d.tossing.parameterized_skills import (
     TOSS_WINDUP_ARM_CONFIGURATION,
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,
+    plan_toss_swing,
     toss_profile_limits,
+    toss_swing_action,
 )
 from kinder_models.dynamic3d.utils import (
     _CONTROL_TIMESTEP,
@@ -2057,6 +2060,69 @@ def test_pick_cube_then_move_and_toss_scores():
     env.close()
 
 
+def _straight_swing(release_ms=TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS):
+    """A planned swing between the two demonstrated confs, without a simulator."""
+    start = list(TOSS_WINDUP_ARM_CONFIGURATION) + [0.0] * 6
+    end = list(TOSS_RELEASE_ARM_CONFIGURATION) + [0.0] * 6
+    return plan_toss_swing([end], start, TOSS_MAX_VELOCITY, release_ms)
+
+
+def test_plan_toss_swing_splits_the_release_millisecond_into_step_and_slice():
+    """The millisecond names a slice inside a control step, not a step boundary."""
+    swing = _straight_swing(release_ms=725)
+    step, slice_ = divmod(725, TOSS_SLICES_PER_CONTROL_STEP)
+    assert swing.release_step == step
+    assert swing.release_slice == slice_
+
+
+def test_plan_toss_swing_direction_is_a_unit_vector_along_the_swing():
+    """The profile carries the distance; the direction carries only the heading."""
+    swing = _straight_swing()
+    assert np.isclose(np.linalg.norm(swing.direction), 1.0)
+
+
+def test_plan_toss_swing_direction_is_zero_for_a_swing_that_does_not_move():
+    """Otherwise the unit vector is a division by zero."""
+    conf = list(TOSS_WINDUP_ARM_CONFIGURATION) + [0.0] * 6
+    swing = plan_toss_swing(
+        [conf], conf, TOSS_MAX_VELOCITY, TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS
+    )
+    assert np.allclose(swing.direction, 0.0)
+
+
+def test_toss_swing_action_holds_the_gripper_shut_before_the_release_step():
+    swing = _straight_swing()
+    action = toss_swing_action(swing, 0, [0.0] * 13, 1.0, False)
+    assert action.shape == (18,)
+    assert action[10] == 1.0
+
+
+def test_toss_swing_action_opens_the_gripper_after_the_release_step():
+    swing = _straight_swing()
+    action = toss_swing_action(swing, swing.release_step + 1, [0.0] * 13, 1.0, True)
+    assert action.shape == (18,)
+    assert action[10] == 0.0
+
+
+def test_toss_swing_action_emits_a_schedule_on_the_step_the_release_falls_inside():
+    """A (slices, 18) schedule, so the millisecond means the millisecond."""
+    swing = _straight_swing(release_ms=725)
+    assert swing.release_slice != 0
+    schedule = toss_swing_action(swing, swing.release_step, [0.0] * 13, 1.0, False)
+    assert schedule.shape == (TOSS_SLICES_PER_CONTROL_STEP, 18)
+    assert np.all(schedule[: swing.release_slice, 10] == 1.0)
+    assert np.all(schedule[swing.release_slice :, 10] == 0.0)
+
+
+def test_toss_swing_action_stays_flat_when_the_release_lands_on_a_step_boundary():
+    """No schedule is needed when no millisecond inside the step is special."""
+    swing = _straight_swing(release_ms=TOSS_SLICES_PER_CONTROL_STEP * 7)
+    assert swing.release_slice == 0
+    action = toss_swing_action(swing, swing.release_step, [0.0] * 13, 1.0, False)
+    assert action.shape == (18,)
+    assert action[10] == 0.0
+
+
 def test_open_gripper_commands_open_until_the_gripper_reads_open():
     """The controller predates this branch and had no test of its own."""
     num_cubes = 1
@@ -2115,4 +2181,30 @@ def test_move_to_target_from_other_target_drives_to_the_target_it_names():
         state.get(cube, "y") - state.get(robot, "pos_base_y"),
     )
     assert abs(achieved - 0.5) < 0.1
+    env.close()
+
+
+def test_move_to_toss_location_and_toss_holds_no_sub_controllers():
+    """One flat controller over phase flags, as pick_shelf is, rather than a controller
+    that drives controllers it owns."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    target_bin = state.get_object_from_name("bin_0")
+    controller = controllers["move_to_toss_location_and_toss"].ground(
+        (robot, target_bin, cube)
+    )
+    nested = [
+        name
+        for name, value in vars(controller).items()
+        if isinstance(value, GroundParameterizedController)
+    ]
+    assert not nested, f"holds sub-controllers: {nested}"
     env.close()
