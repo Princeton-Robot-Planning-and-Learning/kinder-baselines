@@ -1133,6 +1133,54 @@ class MoveToTossLocationAndTossController(
         assert base_motion_plan is not None
         self._current_base_motion_plan = base_motion_plan
 
+        # Plan the arm from where the base motion will end, as pick_shelf does. The
+        # windup lands within 0.03 rad of its target, which leaves the swing's profile
+        # the same length, so planning it here rather than on arrival costs nothing and
+        # surfaces a planning failure from reset.
+        plan_x = x.copy()
+        robot = self.objects[0]
+        final_base_pose = base_motion_plan[-1]
+        plan_x.set(robot, "pos_base_x", final_base_pose.x)
+        plan_x.set(robot, "pos_base_y", final_base_pose.y)
+        plan_x.set(robot, "pos_base_rot", final_base_pose.theta())
+        self._pybullet_sim.set_state(plan_x)
+        windup_plan = run_motion_planning(
+            self._pybullet_sim.robot,
+            self._pybullet_sim.get_robot_joints(),
+            list(TOSS_WINDUP_ARM_CONFIGURATION) + [0.0] * 6,
+            collision_bodies=self._pybullet_sim.get_collision_bodies(),
+            seed=0,
+            physics_client_id=self._pybullet_sim.physics_client_id,
+        )
+        assert windup_plan is not None, "Motion planning failed"
+        windup_start = np.array(self._get_current_robot_arm_conf()[:7])
+        self._windup_trajectory, self._windup_dir = _compute_per_joint_profile(
+            windup_start,
+            np.array(windup_plan[-1][:7]),
+            _ARM_MAX_VELOCITY,
+            _ARM_MAX_ACCELERATION,
+        )
+        self._windup_start_joint_angles = windup_start
+
+        for joint, angle in enumerate(windup_plan[-1][:7], start=1):
+            plan_x.set(robot, f"pos_arm_joint{joint}", angle)
+        self._pybullet_sim.set_state(plan_x)
+        swing_plan = run_motion_planning(
+            self._pybullet_sim.robot,
+            self._pybullet_sim.get_robot_joints(),
+            list(TOSS_RELEASE_ARM_CONFIGURATION) + [0.0] * 6,
+            collision_bodies=self._pybullet_sim.get_collision_bodies(),
+            seed=0,
+            physics_client_id=self._pybullet_sim.physics_client_id,
+        )
+        assert swing_plan is not None, "Motion planning failed"
+        self._swing = plan_toss_swing(
+            swing_plan,
+            windup_plan[-1],
+            self._release_speed,
+            self._gripper_release_ms,
+        )
+
     def terminated(self) -> bool:
         return self._swing is not None and self._swing_step_idx >= len(
             self._swing.trajectory
@@ -1158,7 +1206,6 @@ class MoveToTossLocationAndTossController(
             break
         if self._robot_is_close_to_pose(self._current_base_motion_plan[-1]):
             self._navigated = True
-            self._plan_windup()
         robot_pose = self._get_current_robot_pose()
         next_pose = self._current_base_motion_plan[0]
         action = np.zeros(11, dtype=np.float32)
@@ -1167,28 +1214,6 @@ class MoveToTossLocationAndTossController(
         action[2] = get_signed_angle_distance(next_pose.theta(), robot_pose.theta())
         action[-1] = self._get_current_robot_gripper_pose()
         return action
-
-    def _plan_windup(self) -> None:
-        assert self._last_state is not None and self._pybullet_sim is not None
-        self._pybullet_sim.set_state(self._last_state)
-        plan = run_motion_planning(
-            self._pybullet_sim.robot,
-            self._pybullet_sim.get_robot_joints(),
-            list(TOSS_WINDUP_ARM_CONFIGURATION) + [0.0] * 6,
-            collision_bodies=self._pybullet_sim.get_collision_bodies(),
-            seed=0,
-            physics_client_id=self._pybullet_sim.physics_client_id,
-        )
-        assert plan is not None, "Motion planning failed"
-        curr = np.array(self._get_current_robot_arm_conf()[:7])
-        self._windup_trajectory, self._windup_dir = _compute_per_joint_profile(
-            curr,
-            np.array(plan[-1][:7]),
-            _ARM_MAX_VELOCITY,
-            _ARM_MAX_ACCELERATION,
-        )
-        self._windup_start_joint_angles = curr.copy()
-        self._windup_step_idx = 0
 
     def _windup_step(self) -> Array:
         action = np.zeros(18, dtype=np.float32)
@@ -1210,28 +1235,7 @@ class MoveToTossLocationAndTossController(
         self._windup_step_idx += 1
         if self._windup_step_idx >= len(self._windup_trajectory):
             self._wound_up = True
-            self._plan_swing()
         return action
-
-    def _plan_swing(self) -> None:
-        assert self._last_state is not None and self._pybullet_sim is not None
-        self._pybullet_sim.set_state(self._last_state)
-        plan = run_motion_planning(
-            self._pybullet_sim.robot,
-            self._pybullet_sim.get_robot_joints(),
-            list(TOSS_RELEASE_ARM_CONFIGURATION) + [0.0] * 6,
-            collision_bodies=self._pybullet_sim.get_collision_bodies(),
-            seed=0,
-            physics_client_id=self._pybullet_sim.physics_client_id,
-        )
-        assert plan is not None, "Motion planning failed"
-        self._swing = plan_toss_swing(
-            plan,
-            self._get_current_robot_arm_conf(),
-            self._release_speed,
-            self._gripper_release_ms,
-        )
-        self._swing_step_idx = 0
 
     def _swing_step(self) -> Array:
         assert self._swing is not None
