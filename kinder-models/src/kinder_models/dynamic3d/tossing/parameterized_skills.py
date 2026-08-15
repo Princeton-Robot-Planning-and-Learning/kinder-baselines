@@ -33,9 +33,9 @@ from spatialmath import SE2
 
 from kinder_models.dynamic3d.cube_symmetry import upright_grasp_rotations
 from kinder_models.dynamic3d.shelf.parameterized_skills import PickShelfController
-from kinder_models.dynamic3d.tossing.toss_profile import TOSS_MAX_VELOCITY
 from kinder_models.dynamic3d.tossing.toss_swing import (
     TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
+    TOSS_MAX_VELOCITY,
     TOSS_RELEASE_ARM_CONFIGURATION,
     TOSS_WINDUP_ARM_CONFIGURATION,
     TossSwing,
@@ -204,46 +204,6 @@ class MoveToTargetGroundController(
         )
 
 
-class MoveToThrowPoseController(MoveToTargetGroundController):
-    """Controller for motion planning to a base pose to throw a held object from.
-
-    The object parameters are:
-        robot: The robot itself.
-        object: The target object to throw at.
-        held: The movable object the robot is currently holding.
-
-    The continuous parameters are the same as MoveToTargetGroundController's:
-        target_distance: float
-        target_rot: float (radians)
-
-    Excludes the held object from base collision checking by default, or the robot's own
-    cargo rejects every plan. sweep3D's wipe controller excludes its wiper likewise.
-    """
-
-    def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
-        distance = rng.uniform(*TOSS_TARGET_DISTANCE_BOUNDS)  # type: ignore
-        rot = rng.uniform(*TOSS_TARGET_ROTATION_BOUNDS)
-        return np.array([distance, rot])
-
-    def reset(
-        self,
-        x: ObjectCentricState,
-        params: Any,
-        extend_xy_magnitude: float = 0.025,
-        extend_rot_magnitude: float = np.pi / 8,
-        disable_collision_objects: list[str] | None = None,
-    ) -> None:
-        if disable_collision_objects is None:
-            disable_collision_objects = [self.objects[2].name]
-        super().reset(
-            x,
-            params,
-            extend_xy_magnitude=extend_xy_magnitude,
-            extend_rot_magnitude=extend_rot_magnitude,
-            disable_collision_objects=disable_collision_objects,
-        )
-
-
 class MoveArmToConfController(GroundParameterizedController[ObjectCentricState, Array]):
     """Controller for motion planning the arm to reach a target conf.
 
@@ -259,16 +219,12 @@ class MoveArmToConfController(GroundParameterizedController[ObjectCentricState, 
     The controller uses motion planning in pybullet.
     """
 
-    def __init__(
-        self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
-    ) -> None:
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._last_state: ObjectCentricState | None = None
         self._current_params: np.ndarray | None = None
         self._current_arm_joint_plan: list[JointPositions] | None = None
-        # None builds one on first reset; a caller sharing a sim across groundings
-        # passes it here, since a planner grounds a fresh controller per attempt.
-        self._pybullet_sim: PyBulletSim | None = pybullet_sim
+        self._pybullet_sim: PyBulletSim | None = None
         self._trajectory: np.ndarray = np.array([])
         self._traj_dir: np.ndarray = np.zeros(7)
         self._start_joint_angles: np.ndarray = np.zeros(7)
@@ -387,15 +343,12 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
     The controller uses motion planning in pybullet.
     """
 
-    def __init__(
-        self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
-    ) -> None:
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._last_state: ObjectCentricState | None = None
         self._current_params: np.ndarray | None = None
         self._current_arm_joint_plan: list[JointPositions] | None = None
-        # See MoveArmToConfController.__init__ for why this is injectable.
-        self._pybullet_sim: PyBulletSim | None = pybullet_sim
+        self._pybullet_sim: PyBulletSim | None = None
         self._step_idx: int = 0
         self._has_released: bool = False
         self._swing: TossSwing | None = None
@@ -509,85 +462,6 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
         assert self._pybullet_sim is not None
         dist = self._pybullet_sim.get_joint_distance(current_conf, conf)
         return dist < 6 * 1e-2
-
-
-class TossFromWindupController(
-    GroundParameterizedController[ObjectCentricState, Array]
-):
-    """Controller for winding the arm up and then tossing the held object.
-
-    A composition of the two existing controllers -- MoveArmToConfController to the
-    windup conf, then TossController to the release conf -- the way shelf's pick_shelf
-    composes approach, grasp and retract into one task-level skill.
-
-    The object parameters are:
-        robot: The robot itself.
-
-    The continuous parameters are a (2, 7) array of arm configurations:
-        params[0]: the windup conf, reached with MoveArmToConfController.
-        params[1]: the release conf, swung to and released at by TossController.
-
-    Run as one controller rather than two skills, since splitting them would need a
-    predicate over the windup conf to chain the operators.
-    """
-
-    def __init__(
-        self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
-    ) -> None:
-        super().__init__(*args, **kwargs)
-        self._windup_controller = MoveArmToConfController(
-            self.objects, pybullet_sim=pybullet_sim
-        )
-        self._toss_controller = TossController(self.objects, pybullet_sim=pybullet_sim)
-        self._last_state: ObjectCentricState | None = None
-        self._toss_params: np.ndarray | None = None
-        self._release_speed: float = TOSS_MAX_VELOCITY
-        self._gripper_release_ms: int = TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS
-        self._tossing: bool = False
-
-    def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
-        del x, rng  # not used
-        return np.array([TOSS_WINDUP_ARM_CONFIGURATION, TOSS_RELEASE_ARM_CONFIGURATION])
-
-    def reset(
-        self,
-        x: ObjectCentricState,
-        params: Any,
-        release_speed: float = TOSS_MAX_VELOCITY,
-        gripper_release_ms: int = TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
-    ) -> None:
-        current_params = np.asarray(params, dtype=np.float32)
-        assert current_params.shape == (2, 7)
-        self._last_state = x
-        self._toss_params = current_params[1]
-        self._release_speed = release_speed
-        self._gripper_release_ms = gripper_release_ms
-        self._tossing = False
-        # The toss is planned when the windup ends, from the state actually reached.
-        self._windup_controller.reset(x, current_params[0])
-
-    def terminated(self) -> bool:
-        return self._tossing and self._toss_controller.terminated()
-
-    def step(self) -> Array:
-        if not self._tossing and self._windup_controller.terminated():
-            assert self._last_state is not None
-            assert self._toss_params is not None
-            self._toss_controller.reset(
-                self._last_state,
-                self._toss_params,
-                release_speed=self._release_speed,
-                gripper_release_ms=self._gripper_release_ms,
-            )
-            self._tossing = True
-        if self._tossing:
-            return self._toss_controller.step()
-        return self._windup_controller.step()
-
-    def observe(self, x: ObjectCentricState) -> None:
-        self._last_state = x
-        self._windup_controller.observe(x)
-        self._toss_controller.observe(x)
 
 
 class MoveArmToEndEffectorController(
@@ -964,17 +838,29 @@ class MoveToTossLocationAndTossController(
         self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
     ) -> None:
         super().__init__(*args, **kwargs)
+
+        # State and simulator. Injectable so a planner grounding this controller many
+        # times over one search shares a single PyBullet client rather than opening
+        # one per grounding, as create_lifted_controllers' own caller does.
         self._last_state: ObjectCentricState | None = None
         self._pybullet_sim: PyBulletSim | None = pybullet_sim
+
+        # The two sampled tossing dials, and the phase flags they gate.
         self._release_speed: float = TOSS_MAX_VELOCITY
         self._gripper_release_ms: int = TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS
         self._navigated: bool = False
         self._wound_up: bool = False
+
+        # Base motion: the drive to the toss pose.
         self._current_base_motion_plan: list[SE2] | None = None
+
+        # Windup: the arm swinging back before the throw.
         self._windup_trajectory: np.ndarray = np.array([])
         self._windup_dir: np.ndarray = np.zeros(7)
         self._windup_start_joint_angles: np.ndarray = np.zeros(7)
         self._windup_step_idx: int = 0
+
+        # Swing: the throw itself, planned once the windup ends.
         self._swing: TossSwing | None = None
         self._swing_step_idx: int = 0
         self._has_released: bool = False
@@ -1187,12 +1073,6 @@ def create_lifted_controllers(
     """Create lifted parameterized controllers for the TidyBot3D ground environment."""
     del action_space, init_constant_state  # not used
 
-    class TossFromWindup(TossFromWindupController):
-        """Toss-from-windup controller with pre-configured PyBullet sim."""
-
-        def __init__(self, objects):
-            super().__init__(objects, pybullet_sim=pybullet_sim)
-
     # Controllers.
 
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
@@ -1232,30 +1112,6 @@ def create_lifted_controllers(
     LiftedTossController: LiftedParameterizedController = LiftedParameterizedController(
         [robot],
         TossController,
-    )
-
-    # Move to throw pose controller.
-    robot = Variable("?robot", MujocoTidyBotRobotObjectType)
-    target = Variable("?target", MujocoObjectType)
-    # The held object is necessarily movable. Typing it MujocoObjectType would let a
-    # planner ground it to a fixture, or to the same object as ?target.
-    held = Variable("?held", MujocoMovableObjectType)
-
-    LiftedMoveToThrowPoseController: LiftedParameterizedController = (
-        LiftedParameterizedController(
-            [robot, target, held],
-            MoveToThrowPoseController,
-        )
-    )
-
-    # Toss from windup controller.
-    robot = Variable("?robot", MujocoTidyBotRobotObjectType)
-
-    LiftedTossFromWindupController: LiftedParameterizedController = (
-        LiftedParameterizedController(
-            [robot],
-            TossFromWindup,
-        )
     )
 
     # Move arm to end effector controller.
@@ -1320,8 +1176,6 @@ def create_lifted_controllers(
         "move_to_target_from_other_target": LiftedMoveToTargetFromOtherTargetController,
         "move_arm_to_conf": LiftedMoveArmToConfController,
         "toss": LiftedTossController,
-        "move_to_throw_pose": LiftedMoveToThrowPoseController,
-        "toss_from_windup": LiftedTossFromWindupController,
         "move_arm_to_end_effector": LiftedMoveArmToEndEffectorController,
         "close_gripper": LiftedCloseGripperController,
         "open_gripper": LiftedOpenGripperController,
