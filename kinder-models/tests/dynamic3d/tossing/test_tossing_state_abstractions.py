@@ -159,3 +159,46 @@ def test_the_abstractor_rejects_the_two_cube_variant():
     with pytest.raises(AssertionError, match="only Tossing3D-o1 is supported"):
         Tossing3DStateAbstractor(sim)
     env.close()
+
+
+def _rest(axis, deg):
+    """A quaternion (qx, qy, qz, qw) rotating `deg` about `axis`."""
+    half = np.deg2rad(deg) / 2
+    vec = np.array(axis, dtype=float)
+    return tuple(float(v) for v in np.sin(half) * vec) + (float(np.cos(half)),)
+
+
+def test_on_ground_holds_for_a_cube_resting_on_any_of_its_faces():
+    """A cube on its side is the same cube on the same floor. The grasp no longer cares
+    which face is up, so neither should the predicate."""
+    env, abstractor, state = _make_env_and_abstractor()
+    cube = state.get_object_from_name("cube_0")
+    for axis, deg in [
+        ([0, 0, 1], 0),
+        ([0, 0, 1], 90),
+        ([1, 0, 0], 90),
+        ([1, 0, 0], 180),
+        ([1, 0, 0], -90),
+        ([0, 1, 0], 90),
+        ([0, 1, 0], -90),
+        ([0, 1, 0], 180),
+    ]:
+        rested = state.copy()
+        for feature, value in zip(("qx", "qy", "qz", "qw"), _rest(axis, deg)):
+            rested.set(cube, feature, value)
+        atoms = abstractor.state_abstractor(rested).atoms
+        assert GroundAtom(OnGround, [cube]) in atoms, (axis, deg)
+    env.close()
+
+
+def test_on_ground_still_fails_for_a_cube_balanced_between_faces():
+    """Canonicalising is not the same as ignoring orientation: a cube on an edge rests
+    on no face at all, and the bounding-box arithmetic stops meaning anything."""
+    env, abstractor, state = _make_env_and_abstractor()
+    cube = state.get_object_from_name("cube_0")
+    balanced = state.copy()
+    for feature, value in zip(("qx", "qy", "qz", "qw"), _rest([1, 0, 0], 45)):
+        balanced.set(cube, feature, value)
+    atoms = abstractor.state_abstractor(balanced).atoms
+    assert GroundAtom(OnGround, [cube]) not in atoms
+    env.close()

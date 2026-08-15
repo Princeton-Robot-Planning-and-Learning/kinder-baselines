@@ -1016,6 +1016,23 @@ def _cube_rotation_symmetries() -> tuple[tuple[float, float, float, float], ...]
 CUBE_ROTATION_SYMMETRIES = _cube_rotation_symmetries()
 
 
+def cube_tilt_from_upright(rotation: tuple[float, float, float, float]) -> float:
+    """How far a cube is from resting flat on one of its faces.
+
+    Zero for any face-down rest at any yaw, and larger the closer the cube is to
+    balancing on an edge or a corner.
+    """
+    return float(
+        min(
+            x * x + y * y
+            for x, y, _, _ in (
+                _quaternion_product(rotation, symmetry)
+                for symmetry in CUBE_ROTATION_SYMMETRIES
+            )
+        )
+    )
+
+
 def upright_grasp_rotations(
     rotation: tuple[float, float, float, float],
 ) -> tuple[tuple[float, float, float, float], ...]:

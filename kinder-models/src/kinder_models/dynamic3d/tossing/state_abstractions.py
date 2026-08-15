@@ -26,6 +26,9 @@ from relational_structs import (
     Predicate,
 )
 
+from kinder_models.dynamic3d.tossing.parameterized_skills import (
+    cube_tilt_from_upright,
+)
 from kinder_models.dynamic3d.utils import (
     END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE,
     GRIPPER_GRASPING_THRESHOLD,
@@ -113,18 +116,31 @@ class Tossing3DStateAbstractor:
 
     @staticmethod
     def _check_on_ground(state: ObjectCentricState, movable: Object) -> bool:
-        """Whether a movable rests flat on the ground.
+        """Whether a movable rests flat on the ground, on any of its faces.
 
-        Flat because the bounding box is pose-independent, so the bottom-face arithmetic
-        only holds while axis-aligned. A toss cannot predict this.
+        Flat because the bounding box is pose-independent, so the bottom-face
+        arithmetic only holds while a face is down. Which face is down is not asked:
+        for a cube those are the same rest, and the grasp is derived from the upright
+        rotation, so a predicate that distinguished them would refuse picks that work.
         """
         z = state.get(movable, "z")
         bounding_box_height = state.get(movable, "bb_z")
-        return bool(
-            np.isclose(z - bounding_box_height / 2, 0.0, atol=ON_GROUND_TOLERANCE)
-            and np.isclose(state.get(movable, "qx"), 0.0, atol=ON_GROUND_TOLERANCE)
-            and np.isclose(state.get(movable, "qy"), 0.0, atol=ON_GROUND_TOLERANCE)
+        if not np.isclose(z - bounding_box_height / 2, 0.0, atol=ON_GROUND_TOLERANCE):
+            return False
+        rotation = (
+            state.get(movable, "qx"),
+            state.get(movable, "qy"),
+            state.get(movable, "qz"),
+            state.get(movable, "qw"),
         )
+        # Only a cube's faces are interchangeable; anything else keeps the strict test.
+        extents = [state.get(movable, f) for f in ("bb_x", "bb_y", "bb_z")]
+        if not np.allclose(extents, extents[0]):
+            return bool(
+                np.isclose(rotation[0], 0.0, atol=ON_GROUND_TOLERANCE)
+                and np.isclose(rotation[1], 0.0, atol=ON_GROUND_TOLERANCE)
+            )
+        return bool(cube_tilt_from_upright(rotation) < ON_GROUND_TOLERANCE)
 
     def _check_holding(
         self, state: ObjectCentricState, robot: Object, movable: Object
