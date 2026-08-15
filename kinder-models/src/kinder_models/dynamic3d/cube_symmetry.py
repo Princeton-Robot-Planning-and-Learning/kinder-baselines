@@ -9,6 +9,54 @@ distinguishing poses that are physically identical.
 import numpy as np
 
 
+def cube_tilt_from_upright(rotation: tuple[float, float, float, float]) -> float:
+    """How far a cube is from resting flat on one of its faces.
+
+    Zero for any face-down rest at any yaw, and larger the closer the cube is to
+    balancing on an edge or a corner.
+    """
+    return float(
+        min(
+            x * x + y * y
+            for x, y, _, _ in (
+                _quaternion_product(rotation, symmetry)
+                for symmetry in CUBE_ROTATION_SYMMETRIES
+            )
+        )
+    )
+
+
+def upright_grasp_rotations(
+    rotation: tuple[float, float, float, float],
+) -> tuple[tuple[float, float, float, float], ...]:
+    """Every upright rotation the cube could equally be grasped at, nearest yaw first.
+
+    Deriving a grasp from the measured rotation asks the gripper to approach along
+    whichever face happens to be up, from underneath the floor for a cube on its top.
+    Resting on a face a cube is also four-fold symmetric about the vertical, so all four
+    yaws are the same grasp and a caller can fall through when the arm cannot reach one.
+    """
+    best_tilt = np.inf
+    yaw = 0.0
+    for symmetry in CUBE_ROTATION_SYMMETRIES:
+        x, y, z, w = _quaternion_product(rotation, symmetry)
+        tilt = x * x + y * y
+        if tilt < best_tilt - 1e-12:
+            best_tilt = tilt
+            yaw = float(np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
+    return tuple(
+        (0.0, 0.0, float(np.sin(angle / 2)), float(np.cos(angle / 2)))
+        for angle in (yaw, yaw + np.pi / 2, yaw - np.pi / 2, yaw + np.pi)
+    )
+
+
+def canonical_upright_rotation(
+    rotation: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    """The nearest upright rotation, the first of upright_grasp_rotations."""
+    return upright_grasp_rotations(rotation)[0]
+
+
 def _quaternion_product(
     left: tuple[float, float, float, float],
     right: tuple[float, float, float, float],
@@ -66,51 +114,3 @@ def _cube_rotation_symmetries() -> tuple[tuple[float, float, float, float], ...]
 
 
 CUBE_ROTATION_SYMMETRIES = _cube_rotation_symmetries()
-
-
-def cube_tilt_from_upright(rotation: tuple[float, float, float, float]) -> float:
-    """How far a cube is from resting flat on one of its faces.
-
-    Zero for any face-down rest at any yaw, and larger the closer the cube is to
-    balancing on an edge or a corner.
-    """
-    return float(
-        min(
-            x * x + y * y
-            for x, y, _, _ in (
-                _quaternion_product(rotation, symmetry)
-                for symmetry in CUBE_ROTATION_SYMMETRIES
-            )
-        )
-    )
-
-
-def upright_grasp_rotations(
-    rotation: tuple[float, float, float, float],
-) -> tuple[tuple[float, float, float, float], ...]:
-    """Every upright rotation the cube could equally be grasped at, nearest yaw first.
-
-    Deriving a grasp from the measured rotation asks the gripper to approach along
-    whichever face happens to be up, from underneath the floor for a cube on its top.
-    Resting on a face a cube is also four-fold symmetric about the vertical, so all four
-    yaws are the same grasp and a caller can fall through when the arm cannot reach one.
-    """
-    best_tilt = np.inf
-    yaw = 0.0
-    for symmetry in CUBE_ROTATION_SYMMETRIES:
-        x, y, z, w = _quaternion_product(rotation, symmetry)
-        tilt = x * x + y * y
-        if tilt < best_tilt - 1e-12:
-            best_tilt = tilt
-            yaw = float(np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
-    return tuple(
-        (0.0, 0.0, float(np.sin(angle / 2)), float(np.cos(angle / 2)))
-        for angle in (yaw, yaw + np.pi / 2, yaw - np.pi / 2, yaw + np.pi)
-    )
-
-
-def canonical_upright_rotation(
-    rotation: tuple[float, float, float, float],
-) -> tuple[float, float, float, float]:
-    """The nearest upright rotation, the first of upright_grasp_rotations."""
-    return upright_grasp_rotations(rotation)[0]
