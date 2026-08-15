@@ -870,9 +870,15 @@ class MoveToTossLocationAndTossController(
     )
     TARGET_ROTATION_BOUNDS = (-MAX_TARGET_ROTATION, MAX_TARGET_ROTATION)
 
-    # TossController's two dials, opened up as sampled parameters.
-    SPEED_BOUNDS = (np.deg2rad(60.0), TOSS_MAX_VELOCITY)
-    RELEASE_MS_BOUNDS = (600.0, 840.0)
+    # TossController's two dials, opened up as sampled parameters. Narrowed from the
+    # originally-shipped (60, TOSS_MAX_VELOCITY) / (600, 840): measured directly
+    # (toss_param_probe4.py, isolated toss draws from a real post-pick state, 480
+    # draws across 16 seeds) that every scoring draw fell in speed_deg [117.5, 140.0]
+    # and release_ms [710.4, 836.1] -- the wide bounds spent the large majority of
+    # the sampler's budget on combinations that can never score. A few degrees/ms of
+    # margin below the measured minimums, since 480 draws is not exhaustive.
+    SPEED_BOUNDS = (np.deg2rad(115.0), TOSS_MAX_VELOCITY)
+    RELEASE_MS_BOUNDS = (700.0, 840.0)
 
     def __init__(
         self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
