@@ -6,7 +6,18 @@ test from a cube's measured rotation has to say so explicitly, or it ends up
 distinguishing poses that are physically identical.
 """
 
+from typing import NamedTuple
+
 import numpy as np
+
+
+class Quaternion(NamedTuple):
+    """A rotation in Mujoco's (x, y, z, w) state-feature order."""
+
+    x: float
+    y: float
+    z: float
+    w: float
 
 
 def cube_tilt_from_upright(rotation: tuple[float, float, float, float]) -> float:
