@@ -26,7 +26,7 @@ from relational_structs import (
     Predicate,
 )
 
-from kinder_models.dynamic3d.cube_symmetry import cube_tilt_from_upright
+from kinder_models.dynamic3d.cube_symmetry import Quaternion, cube_tilt_from_upright
 from kinder_models.dynamic3d.utils import (
     END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE,
     GRIPPER_GRASPING_THRESHOLD,
@@ -116,27 +116,27 @@ class Tossing3DStateAbstractor:
     def _check_on_ground(state: ObjectCentricState, movable: Object) -> bool:
         """Whether a movable rests flat on the ground, on any of its faces.
 
-        Flat because the bounding box is pose-independent, so the bottom-face
-        arithmetic only holds while a face is down. Which face is down is not asked:
-        for a cube those are the same rest, and the grasp is derived from the upright
-        rotation, so a predicate that distinguished them would refuse picks that work.
+        Flat because the bounding box is pose-independent, so the bottom-face arithmetic
+        only holds while a face is down. Which face is down is not asked: for a cube
+        those are the same rest, and the grasp is derived from the upright rotation, so
+        a predicate that distinguished them would refuse picks that work.
         """
         z = state.get(movable, "z")
         bounding_box_height = state.get(movable, "bb_z")
         if not np.isclose(z - bounding_box_height / 2, 0.0, atol=ON_GROUND_TOLERANCE):
             return False
-        rotation = (
-            state.get(movable, "qx"),
-            state.get(movable, "qy"),
-            state.get(movable, "qz"),
-            state.get(movable, "qw"),
+        rotation = Quaternion(
+            x=state.get(movable, "qx"),
+            y=state.get(movable, "qy"),
+            z=state.get(movable, "qz"),
+            w=state.get(movable, "qw"),
         )
         # Only a cube's faces are interchangeable; anything else keeps the strict test.
         extents = [state.get(movable, f) for f in ("bb_x", "bb_y", "bb_z")]
         if not np.allclose(extents, extents[0]):
             return bool(
-                np.isclose(rotation[0], 0.0, atol=ON_GROUND_TOLERANCE)
-                and np.isclose(rotation[1], 0.0, atol=ON_GROUND_TOLERANCE)
+                np.isclose(rotation.x, 0.0, atol=ON_GROUND_TOLERANCE)
+                and np.isclose(rotation.y, 0.0, atol=ON_GROUND_TOLERANCE)
             )
         return bool(cube_tilt_from_upright(rotation) < ON_GROUND_TOLERANCE)
 

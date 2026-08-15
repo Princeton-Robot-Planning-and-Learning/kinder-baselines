@@ -1,5 +1,6 @@
 """Parameterized skills for the TidyBot3D tossing environment."""
 
+import enum
 from typing import Any
 
 import numpy as np
@@ -31,7 +32,7 @@ from relational_structs import (
 )
 from spatialmath import SE2
 
-from kinder_models.dynamic3d.cube_symmetry import upright_grasp_rotations
+from kinder_models.dynamic3d.cube_symmetry import Quaternion, upright_grasp_rotations
 from kinder_models.dynamic3d.shelf.parameterized_skills import PickShelfController
 from kinder_models.dynamic3d.tossing.toss_swing import (
     TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
@@ -126,14 +127,14 @@ class MoveToTargetGroundController(
 
     def terminated(self) -> bool:
         assert self._current_base_motion_plan is not None
-        return self._robot_is_close_to_pose(self._current_base_motion_plan[-1])
+        return self._check_robot_is_close_to_pose(self._current_base_motion_plan[-1])
 
     def step(self) -> Array:
         assert self._current_base_motion_plan is not None
         while len(self._current_base_motion_plan) > 1:
             peek_pose = self._current_base_motion_plan[0]
             # Close enough, pop and continue.
-            if self._robot_is_close_to_pose(peek_pose):
+            if self._check_robot_is_close_to_pose(peek_pose):
                 self._current_base_motion_plan.pop(0)
             # Not close enough, stop popping.
             break
@@ -170,7 +171,7 @@ class MoveToTargetGroundController(
             return GRASP_CLOSE_THRESHOLD
         return 0.0
 
-    def _robot_is_close_to_pose(
+    def _check_robot_is_close_to_pose(
         self, pose: SE2, atol: float = WAYPOINT_TOLERANCE
     ) -> bool:
         robot_pose = self._get_current_robot_pose()
@@ -438,7 +439,7 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
             return GRASP_CLOSE_THRESHOLD
         return 0.0
 
-    def _robot_is_close_to_conf(self, conf: JointPositions) -> bool:
+    def _check_robot_is_close_to_conf(self, conf: JointPositions) -> bool:
         current_conf = self._get_current_robot_arm_conf()
         assert self._pybullet_sim is not None
         dist = self._pybullet_sim.get_joint_distance(current_conf, conf)
@@ -623,7 +624,7 @@ class CloseGripperController(GroundParameterizedController[ObjectCentricState, A
         self._last_state = x
 
     def terminated(self) -> bool:
-        return self._robot_gripper_is_closed(atol=0.02)
+        return self._check_robot_gripper_is_closed(atol=0.02)
 
     def step(self) -> Array:
         self.last_gripper_state = self._get_current_gripper_pose()
@@ -640,7 +641,9 @@ class CloseGripperController(GroundParameterizedController[ObjectCentricState, A
         robot = self.objects[0]
         return state.get(robot, "pos_gripper")
 
-    def _robot_gripper_is_closed(self, atol: float = GRIPPER_CLOSED_THRESHOLD) -> bool:
+    def _check_robot_gripper_is_closed(
+        self, atol: float = GRIPPER_CLOSED_THRESHOLD
+    ) -> bool:
         current_gripper_pose = self._get_current_gripper_pose()
         return bool(
             current_gripper_pose > 0.2
@@ -670,7 +673,7 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
         self._last_state = x
 
     def terminated(self) -> bool:
-        return self._robot_gripper_is_open()
+        return self._check_robot_gripper_is_open()
 
     def step(self) -> Array:
         self.last_gripper_state = self._get_current_gripper_pose()
@@ -687,7 +690,7 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
         robot = self.objects[0]
         return state.get(robot, "pos_gripper")
 
-    def _robot_gripper_is_open(
+    def _check_robot_gripper_is_open(
         self, atol: float = GRIPPER_OPEN_COMMAND_TOLERANCE
     ) -> bool:
         current_gripper_pose = self._get_current_gripper_pose()
@@ -708,6 +711,12 @@ class PickCubeController(PickShelfController):
     shut on air.
     """
 
+    class _Phase(enum.Enum):
+        """Grasping, or -- once a closed-on-nothing grasp is caught -- releasing."""
+
+        GRASPING = enum.auto()
+        RELEASING = enum.auto()
+
     # Standoffs to try in order, nominal first, spanning what the shelf pick used to
     # sample. Fixed rather than drawn, so the skill takes no continuous parameters.
     STANDOFF_LADDER = tuple(
@@ -718,7 +727,7 @@ class PickCubeController(PickShelfController):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._releasing: bool = False
+        self._phase: PickCubeController._Phase = self._Phase.GRASPING
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         return np.zeros(0, dtype=np.float32)
@@ -731,17 +740,17 @@ class PickCubeController(PickShelfController):
         extend_rot_magnitude: float = np.pi / 8,
     ) -> None:
         del params
-        self._releasing = False
+        self._phase = self._Phase.GRASPING
         # Grasp the cube as if it were upright. Every face-down rest is the same cube,
         # so the raw rotation only tells the grasp which face happens to be up -- and
         # for a cube resting on its top that asks the gripper to come from below.
         cube = self.objects[1]
         rotations = upright_grasp_rotations(
-            (
-                x.get(cube, "qx"),
-                x.get(cube, "qy"),
-                x.get(cube, "qz"),
-                x.get(cube, "qw"),
+            Quaternion(
+                x=x.get(cube, "qx"),
+                y=x.get(cube, "qy"),
+                z=x.get(cube, "qz"),
+                w=x.get(cube, "qw"),
             )
         )
         for rotation in rotations:
@@ -767,23 +776,23 @@ class PickCubeController(PickShelfController):
     def terminated(self) -> bool:
         if not super().terminated():
             return False
-        if self._grasp_took():
+        if self._check_grasp_took():
             return True
-        self._releasing = True
-        return self._gripper_is_open()
+        self._phase = self._Phase.RELEASING
+        return self._check_gripper_is_open()
 
     def step(self) -> Array:
-        if self._releasing:
+        if self._phase is self._Phase.RELEASING:
             action = np.zeros(11, dtype=np.float32)
             action[-1] = 0
             return action
         return super().step()
 
-    def _grasp_took(self) -> bool:
+    def _check_grasp_took(self) -> bool:
         assert self._last_state is not None
         return bool(self._last_state.get(self.objects[1], "z") > MINIMUM_HOLDING_HEIGHT)
 
-    def _gripper_is_open(self) -> bool:
+    def _check_gripper_is_open(self) -> bool:
         assert self._last_state is not None
         pos = self._last_state.get(self.objects[0], "pos_gripper")
         return bool(pos < GRIPPER_OPEN_COMMAND_TOLERANCE)
@@ -809,10 +818,17 @@ class MoveToTossLocationAndTossController(
     The cost is that a standoff which cannot score is only discovered by throwing from
     it, where a separate move could have been rejected first.
 
-    One flat controller over phase flags, as pick_shelf is: base motion, then the
-    windup, then the swing. The swing is planned at the windup's end rather than in
-    reset, because it has to start from the arm conf actually reached.
+    One flat controller over an explicit phase, as pick_shelf is: base motion, then
+    the windup, then the swing. The swing is planned at the windup's end rather than
+    in reset, because it has to start from the arm conf actually reached.
     """
+
+    class _Phase(enum.Enum):
+        """Which leg of drive-then-throw step() is currently stepping."""
+
+        BASE_MOTION = enum.auto()
+        WINDUP = enum.auto()
+        SWING = enum.auto()
 
     # Where a throw is possible; the upper part does not score.
     TARGET_DISTANCE_BOUNDS = (1.25, 1.45)
@@ -841,11 +857,12 @@ class MoveToTossLocationAndTossController(
         self._last_state: ObjectCentricState | None = None
         self._pybullet_sim: PyBulletSim | None = pybullet_sim
 
-        # The two sampled tossing dials, and the phase flags they gate.
+        # The two sampled tossing dials, and the phase they gate.
         self._release_speed: float = TOSS_MAX_VELOCITY
         self._gripper_release_ms: int = TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS
-        self._navigated: bool = False
-        self._wound_up: bool = False
+        self._phase: MoveToTossLocationAndTossController._Phase = (
+            self._Phase.BASE_MOTION
+        )
 
         # Base motion: the drive to the toss pose.
         self._current_base_motion_plan: list[SE2] | None = None
@@ -887,8 +904,7 @@ class MoveToTossLocationAndTossController(
         self._last_state = x
         self._release_speed = float(current_params[2])
         self._gripper_release_ms = int(round(float(current_params[3])))
-        self._navigated = False
-        self._wound_up = False
+        self._phase = self._Phase.BASE_MOTION
         self._windup_step_idx = 0
         self._swing = None
         self._swing_step_idx = 0
@@ -969,24 +985,24 @@ class MoveToTossLocationAndTossController(
 
     def step(self) -> Array:
         assert self._current_base_motion_plan is not None
-        if not self._navigated:
-            return self._base_motion_step()
-        if not self._wound_up:
-            return self._windup_step()
-        return self._swing_step()
+        if self._phase is self._Phase.BASE_MOTION:
+            return self._action_base_motion()
+        if self._phase is self._Phase.WINDUP:
+            return self._action_windup()
+        return self._action_swing()
 
     def observe(self, x: ObjectCentricState) -> None:
         self._last_state = x
 
-    def _base_motion_step(self) -> Array:
+    def _action_base_motion(self) -> Array:
         assert self._current_base_motion_plan is not None
         while len(self._current_base_motion_plan) > 1:
             peek_pose = self._current_base_motion_plan[0]
-            if self._robot_is_close_to_pose(peek_pose):
+            if self._check_robot_is_close_to_pose(peek_pose):
                 self._current_base_motion_plan.pop(0)
             break
-        if self._robot_is_close_to_pose(self._current_base_motion_plan[-1]):
-            self._navigated = True
+        if self._check_robot_is_close_to_pose(self._current_base_motion_plan[-1]):
+            self._phase = self._Phase.WINDUP
         robot_pose = self._get_current_robot_pose()
         next_pose = self._current_base_motion_plan[0]
         action = np.zeros(11, dtype=np.float32)
@@ -996,7 +1012,7 @@ class MoveToTossLocationAndTossController(
         action[-1] = self._get_current_robot_gripper_pose()
         return action
 
-    def _windup_step(self) -> Array:
+    def _action_windup(self) -> Array:
         action = np.zeros(18, dtype=np.float32)
         idx = min(self._windup_step_idx, len(self._windup_trajectory) - 1)
         s = float(self._windup_trajectory[idx])
@@ -1015,10 +1031,10 @@ class MoveToTossLocationAndTossController(
         action[10] = self._get_current_robot_gripper_pose()
         self._windup_step_idx += 1
         if self._windup_step_idx >= len(self._windup_trajectory):
-            self._wound_up = True
+            self._phase = self._Phase.SWING
         return action
 
-    def _swing_step(self) -> Array:
+    def _action_swing(self) -> Array:
         assert self._swing is not None
         action = toss_swing_action(
             self._swing,
@@ -1041,7 +1057,7 @@ class MoveToTossLocationAndTossController(
             self._last_state.get(robot, "pos_base_rot"),
         )
 
-    def _robot_is_close_to_pose(self, pose: SE2) -> bool:
+    def _check_robot_is_close_to_pose(self, pose: SE2) -> bool:
         robot_pose = self._get_current_robot_pose()
         return bool(
             np.hypot(pose.x - robot_pose.x, pose.y - robot_pose.y) < WAYPOINT_TOLERANCE
