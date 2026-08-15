@@ -15,21 +15,15 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoObjectTypeFeatures,
     MujocoTidyBotRobotObjectType,
 )
-from prpl_utils.utils import get_signed_angle_distance
 from relational_structs import Object, ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
 from relational_structs.utils import create_state_from_dict
 from spatialmath import SE2
 
-import kinder_models.dynamic3d.tossing.parameterized_skills
 from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
-    PICK_STANDOFF_LADDER,
-    THROW_POSE_TOLERANCE,
-    TOSS_RELEASE_MS_BOUNDS,
-    TOSS_SPEED_BOUNDS,
-    TOSS_TARGET_DISTANCE_BOUNDS,
-    TOSS_TARGET_ROTATION_BOUNDS,
+    MoveToTossLocationAndTossController,
+    PickCubeController,
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,
 )
@@ -39,20 +33,14 @@ from kinder_models.dynamic3d.tossing.toss_swing import (
     TOSS_RELEASE_ARM_CONFIGURATION,
     TOSS_SLICES_PER_CONTROL_STEP,
     TOSS_WINDUP_ARM_CONFIGURATION,
-    plan_toss_swing,
     toss_profile_limits,
-    toss_swing_action,
 )
 from kinder_models.dynamic3d.utils import (
     _CONTROL_TIMESTEP,
     MINIMUM_HOLDING_HEIGHT,
     MOVE_TO_TARGET_DISTANCE_BOUNDS,
     MOVE_TO_TARGET_ROT_BOUNDS,
-    WAYPOINT_TOLERANCE,
-    PyBulletSim,
     _trapezoidal_motion_profile,
-    get_overhead_object_se2_pose,
-    run_base_motion_planning,
 )
 
 kinder.register_all_environments()
@@ -131,7 +119,6 @@ def _create_robot_state(
 
 def test_get_target_robot_pose_from_parameters():
     """Tests for get_target_robot_pose_from_parameters()."""
-
     target = SE2(1.0, 0.0, 0.0)
     robot_pose = get_target_robot_pose_from_parameters(
         target, target_distance=1.0, target_rot=0.0
@@ -187,7 +174,6 @@ def test_get_target_robot_pose_from_parameters():
 
 def test_move_to_target_controller_one_cube():
     """Test move-to-target controller in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = TidyBot3DEnv(
@@ -233,7 +219,6 @@ def test_move_to_target_controller_one_cube():
 
 def test_move_to_target_arm_configuration():
     """Test move-arm-to-conf controller in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = TidyBot3DEnv(
@@ -283,7 +268,6 @@ def test_repeated_grounding_does_not_leak_pybullet_clients():
     planner or data-collection loop creates one PyBulletSim per skill execution. Those
     clients must be released when the controller is dropped.
     """
-
     # Create the environment.
     num_cubes = 1
     env = TidyBot3DEnv(
@@ -358,7 +342,6 @@ def test_repeated_grounding_does_not_leak_pybullet_clients():
 
 def test_move_to_target_arm_end_effector():
     """Test move-arm-to-end-effector controller in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = TidyBot3DEnv(
@@ -413,7 +396,6 @@ def test_move_to_target_arm_end_effector():
 
 def test_close_gripper_controller():
     """Test close-gripper controller in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = TidyBot3DEnv(
@@ -520,7 +502,6 @@ def test_close_gripper_controller():
 
 def test_pick_place_ground():
     """Test pick and place in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = TidyBot3DEnv(
@@ -722,7 +703,6 @@ def test_pick_place_ground():
 
 def test_pick_place_shelf():
     """Test fake interface in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = kinder.make(
@@ -924,7 +904,6 @@ def test_pick_place_shelf():
 
 def test_velocity_tracking_mode():
     """Test pick and place in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = TidyBot3DEnv(
@@ -1013,7 +992,6 @@ def test_velocity_tracking_mode():
 
 def test_pick_toss():
     """Test pick and place in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = kinder.make(
@@ -1219,7 +1197,6 @@ def test_pick_toss():
 
 def test_pick_ground_toss():
     """Test pick and place in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = kinder.make(
@@ -1405,7 +1382,6 @@ def test_the_default_release_ms_falls_at_fraction_046_of_the_swing():
     tolerance here holds on either path, so only that rollout distinguishes them.
     """
     assert TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS == 720
-
     trajectory, s_total = _default_speed_trajectory()
     step, slice_ = divmod(
         TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS, TOSS_SLICES_PER_CONTROL_STEP
@@ -1524,9 +1500,9 @@ def test_pick_cube_takes_no_continuous_parameters():
 def test_pick_cube_walks_the_ladder_from_the_nominal_pose():
     """The first candidate is the nominal one, and every candidate is in the range the
     shelf pick used to sample."""
-    assert PICK_STANDOFF_LADDER[0] == (0.55, 0.0)
-    distances = [d for d, _ in PICK_STANDOFF_LADDER]
-    rots = [r for _, r in PICK_STANDOFF_LADDER]
+    assert PickCubeController.STANDOFF_LADDER[0] == (0.55, 0.0)
+    distances = [d for d, _ in PickCubeController.STANDOFF_LADDER]
+    rots = [r for _, r in PickCubeController.STANDOFF_LADDER]
     assert min(distances) >= MOVE_TO_TARGET_DISTANCE_BOUNDS[0]
     assert max(distances) <= MOVE_TO_TARGET_DISTANCE_BOUNDS[1]
     assert min(rots) >= MOVE_TO_TARGET_ROT_BOUNDS[0]
@@ -1616,10 +1592,10 @@ def test_move_to_toss_location_and_toss_samples_four_parameters():
     assert draws.shape == (50, 4)
     for column, (low, high) in enumerate(
         [
-            TOSS_TARGET_DISTANCE_BOUNDS,
-            TOSS_TARGET_ROTATION_BOUNDS,
-            TOSS_SPEED_BOUNDS,
-            TOSS_RELEASE_MS_BOUNDS,
+            MoveToTossLocationAndTossController.TARGET_DISTANCE_BOUNDS,
+            MoveToTossLocationAndTossController.TARGET_ROTATION_BOUNDS,
+            MoveToTossLocationAndTossController.SPEED_BOUNDS,
+            MoveToTossLocationAndTossController.RELEASE_MS_BOUNDS,
         ]
     ):
         assert draws[:, column].min() >= low
@@ -1756,8 +1732,8 @@ def test_move_to_toss_location_and_toss_holds_no_sub_controllers():
 
 def test_move_to_toss_location_and_toss_plans_every_phase_in_reset():
     """As pick_shelf does: a planning failure surfaces from reset rather than from the
-    middle of a throw, where a refiner would see a crash instead of a rejected sample.
-    """
+    middle of a throw, where a refiner would see a crash instead of a rejected
+    sample."""
     num_cubes = 1
     env = kinder.make(
         "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
@@ -1774,16 +1750,19 @@ def test_move_to_toss_location_and_toss_plans_every_phase_in_reset():
     )
     controller.reset(state, np.array([1.30, 0.0, TOSS_MAX_VELOCITY, 720.0]))
     # Every phase is planned before the first action is asked for.
+    # pylint: disable-next=protected-access
     assert controller._current_base_motion_plan is not None
-    assert len(controller._windup_trajectory) > 0
-    assert controller._swing is not None
+    assert len(controller._windup_trajectory) > 0  # pylint: disable=protected-access
+    assert controller._swing is not None  # pylint: disable=protected-access
     env.close()
 
 
 def test_pick_cube_plans_a_grasp_for_a_cube_resting_on_its_side():
     """pick_shelf derives the grasp from the raw rotation and finds no IK solution for
-    any of the five non-original face-down rests. Canonicalising first, all of them
-    plan."""
+    any of the five non-original face-down rests.
+
+    Canonicalising first, all of them plan.
+    """
     num_cubes = 1
     env = kinder.make(
         "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
