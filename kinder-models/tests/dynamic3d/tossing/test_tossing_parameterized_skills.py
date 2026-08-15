@@ -1489,7 +1489,8 @@ def test_pick_cube_takes_no_continuous_parameters():
     controllers = create_lifted_controllers(env.action_space)
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
-    controller = controllers["pick_cube"].ground((robot, cube))
+    barrier = state.get_object_from_name("cuboid_barrier")
+    controller = controllers["pick_cube"].ground((robot, cube, barrier))
     for seed in range(5):
         params = controller.sample_parameters(state, np.random.default_rng(seed))
         assert np.asarray(params).shape == (0,)
@@ -1520,7 +1521,8 @@ def test_pick_cube_lifts_the_cube_off_the_ground():
     controllers = create_lifted_controllers(env.action_space)
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
-    controller = controllers["pick_cube"].ground((robot, cube))
+    barrier = state.get_object_from_name("cuboid_barrier")
+    controller = controllers["pick_cube"].ground((robot, cube, barrier))
     controller.reset(
         state, controller.sample_parameters(state, np.random.default_rng(0))
     )
@@ -1547,7 +1549,8 @@ def test_pick_cube_releases_when_the_grasp_closed_on_nothing():
     controllers = create_lifted_controllers(env.action_space)
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
-    controller = controllers["pick_cube"].ground((robot, cube))
+    barrier = state.get_object_from_name("cuboid_barrier")
+    controller = controllers["pick_cube"].ground((robot, cube, barrier))
     controller.reset(
         state, controller.sample_parameters(state, np.random.default_rng(0))
     )
@@ -1579,8 +1582,9 @@ def test_move_to_toss_location_and_toss_samples_four_parameters():
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
     target_bin = state.get_object_from_name("bin_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
     controller = controllers["move_to_toss_location_and_toss"].ground(
-        (robot, target_bin, cube)
+        (robot, target_bin, cube, barrier)
     )
     draws = np.array(
         [
@@ -1617,6 +1621,7 @@ def test_pick_cube_then_move_and_toss_scores():
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
     target_bin = state.get_object_from_name("bin_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
 
     def run(controller, params):
         nonlocal state
@@ -1629,12 +1634,12 @@ def test_pick_cube_then_move_and_toss_scores():
             controller.observe(state)
         raise AssertionError("controller did not terminate")
 
-    pick = controllers["pick_cube"].ground((robot, cube))
+    pick = controllers["pick_cube"].ground((robot, cube, barrier))
     run(pick, pick.sample_parameters(state, np.random.default_rng(0)))
     assert state.get(cube, "z") > MINIMUM_HOLDING_HEIGHT
 
     toss = controllers["move_to_toss_location_and_toss"].ground(
-        (robot, target_bin, cube)
+        (robot, target_bin, cube, barrier)
     )
     run(toss, np.array([1.30, 0.0, TOSS_MAX_VELOCITY, 720.0]))
     sim = env.unwrapped._object_centric_env  # pylint: disable=protected-access
@@ -1717,8 +1722,9 @@ def test_move_to_toss_location_and_toss_holds_no_sub_controllers():
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
     target_bin = state.get_object_from_name("bin_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
     controller = controllers["move_to_toss_location_and_toss"].ground(
-        (robot, target_bin, cube)
+        (robot, target_bin, cube, barrier)
     )
     nested = [
         name
@@ -1744,8 +1750,9 @@ def test_move_to_toss_location_and_toss_plans_every_phase_in_reset():
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
     target_bin = state.get_object_from_name("bin_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
     controller = controllers["move_to_toss_location_and_toss"].ground(
-        (robot, target_bin, cube)
+        (robot, target_bin, cube, barrier)
     )
     controller.reset(state, np.array([1.30, 0.0, TOSS_MAX_VELOCITY, 720.0]))
     # Every phase is planned before the first action is asked for.
@@ -1772,7 +1779,8 @@ def test_pick_cube_plans_a_grasp_for_a_cube_resting_on_its_side():
     controllers = create_lifted_controllers(env.action_space)
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
-    controller = controllers["pick_cube"].ground((robot, cube))
+    barrier = state.get_object_from_name("cuboid_barrier")
+    controller = controllers["pick_cube"].ground((robot, cube, barrier))
 
     def rest(axis, deg):
         a = np.deg2rad(deg) / 2

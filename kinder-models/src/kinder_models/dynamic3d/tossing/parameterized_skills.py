@@ -1163,10 +1163,13 @@ def create_lifted_controllers(
 
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     cube = Variable("?cube", MujocoMovableObjectType)
+    # Unused by the controller; present so an operator can say the cube is still on
+    # this side of it, as move_to_target_from_other_target carries ?prev_target.
+    barrier = Variable("?barrier", MujocoMovableObjectType)
 
     LiftedPickCubeController: LiftedParameterizedController = (
         LiftedParameterizedController(
-            [robot, cube],
+            [robot, cube, barrier],
             PickCubeController,
         )
     )
@@ -1180,10 +1183,11 @@ def create_lifted_controllers(
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     target = Variable("?target", MujocoObjectType)
     held = Variable("?held", MujocoMovableObjectType)
+    barrier = Variable("?barrier", MujocoMovableObjectType)
 
     LiftedMoveToTossLocationAndTossController: LiftedParameterizedController = (
         LiftedParameterizedController(
-            [robot, target, held],
+            [robot, target, held, barrier],
             MoveToTossLocationAndToss,
         )
     )
