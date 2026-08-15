@@ -22,29 +22,35 @@ from relational_structs.utils import create_state_from_dict
 from spatialmath import SE2
 
 import kinder_models.dynamic3d.tossing.parameterized_skills
+from kinder_models.dynamic3d.cube_symmetry import (
+    CUBE_ROTATION_SYMMETRIES,
+    canonical_upright_rotation,
+    upright_grasp_rotations,
+)
 from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
-    CUBE_ROTATION_SYMMETRIES,
     PICK_STANDOFF_LADDER,
     THROW_POSE_TOLERANCE,
-    TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
-    TOSS_MAX_ACCELERATION,
-    TOSS_MAX_DECELERATION,
-    TOSS_MAX_VELOCITY,
-    TOSS_RELEASE_ARM_CONFIGURATION,
     TOSS_RELEASE_MS_BOUNDS,
-    TOSS_SLICES_PER_CONTROL_STEP,
     TOSS_SPEED_BOUNDS,
     TOSS_TARGET_DISTANCE_BOUNDS,
     TOSS_TARGET_ROTATION_BOUNDS,
-    TOSS_WINDUP_ARM_CONFIGURATION,
-    canonical_upright_rotation,
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,
-    plan_toss_swing,
+)
+from kinder_models.dynamic3d.tossing.toss_profile import (
+    TOSS_MAX_ACCELERATION,
+    TOSS_MAX_DECELERATION,
+    TOSS_MAX_VELOCITY,
     toss_profile_limits,
+)
+from kinder_models.dynamic3d.tossing.toss_swing import (
+    TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
+    TOSS_RELEASE_ARM_CONFIGURATION,
+    TOSS_SLICES_PER_CONTROL_STEP,
+    TOSS_WINDUP_ARM_CONFIGURATION,
+    plan_toss_swing,
     toss_swing_action,
-    upright_grasp_rotations,
 )
 from kinder_models.dynamic3d.utils import (
     _CONTROL_TIMESTEP,
@@ -1668,69 +1674,6 @@ def test_move_to_throw_pose_samples_a_pose_on_the_bin_axis():
     env.close()
 
 
-def test_toss_release_speed_default_rebuilds_the_unscaled_profile():
-    """The default must rebuild the profile the literal 140/300/200 deg/s limits give.
-
-    Asserts equality of the sampled trajectory rather than of the three limits, so a
-    refactor of how the limits reach the profile still has to keep the motion.
-    """
-    total_dist = float(
-        np.linalg.norm(TOSS_RELEASE_ARM_CONFIGURATION - TOSS_WINDUP_ARM_CONFIGURATION)
-    )
-    expected = _trapezoidal_motion_profile(
-        total_dist,
-        max_vel=np.deg2rad(140),
-        max_accel=np.deg2rad(300),
-        max_decel=np.deg2rad(200),
-        step_size=_CONTROL_TIMESTEP,
-    )
-    max_vel, max_accel, max_decel = toss_profile_limits()
-    actual = _trapezoidal_motion_profile(
-        total_dist,
-        max_vel=max_vel,
-        max_accel=max_accel,
-        max_decel=max_decel,
-        step_size=_CONTROL_TIMESTEP,
-    )
-    assert np.array_equal(actual, expected)
-
-
-def test_toss_release_speed_scales_every_limit_by_the_same_factor():
-    """A release speed is an effort scale on the whole profile, not on max_vel alone.
-
-    Scaling max_vel alone moves the release out of the cruise phase, where the
-    acceleration limits set the speed instead, so it stops tracking max_vel.
-    """
-    # The invariant is the profile's shape. Asserted a few ULP wide rather than bitwise:
-    # recovering a ratio divides a factor back out, and a/(b*c)*c need not round back.
-    shape = np.array([TOSS_MAX_ACCELERATION, TOSS_MAX_DECELERATION]) / TOSS_MAX_VELOCITY
-    for scale in (0.25, 0.5, 1.0, 1.7, 2.0, 3.0):
-        max_vel, max_accel, max_decel = toss_profile_limits(scale * TOSS_MAX_VELOCITY)
-        assert np.allclose([max_accel, max_decel] / max_vel, shape, rtol=1e-15), scale
-        assert max_vel == min(scale, 1.0) * TOSS_MAX_VELOCITY
-
-    # Proportional through the origin, not merely affine, or "twice the speed" would
-    # mean other than twice the effort. Below the clamp only; clamping is not
-    # homogeneous.
-    rng = np.random.default_rng(0)
-    for _ in range(200):
-        factor = rng.uniform(0.05, 1.0)
-        speed = rng.uniform(0.05, 1.0) * TOSS_MAX_VELOCITY
-        scaled = np.array(toss_profile_limits(factor * speed))
-        assert np.allclose(
-            scaled, factor * np.array(toss_profile_limits(speed)), rtol=1e-12
-        )
-    assert np.array_equal(np.array(toss_profile_limits(0.0)), np.zeros(3))
-
-
-def test_toss_release_speed_clamps_the_effort_to_zero_and_one():
-    """The arm's own ceiling, and no reverse swing below it."""
-    at_ceiling = toss_profile_limits(TOSS_MAX_VELOCITY)
-    assert toss_profile_limits(2.0 * TOSS_MAX_VELOCITY) == at_ceiling
-    assert toss_profile_limits(-TOSS_MAX_VELOCITY) == toss_profile_limits(0.0)
-    assert np.array_equal(np.array(toss_profile_limits(-1.0)), np.zeros(3))
-
-
 def test_toss_release_speed_raises_the_speed_the_profile_commands_at_release():
     """The point of the parameter: a higher setting must actually release faster.
 
@@ -1775,16 +1718,6 @@ def _default_speed_trajectory():
         step_size=_CONTROL_TIMESTEP,
     )
     return trajectory, s_total
-
-
-def test_gripper_release_ms_splits_into_a_control_step_and_a_slice():
-    """The parameter is absolute wall-clock milliseconds from the start of the swing.
-
-    reset() only decomposes it; nothing rounds it to a control-step boundary.
-    """
-    assert TOSS_SLICES_PER_CONTROL_STEP == 100
-    for ms, expected in [(0, (0, 0)), (723, (7, 23)), (100, (1, 0)), (2399, (23, 99))]:
-        assert divmod(ms, TOSS_SLICES_PER_CONTROL_STEP) == expected
 
 
 def test_the_default_release_ms_falls_at_fraction_046_of_the_swing():
@@ -2019,12 +1952,6 @@ def test_move_to_toss_location_and_toss_samples_four_parameters():
     env.close()
 
 
-def test_the_release_speeds_the_sampler_draws_are_never_clamped():
-    """TOSS_SPEED_BOUNDS' top edge is the clamp point, so it must pass through."""
-    for speed in np.linspace(*TOSS_SPEED_BOUNDS, 25):
-        assert np.isclose(toss_profile_limits(speed)[0], speed)
-
-
 def test_pick_cube_then_move_and_toss_scores():
     """The whole domain, end to end: two skills and no third."""
     num_cubes = 1
@@ -2061,69 +1988,6 @@ def test_pick_cube_then_move_and_toss_scores():
     sim = env.unwrapped._object_centric_env  # pylint: disable=protected-access
     assert sim._check_goals()  # pylint: disable=protected-access
     env.close()
-
-
-def _straight_swing(release_ms=TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS):
-    """A planned swing between the two demonstrated confs, without a simulator."""
-    start = list(TOSS_WINDUP_ARM_CONFIGURATION) + [0.0] * 6
-    end = list(TOSS_RELEASE_ARM_CONFIGURATION) + [0.0] * 6
-    return plan_toss_swing([end], start, TOSS_MAX_VELOCITY, release_ms)
-
-
-def test_plan_toss_swing_splits_the_release_millisecond_into_step_and_slice():
-    """The millisecond names a slice inside a control step, not a step boundary."""
-    swing = _straight_swing(release_ms=725)
-    step, slice_ = divmod(725, TOSS_SLICES_PER_CONTROL_STEP)
-    assert swing.release_step == step
-    assert swing.release_slice == slice_
-
-
-def test_plan_toss_swing_direction_is_a_unit_vector_along_the_swing():
-    """The profile carries the distance; the direction carries only the heading."""
-    swing = _straight_swing()
-    assert np.isclose(np.linalg.norm(swing.direction), 1.0)
-
-
-def test_plan_toss_swing_direction_is_zero_for_a_swing_that_does_not_move():
-    """Otherwise the unit vector is a division by zero."""
-    conf = list(TOSS_WINDUP_ARM_CONFIGURATION) + [0.0] * 6
-    swing = plan_toss_swing(
-        [conf], conf, TOSS_MAX_VELOCITY, TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS
-    )
-    assert np.allclose(swing.direction, 0.0)
-
-
-def test_toss_swing_action_holds_the_gripper_shut_before_the_release_step():
-    swing = _straight_swing()
-    action = toss_swing_action(swing, 0, [0.0] * 13, 1.0, False)
-    assert action.shape == (18,)
-    assert action[10] == 1.0
-
-
-def test_toss_swing_action_opens_the_gripper_after_the_release_step():
-    swing = _straight_swing()
-    action = toss_swing_action(swing, swing.release_step + 1, [0.0] * 13, 1.0, True)
-    assert action.shape == (18,)
-    assert action[10] == 0.0
-
-
-def test_toss_swing_action_emits_a_schedule_on_the_step_the_release_falls_inside():
-    """A (slices, 18) schedule, so the millisecond means the millisecond."""
-    swing = _straight_swing(release_ms=725)
-    assert swing.release_slice != 0
-    schedule = toss_swing_action(swing, swing.release_step, [0.0] * 13, 1.0, False)
-    assert schedule.shape == (TOSS_SLICES_PER_CONTROL_STEP, 18)
-    assert np.all(schedule[: swing.release_slice, 10] == 1.0)
-    assert np.all(schedule[swing.release_slice :, 10] == 0.0)
-
-
-def test_toss_swing_action_stays_flat_when_the_release_lands_on_a_step_boundary():
-    """No schedule is needed when no millisecond inside the step is special."""
-    swing = _straight_swing(release_ms=TOSS_SLICES_PER_CONTROL_STEP * 7)
-    assert swing.release_slice == 0
-    action = toss_swing_action(swing, swing.release_step, [0.0] * 13, 1.0, False)
-    assert action.shape == (18,)
-    assert action[10] == 0.0
 
 
 def test_open_gripper_commands_open_until_the_gripper_reads_open():
@@ -2239,56 +2103,6 @@ def test_move_to_toss_location_and_toss_plans_every_phase_in_reset():
     env.close()
 
 
-def test_there_are_twenty_four_cube_rotation_symmetries():
-    """A cube has 6 faces it can rest on, each at 4 yaws."""
-    assert len(CUBE_ROTATION_SYMMETRIES) == 24
-    seen = {tuple(np.round(q, 6)) for q in CUBE_ROTATION_SYMMETRIES}
-    assert len(seen) == 24
-
-
-def test_every_cube_symmetry_is_a_rotation():
-    """Unit quaternions, so each maps the cube onto itself without scaling it."""
-    for q in CUBE_ROTATION_SYMMETRIES:
-        assert np.isclose(np.linalg.norm(q), 1.0)
-
-
-def test_canonical_upright_rotation_flattens_every_face_down_rest():
-    """Each of the six face-down rests is the same cube, so each must canonicalise to a
-    pure yaw -- which is what makes a top-down grasp derivable from it."""
-
-    def quat(axis, deg):
-        a = np.deg2rad(deg) / 2
-        v = np.array(axis, dtype=float)
-        x, y, z = np.sin(a) * v
-        return (float(x), float(y), float(z), float(np.cos(a)))
-
-    for axis, deg in [
-        ([0, 0, 1], 0),
-        ([0, 0, 1], 90),
-        ([1, 0, 0], 90),
-        ([1, 0, 0], 180),
-        ([1, 0, 0], -90),
-        ([0, 1, 0], 90),
-        ([0, 1, 0], -90),
-        ([0, 1, 0], 180),
-    ]:
-        x, y, z, w = canonical_upright_rotation(quat(axis, deg))
-        assert abs(x) < 1e-6, (axis, deg, x)
-        assert abs(y) < 1e-6, (axis, deg, y)
-
-
-def test_canonical_upright_rotation_keeps_the_yaw():
-    """Yaw is the only real information in a cube's resting pose, so it must survive."""
-    for deg in (0.0, 30.0, 90.0, 200.0):
-        a = np.deg2rad(deg) / 2
-        q = (0.0, 0.0, float(np.sin(a)), float(np.cos(a)))
-        x, y, z, w = canonical_upright_rotation(q)
-        got = np.rad2deg(2 * np.arctan2(z, w)) % 90.0
-        assert np.isclose(got, deg % 90.0, atol=1e-4) or np.isclose(
-            got, deg % 90.0 - 90.0, atol=1e-4
-        ), (deg, got)
-
-
 def test_pick_cube_plans_a_grasp_for_a_cube_resting_on_its_side():
     """pick_shelf derives the grasp from the raw rotation and finds no IK solution for
     any of the five non-original face-down rests. Canonicalising first, all of them
@@ -2325,19 +2139,3 @@ def test_pick_cube_plans_a_grasp_for_a_cube_resting_on_its_side():
             tipped, controller.sample_parameters(tipped, np.random.default_rng(0))
         )
     env.close()
-
-
-def test_upright_grasp_rotations_offers_all_four_equivalent_yaws():
-    """Resting on a face, a cube is four-fold symmetric about the vertical, so all four
-    yaws are the same grasp -- and the arm cannot reach every one of them."""
-    a = np.deg2rad(90) / 2
-    pitched = (0.0, float(np.sin(a)), 0.0, float(np.cos(a)))
-    rotations = upright_grasp_rotations(pitched)
-    assert len(rotations) == 4
-    for x, y, _, _ in rotations:
-        assert abs(x) < 1e-6 and abs(y) < 1e-6
-    yaws = sorted(
-        round(np.rad2deg(2 * np.arctan2(z, w)) % 360.0, 3) for _, _, z, w in rotations
-    )
-    gaps = {round((b - a_) % 360.0, 3) for a_, b in zip(yaws, yaws[1:])}
-    assert gaps == {90.0}, yaws
