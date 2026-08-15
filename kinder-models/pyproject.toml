@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 dependencies = [
    "matplotlib",
    "numpy",
+   "scipy",
    "spatialmath-python",
    "h5py",
    "flask-socketio",

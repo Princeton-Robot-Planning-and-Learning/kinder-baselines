@@ -697,13 +697,6 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
         return current_gripper_pose < atol
 
 
-class PickCubeControllerPhase(enum.Enum):
-    """Grasping, or -- once a closed-on-nothing grasp is caught -- releasing."""
-
-    GRASPING = enum.auto()
-    RELEASING = enum.auto()
-
-
 class PickCubeController(PickShelfController):
     """Pick a cube up off the ground, taking no continuous parameters.
 
@@ -718,6 +711,12 @@ class PickCubeController(PickShelfController):
     shut on air.
     """
 
+    class PickCubeControllerPhase(enum.Enum):
+        """Grasping, or -- once a closed-on-nothing grasp is caught -- releasing."""
+
+        GRASPING = enum.auto()
+        RELEASING = enum.auto()
+
     # Standoffs to try in order, nominal first.
     STANDOFF_LADDER = tuple(
         (distance, rot)
@@ -727,7 +726,7 @@ class PickCubeController(PickShelfController):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._phase: PickCubeControllerPhase = PickCubeControllerPhase.GRASPING
+        self._phase = self.PickCubeControllerPhase.GRASPING
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         return np.zeros(0, dtype=np.float32)
@@ -740,7 +739,7 @@ class PickCubeController(PickShelfController):
         extend_rot_magnitude: float = np.pi / 8,
     ) -> None:
         del params
-        self._phase = PickCubeControllerPhase.GRASPING
+        self._phase = self.PickCubeControllerPhase.GRASPING
         # Grasp as if upright, not from the raw rotation (which could ask for below).
         cube = self.objects[1]
         rotations = upright_grasp_rotations(
@@ -776,11 +775,11 @@ class PickCubeController(PickShelfController):
             return False
         if self._check_grasp_successful():
             return True
-        self._phase = PickCubeControllerPhase.RELEASING
+        self._phase = self.PickCubeControllerPhase.RELEASING
         return self._check_gripper_is_open()
 
     def step(self) -> Array:
-        if self._phase is PickCubeControllerPhase.RELEASING:
+        if self._phase is self.PickCubeControllerPhase.RELEASING:
             action = np.zeros(11, dtype=np.float32)
             action[-1] = 0
             return action
@@ -794,14 +793,6 @@ class PickCubeController(PickShelfController):
         assert self._last_state is not None
         pos = self._last_state.get(self.objects[0], "pos_gripper")
         return bool(pos < GRIPPER_OPEN_COMMAND_TOLERANCE)
-
-
-class MoveToTossLocationAndTossControllerPhase(enum.Enum):
-    """Which leg of drive-then-throw step() is currently stepping."""
-
-    BASE_MOTION = enum.auto()
-    WINDUP = enum.auto()
-    SWING = enum.auto()
 
 
 class MoveToTossLocationAndTossController(
@@ -829,6 +820,13 @@ class MoveToTossLocationAndTossController(
     in reset, because it has to start from the arm conf actually reached.
     """
 
+    class MoveToTossLocationAndTossControllerPhase(enum.Enum):
+        """Which leg of drive-then-throw step() is currently stepping."""
+
+        BASE_MOTION = enum.auto()
+        WINDUP = enum.auto()
+        SWING = enum.auto()
+
     # Where a throw is possible; the upper part does not score.
     TARGET_DISTANCE_BOUNDS = (1.25, 1.45)
 
@@ -854,9 +852,7 @@ class MoveToTossLocationAndTossController(
         # The two sampled tossing dials.
         self._release_speed: float = TOSS_MAX_VELOCITY
         self._gripper_release_ms: int = TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS
-        self._phase: MoveToTossLocationAndTossControllerPhase = (
-            MoveToTossLocationAndTossControllerPhase.BASE_MOTION
-        )
+        self._phase = self.MoveToTossLocationAndTossControllerPhase.BASE_MOTION
 
         # Base motion: the drive to the toss pose.
         self._current_base_motion_plan: list[SE2] | None = None
@@ -898,12 +894,30 @@ class MoveToTossLocationAndTossController(
         self._last_state = x
         self._release_speed = float(current_params[2])
         self._gripper_release_ms = int(round(float(current_params[3])))
-        self._phase = MoveToTossLocationAndTossControllerPhase.BASE_MOTION
+        self._phase = self.MoveToTossLocationAndTossControllerPhase.BASE_MOTION
         self._windup_step_idx = 0
         self._swing = None
         self._swing_step_idx = 0
         self._has_released = False
 
+        self._current_base_motion_plan = self._plan_base_motion(
+            x,
+            current_params,
+            extend_xy_magnitude,
+            extend_rot_magnitude,
+            disable_collision_objects,
+        )
+        final_base_pose = self._current_base_motion_plan[-1]
+        self._plan_arm_toss(x, final_base_pose)
+
+    def _plan_base_motion(
+        self,
+        x: ObjectCentricState,
+        current_params: np.ndarray,
+        extend_xy_magnitude: float,
+        extend_rot_magnitude: float,
+        disable_collision_objects: list[str] | None,
+    ) -> list[SE2]:
         # The robot's own cargo would otherwise reject every base plan.
         if disable_collision_objects is None:
             disable_collision_objects = [self.objects[2].name]
@@ -922,12 +936,17 @@ class MoveToTossLocationAndTossController(
             disable_collision_objects=disable_collision_objects,
         )
         assert base_motion_plan is not None
-        self._current_base_motion_plan = base_motion_plan
+        return base_motion_plan
 
-        # Plan the arm from where the base motion will end, as pick_shelf does.
+    def _plan_arm_toss(self, x: ObjectCentricState, final_base_pose: SE2) -> None:
+        """Plan the windup and the swing, from where the base motion will end.
+
+        As pick_shelf does: planning the whole arm motion here, rather than on
+        arrival, surfaces a planning failure from reset instead of from mid-throw.
+        """
+        assert self._pybullet_sim is not None
         plan_x = x.copy()
         robot = self.objects[0]
-        final_base_pose = base_motion_plan[-1]
         plan_x.set(robot, "pos_base_x", final_base_pose.x)
         plan_x.set(robot, "pos_base_y", final_base_pose.y)
         plan_x.set(robot, "pos_base_rot", final_base_pose.theta())
@@ -976,9 +995,9 @@ class MoveToTossLocationAndTossController(
 
     def step(self) -> Array:
         assert self._current_base_motion_plan is not None
-        if self._phase is MoveToTossLocationAndTossControllerPhase.BASE_MOTION:
+        if self._phase is self.MoveToTossLocationAndTossControllerPhase.BASE_MOTION:
             return self._action_base_motion()
-        if self._phase is MoveToTossLocationAndTossControllerPhase.WINDUP:
+        if self._phase is self.MoveToTossLocationAndTossControllerPhase.WINDUP:
             return self._action_windup()
         return self._action_swing()
 
@@ -993,7 +1012,7 @@ class MoveToTossLocationAndTossController(
                 self._current_base_motion_plan.pop(0)
             break
         if self._check_robot_is_close_to_pose(self._current_base_motion_plan[-1]):
-            self._phase = MoveToTossLocationAndTossControllerPhase.WINDUP
+            self._phase = self.MoveToTossLocationAndTossControllerPhase.WINDUP
         robot_pose = self._get_current_robot_pose()
         next_pose = self._current_base_motion_plan[0]
         action = np.zeros(11, dtype=np.float32)
@@ -1022,7 +1041,7 @@ class MoveToTossLocationAndTossController(
         action[10] = self._get_current_robot_gripper_pose()
         self._windup_step_idx += 1
         if self._windup_step_idx >= len(self._windup_trajectory):
-            self._phase = MoveToTossLocationAndTossControllerPhase.SWING
+            self._phase = self.MoveToTossLocationAndTossControllerPhase.SWING
         return action
 
     def _action_swing(self) -> Array:
