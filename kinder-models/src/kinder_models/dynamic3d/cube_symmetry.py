@@ -1,8 +1,8 @@
 """The rotations that map a cube onto itself, and what follows from them.
 
 A cube resting on any of its faces is the same cube in the same place, so its roll and
-pitch carry no information and only its yaw does. Anything deriving a grasp or a
-resting test from a cube's measured rotation has to say so explicitly, or it ends up
+pitch carry no information and only its yaw does. Anything deriving a grasp or a resting
+test from a cube's measured rotation has to say so explicitly, or it ends up
 distinguishing poses that are physically identical.
 """
 

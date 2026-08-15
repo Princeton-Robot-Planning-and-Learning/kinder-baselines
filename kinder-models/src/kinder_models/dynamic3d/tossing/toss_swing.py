@@ -1,8 +1,8 @@
 """How hard a toss is thrown, and the swing itself.
 
 Plain functions over a motion plan rather than controller methods, so the release
-schedule can be tested without a simulator and so every toss is timed the same way.
-The limits are hand-tuned for throwing rather than derived from the arm's own, and are
+schedule can be tested without a simulator and so every toss is timed the same way. The
+limits are hand-tuned for throwing rather than derived from the arm's own, and are
 demonstrated on the real TidyBot (`yixuanhuang98/tidybot_real`, `robot/kinova.py`).
 """
 
@@ -53,8 +53,8 @@ def toss_swing_action(
 ) -> Array:
     """The swing's command for one control step, opening the gripper mid-step.
 
-    The usual (18,) action, except on the step the release falls inside, which returns
-    a (TOSS_SLICES_PER_CONTROL_STEP, 18) schedule so gripper_release_ms means the
+    The usual (18,) action, except on the step the release falls inside, which returns a
+    (TOSS_SLICES_PER_CONTROL_STEP, 18) schedule so gripper_release_ms means the
     millisecond it names rather than the next step boundary.
     """
     action = np.zeros(18, dtype=np.float32)

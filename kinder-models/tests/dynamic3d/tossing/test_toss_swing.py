@@ -2,7 +2,9 @@
 
 import numpy as np
 
-from kinder_models.dynamic3d.tossing.parameterized_skills import TOSS_SPEED_BOUNDS
+from kinder_models.dynamic3d.tossing.parameterized_skills import (
+    MoveToTossLocationAndTossController,
+)
 from kinder_models.dynamic3d.tossing.toss_swing import (
     TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
     TOSS_MAX_ACCELERATION,
@@ -49,6 +51,7 @@ def test_plan_toss_swing_direction_is_zero_for_a_swing_that_does_not_move():
 
 
 def test_toss_swing_action_holds_the_gripper_shut_before_the_release_step():
+    """Before the release step, the gripper command still matches the caller's own."""
     swing = _straight_swing()
     action = toss_swing_action(swing, 0, [0.0] * 13, 1.0, False)
     assert action.shape == (18,)
@@ -56,6 +59,7 @@ def test_toss_swing_action_holds_the_gripper_shut_before_the_release_step():
 
 
 def test_toss_swing_action_opens_the_gripper_after_the_release_step():
+    """Once has_released is set, the gripper stays open regardless of step_idx."""
     swing = _straight_swing()
     action = toss_swing_action(swing, swing.release_step + 1, [0.0] * 13, 1.0, True)
     assert action.shape == (18,)
@@ -155,6 +159,6 @@ def test_toss_release_speed_clamps_the_effort_to_zero_and_one():
 
 
 def test_the_release_speeds_the_sampler_draws_are_never_clamped():
-    """TOSS_SPEED_BOUNDS' top edge is the clamp point, so it must pass through."""
-    for speed in np.linspace(*TOSS_SPEED_BOUNDS, 25):
+    """SPEED_BOUNDS' top edge is the clamp point, so it must pass through."""
+    for speed in np.linspace(*MoveToTossLocationAndTossController.SPEED_BOUNDS, 25):
         assert np.isclose(toss_profile_limits(speed)[0], speed)

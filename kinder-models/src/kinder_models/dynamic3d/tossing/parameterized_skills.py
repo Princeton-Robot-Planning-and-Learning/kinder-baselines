@@ -60,25 +60,6 @@ from kinder_models.dynamic3d.utils import (
     run_base_motion_planning,
 )
 
-# Where a throw is possible; the upper part does not score.
-TOSS_TARGET_DISTANCE_BOUNDS = (1.25, 1.45)
-
-# Wider than WAYPOINT_TOLERANCE: the sampler already spends half of it off-axis.
-THROW_POSE_TOLERANCE = 2 * WAYPOINT_TOLERANCE
-
-# The widest rotation that still spends only half of WAYPOINT_TOLERANCE off the bin
-# axis at the furthest standoff. Derived, so retuning either cannot invalidate it.
-TOSS_MAX_TARGET_ROTATION = float(
-    np.arcsin(0.5 * WAYPOINT_TOLERANCE / TOSS_TARGET_DISTANCE_BOUNDS[1])
-)
-TOSS_TARGET_ROTATION_BOUNDS = (-TOSS_MAX_TARGET_ROTATION, TOSS_MAX_TARGET_ROTATION)
-
-# The two dials TossController already takes, opened up as sampled parameters. The
-# speed tops out at the profile's own clamp; the millisecond window is centred on the
-# demonstrated default.
-TOSS_SPEED_BOUNDS = (np.deg2rad(60.0), TOSS_MAX_VELOCITY)
-TOSS_RELEASE_MS_BOUNDS = (600.0, 840.0)
-
 
 class MoveToTargetGroundController(
     GroundParameterizedController[ObjectCentricState, Array]
@@ -713,15 +694,6 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
         return current_gripper_pose < atol
 
 
-# Pick standoffs to try in order, nominal first, spanning what the shelf pick used to
-# sample. Fixed rather than drawn, so the skill takes no continuous parameters.
-PICK_STANDOFF_LADDER = tuple(
-    (distance, rot)
-    for rot in (0.0, np.pi / 8, -np.pi / 8, np.pi / 4, -np.pi / 4)
-    for distance in (0.55, 0.5, 0.6)
-)
-
-
 class PickCubeController(PickShelfController):
     """Pick a cube up off the ground, taking no continuous parameters.
 
@@ -729,12 +701,20 @@ class PickCubeController(PickShelfController):
         robot: The robot itself.
         cube: The cube to pick up.
 
-    Where to stand is derived rather than sampled: PICK_STANDOFF_LADDER is walked from
-    the nominal pose outwards until one plans, so a caller cannot draw an unreachable
-    pose and there is nothing for a refiner to backtrack over. A grasp that closes on
+    Where to stand is derived rather than sampled: STANDOFF_LADDER is walked from the
+    nominal pose outwards until one plans, so a caller cannot draw an unreachable pose
+    and there is nothing for a refiner to backtrack over. A grasp that closes on
     nothing releases before terminating, leaving the hand empty rather than commanded
     shut on air.
     """
+
+    # Standoffs to try in order, nominal first, spanning what the shelf pick used to
+    # sample. Fixed rather than drawn, so the skill takes no continuous parameters.
+    STANDOFF_LADDER = tuple(
+        (distance, rot)
+        for rot in (0.0, np.pi / 8, -np.pi / 8, np.pi / 4, -np.pi / 4)
+        for distance in (0.55, 0.5, 0.6)
+    )
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -768,7 +748,7 @@ class PickCubeController(PickShelfController):
             upright = x.copy()
             for feature, value in zip(("qx", "qy", "qz", "qw"), rotation):
                 upright.set(cube, feature, value)
-            for distance, rot in PICK_STANDOFF_LADDER:
+            for distance, rot in self.STANDOFF_LADDER:
                 try:
                     super().reset(
                         upright,
@@ -781,7 +761,7 @@ class PickCubeController(PickShelfController):
                     continue
         raise ValueError(
             f"no reachable pick pose among {len(rotations)} grasp rotations "
-            f"x {len(PICK_STANDOFF_LADDER)} standoffs"
+            f"x {len(self.STANDOFF_LADDER)} standoffs"
         )
 
     def terminated(self) -> bool:
@@ -834,6 +814,22 @@ class MoveToTossLocationAndTossController(
     reset, because it has to start from the arm conf actually reached.
     """
 
+    # Where a throw is possible; the upper part does not score.
+    TARGET_DISTANCE_BOUNDS = (1.25, 1.45)
+
+    # The widest rotation that still spends only half of WAYPOINT_TOLERANCE off the bin
+    # axis at the furthest standoff. Derived, so retuning either cannot invalidate it.
+    MAX_TARGET_ROTATION = float(
+        np.arcsin(0.5 * WAYPOINT_TOLERANCE / TARGET_DISTANCE_BOUNDS[1])
+    )
+    TARGET_ROTATION_BOUNDS = (-MAX_TARGET_ROTATION, MAX_TARGET_ROTATION)
+
+    # The two dials TossController already takes, opened up as sampled parameters. The
+    # speed tops out at the profile's own clamp; the millisecond window is centred on
+    # the demonstrated default.
+    SPEED_BOUNDS = (np.deg2rad(60.0), TOSS_MAX_VELOCITY)
+    RELEASE_MS_BOUNDS = (600.0, 840.0)
+
     def __init__(
         self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
     ) -> None:
@@ -869,10 +865,10 @@ class MoveToTossLocationAndTossController(
         del x  # not used
         return np.array(
             [
-                rng.uniform(*TOSS_TARGET_DISTANCE_BOUNDS),
-                rng.uniform(*TOSS_TARGET_ROTATION_BOUNDS),
-                rng.uniform(*TOSS_SPEED_BOUNDS),
-                rng.uniform(*TOSS_RELEASE_MS_BOUNDS),
+                rng.uniform(*self.TARGET_DISTANCE_BOUNDS),
+                rng.uniform(*self.TARGET_ROTATION_BOUNDS),
+                rng.uniform(*self.SPEED_BOUNDS),
+                rng.uniform(*self.RELEASE_MS_BOUNDS),
             ]
         )
 
