@@ -24,6 +24,7 @@ from spatialmath import SE2
 import kinder_models.dynamic3d.tossing.parameterized_skills
 from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
+    CUBE_ROTATION_SYMMETRIES,
     PICK_STANDOFF_LADDER,
     THROW_POSE_TOLERANCE,
     TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
@@ -37,11 +38,13 @@ from kinder_models.dynamic3d.tossing.parameterized_skills import (
     TOSS_TARGET_DISTANCE_BOUNDS,
     TOSS_TARGET_ROTATION_BOUNDS,
     TOSS_WINDUP_ARM_CONFIGURATION,
+    canonical_upright_rotation,
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,
     plan_toss_swing,
     toss_profile_limits,
     toss_swing_action,
+    upright_grasp_rotations,
 )
 from kinder_models.dynamic3d.utils import (
     _CONTROL_TIMESTEP,
@@ -2234,3 +2237,107 @@ def test_move_to_toss_location_and_toss_plans_every_phase_in_reset():
     assert len(controller._windup_trajectory) > 0
     assert controller._swing is not None
     env.close()
+
+
+def test_there_are_twenty_four_cube_rotation_symmetries():
+    """A cube has 6 faces it can rest on, each at 4 yaws."""
+    assert len(CUBE_ROTATION_SYMMETRIES) == 24
+    seen = {tuple(np.round(q, 6)) for q in CUBE_ROTATION_SYMMETRIES}
+    assert len(seen) == 24
+
+
+def test_every_cube_symmetry_is_a_rotation():
+    """Unit quaternions, so each maps the cube onto itself without scaling it."""
+    for q in CUBE_ROTATION_SYMMETRIES:
+        assert np.isclose(np.linalg.norm(q), 1.0)
+
+
+def test_canonical_upright_rotation_flattens_every_face_down_rest():
+    """Each of the six face-down rests is the same cube, so each must canonicalise to a
+    pure yaw -- which is what makes a top-down grasp derivable from it."""
+
+    def quat(axis, deg):
+        a = np.deg2rad(deg) / 2
+        v = np.array(axis, dtype=float)
+        x, y, z = np.sin(a) * v
+        return (float(x), float(y), float(z), float(np.cos(a)))
+
+    for axis, deg in [
+        ([0, 0, 1], 0),
+        ([0, 0, 1], 90),
+        ([1, 0, 0], 90),
+        ([1, 0, 0], 180),
+        ([1, 0, 0], -90),
+        ([0, 1, 0], 90),
+        ([0, 1, 0], -90),
+        ([0, 1, 0], 180),
+    ]:
+        x, y, z, w = canonical_upright_rotation(quat(axis, deg))
+        assert abs(x) < 1e-6, (axis, deg, x)
+        assert abs(y) < 1e-6, (axis, deg, y)
+
+
+def test_canonical_upright_rotation_keeps_the_yaw():
+    """Yaw is the only real information in a cube's resting pose, so it must survive."""
+    for deg in (0.0, 30.0, 90.0, 200.0):
+        a = np.deg2rad(deg) / 2
+        q = (0.0, 0.0, float(np.sin(a)), float(np.cos(a)))
+        x, y, z, w = canonical_upright_rotation(q)
+        got = np.rad2deg(2 * np.arctan2(z, w)) % 90.0
+        assert np.isclose(got, deg % 90.0, atol=1e-4) or np.isclose(
+            got, deg % 90.0 - 90.0, atol=1e-4
+        ), (deg, got)
+
+
+def test_pick_cube_plans_a_grasp_for_a_cube_resting_on_its_side():
+    """pick_shelf derives the grasp from the raw rotation and finds no IK solution for
+    any of the five non-original face-down rests. Canonicalising first, all of them
+    plan."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    controller = controllers["pick_cube"].ground((robot, cube))
+
+    def rest(axis, deg):
+        a = np.deg2rad(deg) / 2
+        vec = np.array(axis, dtype=float)
+        return tuple(float(v) for v in np.sin(a) * vec) + (float(np.cos(a)),)
+
+    for axis, deg in [
+        ([1, 0, 0], 90),
+        ([1, 0, 0], 180),
+        ([1, 0, 0], -90),
+        ([0, 1, 0], 90),
+        ([0, 1, 0], -90),
+    ]:
+        tipped = state.copy()
+        for feature, value in zip(("qx", "qy", "qz", "qw"), rest(axis, deg)):
+            tipped.set(cube, feature, value)
+        # Raises if no candidate in the ladder plans.
+        controller.reset(
+            tipped, controller.sample_parameters(tipped, np.random.default_rng(0))
+        )
+    env.close()
+
+
+def test_upright_grasp_rotations_offers_all_four_equivalent_yaws():
+    """Resting on a face, a cube is four-fold symmetric about the vertical, so all four
+    yaws are the same grasp -- and the arm cannot reach every one of them."""
+    a = np.deg2rad(90) / 2
+    pitched = (0.0, float(np.sin(a)), 0.0, float(np.cos(a)))
+    rotations = upright_grasp_rotations(pitched)
+    assert len(rotations) == 4
+    for x, y, _, _ in rotations:
+        assert abs(x) < 1e-6 and abs(y) < 1e-6
+    yaws = sorted(
+        round(np.rad2deg(2 * np.arctan2(z, w)) % 360.0, 3) for _, _, z, w in rotations
+    )
+    gaps = {round((b - a_) % 360.0, 3) for a_, b in zip(yaws, yaws[1:])}
+    assert gaps == {90.0}, yaws

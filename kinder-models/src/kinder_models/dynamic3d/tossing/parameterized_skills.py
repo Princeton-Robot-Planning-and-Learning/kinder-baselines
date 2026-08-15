@@ -957,6 +957,97 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
         return current_gripper_pose < atol
 
 
+def _quaternion_product(
+    left: tuple[float, float, float, float],
+    right: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    """Hamilton product of two (x, y, z, w) quaternions."""
+    x1, y1, z1, w1 = left
+    x2, y2, z2, w2 = right
+    return (
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+    )
+
+
+def _cube_rotation_symmetries() -> tuple[tuple[float, float, float, float], ...]:
+    """The 24 rotations mapping a cube onto itself: 6 faces down, each at 4 yaws.
+
+    Closed under composition from the three quarter-turns, which is the definition
+    rather than a listing that could be mistyped.
+    """
+    half = np.sqrt(0.5)
+    generators = [
+        (half, 0.0, 0.0, half),
+        (0.0, half, 0.0, half),
+        (0.0, 0.0, half, half),
+    ]
+
+    def canonical(q: tuple[float, float, float, float]) -> tuple[float, ...]:
+        # q and -q are the same rotation; pick one so the set dedupes.
+        rounded = tuple(0.0 + round(v, 6) for v in q)
+        for value in rounded:
+            if value > 1e-9:
+                return rounded
+            if value < -1e-9:
+                return tuple(-v + 0.0 for v in rounded)
+        return rounded
+
+    found = {canonical((0.0, 0.0, 0.0, 1.0)): (0.0, 0.0, 0.0, 1.0)}
+    frontier = [(0.0, 0.0, 0.0, 1.0)]
+    while frontier:
+        current = frontier.pop()
+        for generator in generators:
+            product = _quaternion_product(current, generator)
+            key = canonical(product)
+            if key not in found:
+                found[key] = (
+                    float(key[0]),
+                    float(key[1]),
+                    float(key[2]),
+                    float(key[3]),
+                )
+                frontier.append(product)
+    return tuple(found.values())
+
+
+CUBE_ROTATION_SYMMETRIES = _cube_rotation_symmetries()
+
+
+def upright_grasp_rotations(
+    rotation: tuple[float, float, float, float],
+) -> tuple[tuple[float, float, float, float], ...]:
+    """Every upright rotation the cube could equally be grasped at, nearest yaw first.
+
+    A cube resting on any face is the same cube, so its roll and pitch carry no
+    information -- deriving a grasp from them asks the gripper to approach along
+    whichever face happens to be up, from underneath the floor for a cube on its top.
+    Resting on a face it is also four-fold symmetric about the vertical, so all four
+    yaws are the same grasp and a caller can fall through when the arm cannot reach one.
+    """
+    best_tilt = np.inf
+    yaw = 0.0
+    for symmetry in CUBE_ROTATION_SYMMETRIES:
+        x, y, z, w = _quaternion_product(rotation, symmetry)
+        tilt = x * x + y * y
+        if tilt < best_tilt - 1e-12:
+            best_tilt = tilt
+            yaw = float(np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
+    return tuple(
+        (0.0, 0.0, float(np.sin(angle / 2)), float(np.cos(angle / 2)))
+        for angle in (yaw, yaw + np.pi / 2, yaw - np.pi / 2, yaw + np.pi)
+    )
+
+
+def canonical_upright_rotation(
+    rotation: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    """The nearest upright rotation, the first of upright_grasp_rotations."""
+    return upright_grasp_rotations(rotation)[0]
+
+
 # Pick standoffs to try in order, nominal first, spanning what the shelf pick used to
 # sample. Fixed rather than drawn, so the skill takes no continuous parameters.
 PICK_STANDOFF_LADDER = tuple(
@@ -996,19 +1087,36 @@ class PickCubeController(PickShelfController):
     ) -> None:
         del params
         self._releasing = False
-        for distance, rot in PICK_STANDOFF_LADDER:
-            try:
-                super().reset(
-                    x,
-                    np.array([distance, rot]),
-                    extend_xy_magnitude=extend_xy_magnitude,
-                    extend_rot_magnitude=extend_rot_magnitude,
-                )
-                return
-            except (AssertionError, ValueError, RuntimeError):
-                continue
+        # Grasp the cube as if it were upright. Every face-down rest is the same cube,
+        # so the raw rotation only tells the grasp which face happens to be up -- and
+        # for a cube resting on its top that asks the gripper to come from below.
+        cube = self.objects[1]
+        rotations = upright_grasp_rotations(
+            (
+                x.get(cube, "qx"),
+                x.get(cube, "qy"),
+                x.get(cube, "qz"),
+                x.get(cube, "qw"),
+            )
+        )
+        for rotation in rotations:
+            upright = x.copy()
+            for feature, value in zip(("qx", "qy", "qz", "qw"), rotation):
+                upright.set(cube, feature, value)
+            for distance, rot in PICK_STANDOFF_LADDER:
+                try:
+                    super().reset(
+                        upright,
+                        np.array([distance, rot]),
+                        extend_xy_magnitude=extend_xy_magnitude,
+                        extend_rot_magnitude=extend_rot_magnitude,
+                    )
+                    return
+                except (AssertionError, ValueError, RuntimeError):
+                    continue
         raise ValueError(
-            f"no reachable pick pose among {len(PICK_STANDOFF_LADDER)} candidates"
+            f"no reachable pick pose among {len(rotations)} grasp rotations "
+            f"x {len(PICK_STANDOFF_LADDER)} standoffs"
         )
 
     def terminated(self) -> bool:
