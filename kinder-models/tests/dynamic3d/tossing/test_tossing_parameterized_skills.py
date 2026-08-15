@@ -39,7 +39,6 @@ from kinder_models.dynamic3d.utils import (
     _CONTROL_TIMESTEP,
     MINIMUM_HOLDING_HEIGHT,
     MOVE_TO_TARGET_DISTANCE_BOUNDS,
-    MOVE_TO_TARGET_ROT_BOUNDS,
     _trapezoidal_motion_profile,
 )
 
@@ -1497,16 +1496,16 @@ def test_pick_cube_takes_no_continuous_parameters():
     env.close()
 
 
-def test_pick_cube_walks_the_ladder_from_the_nominal_pose():
-    """The first candidate is the nominal one, and every candidate is in the range the
-    shelf pick used to sample."""
-    assert PickCubeController.STANDOFF_LADDER[0] == (0.55, 0.0)
-    distances = [d for d, _ in PickCubeController.STANDOFF_LADDER]
-    rots = [r for _, r in PickCubeController.STANDOFF_LADDER]
-    assert min(distances) >= MOVE_TO_TARGET_DISTANCE_BOUNDS[0]
-    assert max(distances) <= MOVE_TO_TARGET_DISTANCE_BOUNDS[1]
-    assert min(rots) >= MOVE_TO_TARGET_ROT_BOUNDS[0]
-    assert max(rots) <= MOVE_TO_TARGET_ROT_BOUNDS[1]
+def test_pick_cube_stands_head_on_within_the_shelf_picks_reach():
+    """No rotation offset from the cube's own facing, at a distance the shelf pick used
+    to sample -- not a range, since the pick zone has nothing to route around."""
+    distance, rot = PickCubeController.STANDOFF
+    assert rot == 0.0
+    assert (
+        MOVE_TO_TARGET_DISTANCE_BOUNDS[0]
+        <= distance
+        <= MOVE_TO_TARGET_DISTANCE_BOUNDS[1]
+    )
 
 
 def test_pick_cube_lifts_the_cube_off_the_ground():

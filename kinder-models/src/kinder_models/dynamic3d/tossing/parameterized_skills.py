@@ -704,11 +704,10 @@ class PickCubeController(PickShelfController):
         robot: The robot itself.
         cube: The cube to pick up.
 
-    Where to stand is derived rather than sampled: STANDOFF_LADDER is walked from the
-    nominal pose outwards until one plans, so a caller cannot draw an unreachable pose
-    and there is nothing for a refiner to backtrack over. A grasp that closes on
-    nothing releases before terminating, leaving the hand empty rather than commanded
-    shut on air.
+    Where to stand is derived rather than sampled: head-on, at a distance within the
+    arm's reach, so a caller cannot draw an unreachable pose and there is nothing for
+    a refiner to backtrack over. A grasp that closes on nothing releases before
+    terminating, leaving the hand empty rather than commanded shut on air.
     """
 
     class PickCubeControllerPhase(enum.Enum):
@@ -717,12 +716,10 @@ class PickCubeController(PickShelfController):
         GRASPING = enum.auto()
         RELEASING = enum.auto()
 
-    # Standoffs to try in order, nominal first.
-    STANDOFF_LADDER = tuple(
-        (distance, rot)
-        for rot in (0.0, np.pi / 8, -np.pi / 8, np.pi / 4, -np.pi / 4)
-        for distance in (0.55, 0.5, 0.6)
-    )
+    # Directly along the cube's own facing (no rotation offset), at a distance within
+    # the arm's reach. Not searched: the pick zone has no obstacles to route around,
+    # so a failure here is a real planning failure, not a standoff worth retrying.
+    STANDOFF = (0.55, 0.0)
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -754,20 +751,18 @@ class PickCubeController(PickShelfController):
             upright = x.copy()
             for feature, value in zip(("qx", "qy", "qz", "qw"), rotation):
                 upright.set(cube, feature, value)
-            for distance, rot in self.STANDOFF_LADDER:
-                try:
-                    super().reset(
-                        upright,
-                        np.array([distance, rot]),
-                        extend_xy_magnitude=extend_xy_magnitude,
-                        extend_rot_magnitude=extend_rot_magnitude,
-                    )
-                    return
-                except (AssertionError, ValueError, RuntimeError):
-                    continue
+            try:
+                super().reset(
+                    upright,
+                    np.array(self.STANDOFF),
+                    extend_xy_magnitude=extend_xy_magnitude,
+                    extend_rot_magnitude=extend_rot_magnitude,
+                )
+                return
+            except (AssertionError, ValueError, RuntimeError):
+                continue
         raise ValueError(
-            f"no reachable pick pose among {len(rotations)} grasp rotations "
-            f"x {len(self.STANDOFF_LADDER)} standoffs"
+            f"no reachable pick pose among {len(rotations)} grasp rotations"
         )
 
     def terminated(self) -> bool:
