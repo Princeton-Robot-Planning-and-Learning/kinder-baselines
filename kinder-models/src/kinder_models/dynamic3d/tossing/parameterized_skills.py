@@ -8,6 +8,9 @@ from bilevel_planning.structs import (
     GroundParameterizedController,
     LiftedParameterizedController,
 )
+from bilevel_planning.trajectory_samplers.trajectory_sampler import (
+    TrajectorySamplingFailure,
+)
 from kinder.envs.dynamic3d.object_types import (
     MujocoMovableObjectType,
     MujocoObjectType,
@@ -761,7 +764,7 @@ class PickCubeController(PickShelfController):
                 return
             except (AssertionError, ValueError, RuntimeError):
                 continue
-        raise ValueError(
+        raise TrajectorySamplingFailure(
             f"no reachable pick pose among {len(rotations)} grasp rotations"
         )
 
@@ -930,7 +933,8 @@ class MoveToTossLocationAndTossController(
             extend_rot_magnitude=extend_rot_magnitude,
             disable_collision_objects=disable_collision_objects,
         )
-        assert base_motion_plan is not None
+        if base_motion_plan is None:
+            raise TrajectorySamplingFailure("Base motion planning failed")
         return base_motion_plan
 
     def _plan_arm_toss(self, x: ObjectCentricState, final_base_pose: SE2) -> None:
@@ -954,7 +958,8 @@ class MoveToTossLocationAndTossController(
             seed=0,
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
-        assert windup_plan is not None, "Motion planning failed"
+        if windup_plan is None:
+            raise TrajectorySamplingFailure("Motion planning failed")
         windup_start = np.array(self._get_current_robot_arm_conf()[:7])
         self._windup_trajectory, self._windup_dir = _compute_per_joint_profile(
             windup_start,
@@ -975,7 +980,8 @@ class MoveToTossLocationAndTossController(
             seed=0,
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
-        assert swing_plan is not None, "Motion planning failed"
+        if swing_plan is None:
+            raise TrajectorySamplingFailure("Motion planning failed")
         self._swing = plan_toss_swing(
             swing_plan,
             windup_plan[-1],
