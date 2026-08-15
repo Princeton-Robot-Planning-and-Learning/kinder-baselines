@@ -1,14 +1,11 @@
 """Parameterized skills for the TidyBot3D tossing environment."""
 
-from typing import Any, NamedTuple
+from typing import Any
 
 import numpy as np
 from bilevel_planning.structs import (
     GroundParameterizedController,
     LiftedParameterizedController,
-)
-from kinder.envs.dynamic3d.mujoco_utils import (
-    CONTROL_SCHEDULE_TIMESTEP,
 )
 from kinder.envs.dynamic3d.object_types import (
     MujocoMovableObjectType,
@@ -34,7 +31,17 @@ from relational_structs import (
 )
 from spatialmath import SE2
 
+from kinder_models.dynamic3d.cube_symmetry import upright_grasp_rotations
 from kinder_models.dynamic3d.shelf.parameterized_skills import PickShelfController
+from kinder_models.dynamic3d.tossing.toss_profile import TOSS_MAX_VELOCITY
+from kinder_models.dynamic3d.tossing.toss_swing import (
+    TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
+    TOSS_RELEASE_ARM_CONFIGURATION,
+    TOSS_WINDUP_ARM_CONFIGURATION,
+    TossSwing,
+    plan_toss_swing,
+    toss_swing_action,
+)
 from kinder_models.dynamic3d.utils import (
     _ARM_MAX_ACCELERATION,
     _ARM_MAX_VELOCITY,
@@ -48,31 +55,10 @@ from kinder_models.dynamic3d.utils import (
     WORLD_Y_BOUNDS,
     PyBulletSim,
     _compute_per_joint_profile,
-    _trapezoidal_motion_profile,
     get_overhead_object_se2_pose,
     get_target_robot_pose_from_parameters,
     run_base_motion_planning,
 )
-
-# Wind up and back, then swing forward and release.
-TOSS_WINDUP_ARM_CONFIGURATION = np.deg2rad(
-    [0.0, 50.0, 180.0, -110.0, 0.0, -100.0, 90.0]
-)
-TOSS_RELEASE_ARM_CONFIGURATION = np.deg2rad([0.0, 20.0, 180.0, -35.0, 0.0, 25.0, 90.0])
-
-# Deliberately over-driving _ARM_MAX_VELOCITY: a toss throws hard on purpose.
-TOSS_MAX_VELOCITY = np.deg2rad(140.0)
-TOSS_MAX_ACCELERATION = np.deg2rad(300.0)
-TOSS_MAX_DECELERATION = np.deg2rad(200.0)
-
-
-# 1 ms, matching the real robot's 1 kHz servo loop.
-TOSS_SLICES_PER_CONTROL_STEP = int(round(_CONTROL_TIMESTEP / CONTROL_SCHEDULE_TIMESTEP))
-
-# Milliseconds from the start of the swing, as movej_primitive.execute() takes.
-# Re-derive by running the swing, not by recomputing from the confs.
-TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS = 720
-
 
 # Where a throw is possible; the upper part does not score.
 TOSS_TARGET_DISTANCE_BOUNDS = (1.25, 1.45)
@@ -92,110 +78,6 @@ TOSS_TARGET_ROTATION_BOUNDS = (-TOSS_MAX_TARGET_ROTATION, TOSS_MAX_TARGET_ROTATI
 # demonstrated default.
 TOSS_SPEED_BOUNDS = (np.deg2rad(60.0), TOSS_MAX_VELOCITY)
 TOSS_RELEASE_MS_BOUNDS = (600.0, 840.0)
-
-
-def toss_profile_limits(
-    release_speed: float = TOSS_MAX_VELOCITY,
-) -> tuple[float, float, float]:
-    """The (max_vel, max_accel, max_decel) triple a toss at release_speed is timed by.
-
-    One factor on all three, so this is an effort and not a speed cap: raising max_vel
-    alone turns the profile triangular and moves the release into the acceleration
-    phase. Clamped at 1, the real arm's own ceiling.
-    """
-    effort = min(max(release_speed / TOSS_MAX_VELOCITY, 0.0), 1.0)
-    return (
-        TOSS_MAX_VELOCITY * effort,
-        TOSS_MAX_ACCELERATION * effort,
-        TOSS_MAX_DECELERATION * effort,
-    )
-
-
-class TossSwing(NamedTuple):
-    """A planned swing: where the arm goes, and when the gripper opens."""
-
-    trajectory: np.ndarray
-    direction: np.ndarray
-    start_joint_angles: np.ndarray
-    release_step: int
-    release_slice: int
-
-
-def plan_toss_swing(
-    joint_plan: list[JointPositions],
-    current_joint_angles: JointPositions,
-    release_speed: float,
-    gripper_release_ms: int,
-) -> TossSwing:
-    """Time a motion plan as a toss, and fix the millisecond the gripper opens on.
-
-    gripper_release_ms is deliberately NOT clamped to the swing's duration: a value at
-    or past the end means the gripper never opens and the cube is never thrown.
-    """
-    dq = np.subtract(joint_plan[-1], current_joint_angles)[:7]
-    s_total = float(np.linalg.norm(dq))
-    # Not the real robot's controller: the parameter space matches, the trajectory does
-    # not. Do not align this with the _compute_per_joint_profile siblings.
-    direction = dq / s_total if s_total > 1e-4 else np.zeros(7)
-    max_vel, max_accel, max_decel = toss_profile_limits(release_speed)
-    trajectory = _trapezoidal_motion_profile(
-        s_total,
-        max_vel=max_vel,
-        max_accel=max_accel,
-        max_decel=max_decel,
-        step_size=_CONTROL_TIMESTEP,
-    )
-    release_step, release_slice = divmod(
-        int(gripper_release_ms), TOSS_SLICES_PER_CONTROL_STEP
-    )
-    return TossSwing(
-        trajectory,
-        direction,
-        np.array(current_joint_angles[:7]),
-        release_step,
-        release_slice,
-    )
-
-
-def toss_swing_action(
-    swing: TossSwing,
-    step_idx: int,
-    current_joint_angles: JointPositions,
-    gripper_pose: float,
-    has_released: bool,
-) -> Array:
-    """The swing's command for one control step, opening the gripper mid-step.
-
-    The usual (18,) action, except on the step the release falls inside, which returns
-    a (TOSS_SLICES_PER_CONTROL_STEP, 18) schedule so gripper_release_ms means the
-    millisecond it names rather than the next step boundary.
-    """
-    action = np.zeros(18, dtype=np.float32)
-    idx = min(step_idx, len(swing.trajectory) - 1)
-    s = float(swing.trajectory[idx])
-    if idx > 0:
-        ds = (swing.trajectory[idx] - swing.trajectory[idx - 1]) / _CONTROL_TIMESTEP
-    else:
-        ds = 0.0
-    kp = 2.0
-    kv = 2.0
-    target_joint_angles = swing.start_joint_angles + swing.direction * s
-    action[3:10] = kp * (target_joint_angles - np.array(current_joint_angles[:7]))
-    action[11:18] = swing.direction * (ds * kv)
-
-    if has_released or step_idx > swing.release_step:
-        action[10] = 0.0
-        return action
-    if step_idx != swing.release_step:
-        action[10] = gripper_pose
-        return action
-    if swing.release_slice == 0:
-        action[10] = 0.0
-        return action
-    schedule = np.repeat(action[None], TOSS_SLICES_PER_CONTROL_STEP, axis=0)
-    schedule[: swing.release_slice, 10] = gripper_pose
-    schedule[swing.release_slice :, 10] = 0.0
-    return schedule
 
 
 class MoveToTargetGroundController(
@@ -955,114 +837,6 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
     ) -> bool:
         current_gripper_pose = self._get_current_gripper_pose()
         return current_gripper_pose < atol
-
-
-def _quaternion_product(
-    left: tuple[float, float, float, float],
-    right: tuple[float, float, float, float],
-) -> tuple[float, float, float, float]:
-    """Hamilton product of two (x, y, z, w) quaternions."""
-    x1, y1, z1, w1 = left
-    x2, y2, z2, w2 = right
-    return (
-        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-    )
-
-
-def _cube_rotation_symmetries() -> tuple[tuple[float, float, float, float], ...]:
-    """The 24 rotations mapping a cube onto itself: 6 faces down, each at 4 yaws.
-
-    Closed under composition from the three quarter-turns, which is the definition
-    rather than a listing that could be mistyped.
-    """
-    half = np.sqrt(0.5)
-    generators = [
-        (half, 0.0, 0.0, half),
-        (0.0, half, 0.0, half),
-        (0.0, 0.0, half, half),
-    ]
-
-    def canonical(q: tuple[float, float, float, float]) -> tuple[float, ...]:
-        # q and -q are the same rotation; pick one so the set dedupes.
-        rounded = tuple(0.0 + round(v, 6) for v in q)
-        for value in rounded:
-            if value > 1e-9:
-                return rounded
-            if value < -1e-9:
-                return tuple(-v + 0.0 for v in rounded)
-        return rounded
-
-    found = {canonical((0.0, 0.0, 0.0, 1.0)): (0.0, 0.0, 0.0, 1.0)}
-    frontier = [(0.0, 0.0, 0.0, 1.0)]
-    while frontier:
-        current = frontier.pop()
-        for generator in generators:
-            product = _quaternion_product(current, generator)
-            key = canonical(product)
-            if key not in found:
-                found[key] = (
-                    float(key[0]),
-                    float(key[1]),
-                    float(key[2]),
-                    float(key[3]),
-                )
-                frontier.append(product)
-    return tuple(found.values())
-
-
-CUBE_ROTATION_SYMMETRIES = _cube_rotation_symmetries()
-
-
-def cube_tilt_from_upright(rotation: tuple[float, float, float, float]) -> float:
-    """How far a cube is from resting flat on one of its faces.
-
-    Zero for any face-down rest at any yaw, and larger the closer the cube is to
-    balancing on an edge or a corner.
-    """
-    return float(
-        min(
-            x * x + y * y
-            for x, y, _, _ in (
-                _quaternion_product(rotation, symmetry)
-                for symmetry in CUBE_ROTATION_SYMMETRIES
-            )
-        )
-    )
-
-
-def upright_grasp_rotations(
-    rotation: tuple[float, float, float, float],
-) -> tuple[tuple[float, float, float, float], ...]:
-    """Every upright rotation the cube could equally be grasped at, nearest yaw first.
-
-    A cube resting on any face is the same cube, so its roll and pitch carry no
-    information -- deriving a grasp from them asks the gripper to approach along
-    whichever face happens to be up, from underneath the floor for a cube on its top.
-    Resting on a face it is also four-fold symmetric about the vertical, so all four
-    yaws are the same grasp and a caller can fall through when the arm cannot reach one.
-    """
-    best_tilt = np.inf
-    yaw = 0.0
-    for symmetry in CUBE_ROTATION_SYMMETRIES:
-        x, y, z, w = _quaternion_product(rotation, symmetry)
-        tilt = x * x + y * y
-        if tilt < best_tilt - 1e-12:
-            best_tilt = tilt
-            yaw = float(np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
-    return tuple(
-        (0.0, 0.0, float(np.sin(angle / 2)), float(np.cos(angle / 2)))
-        for angle in (yaw, yaw + np.pi / 2, yaw - np.pi / 2, yaw + np.pi)
-    )
-
-
-def canonical_upright_rotation(
-    rotation: tuple[float, float, float, float],
-) -> tuple[float, float, float, float]:
-    """The nearest upright rotation, the first of upright_grasp_rotations."""
-    return upright_grasp_rotations(rotation)[0]
 
 
 # Pick standoffs to try in order, nominal first, spanning what the shelf pick used to

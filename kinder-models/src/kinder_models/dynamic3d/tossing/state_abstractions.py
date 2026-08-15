@@ -26,9 +26,7 @@ from relational_structs import (
     Predicate,
 )
 
-from kinder_models.dynamic3d.tossing.parameterized_skills import (
-    cube_tilt_from_upright,
-)
+from kinder_models.dynamic3d.cube_symmetry import cube_tilt_from_upright
 from kinder_models.dynamic3d.utils import (
     END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE,
     GRIPPER_GRASPING_THRESHOLD,
