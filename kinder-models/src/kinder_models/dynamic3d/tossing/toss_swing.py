@@ -98,8 +98,7 @@ def plan_toss_swing(
     """
     dq = np.subtract(joint_plan[-1], current_joint_angles)[:7]
     s_total = float(np.linalg.norm(dq))
-    # Not the real robot's controller: the parameter space matches, the trajectory does
-    # not. Do not align this with the _compute_per_joint_profile siblings.
+    # Do not align this with the _compute_per_joint_profile siblings.
     direction = dq / s_total if s_total > 1e-4 else np.zeros(7)
     max_vel, max_accel, max_decel = toss_profile_limits(release_speed)
     trajectory = _trapezoidal_motion_profile(
