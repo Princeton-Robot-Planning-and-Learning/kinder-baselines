@@ -697,6 +697,13 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
         return current_gripper_pose < atol
 
 
+class PickCubeControllerPhase(enum.Enum):
+    """Grasping, or -- once a closed-on-nothing grasp is caught -- releasing."""
+
+    GRASPING = enum.auto()
+    RELEASING = enum.auto()
+
+
 class PickCubeController(PickShelfController):
     """Pick a cube up off the ground, taking no continuous parameters.
 
@@ -711,14 +718,7 @@ class PickCubeController(PickShelfController):
     shut on air.
     """
 
-    class _Phase(enum.Enum):
-        """Grasping, or -- once a closed-on-nothing grasp is caught -- releasing."""
-
-        GRASPING = enum.auto()
-        RELEASING = enum.auto()
-
-    # Standoffs to try in order, nominal first, spanning what the shelf pick used to
-    # sample. Fixed rather than drawn, so the skill takes no continuous parameters.
+    # Standoffs to try in order, nominal first.
     STANDOFF_LADDER = tuple(
         (distance, rot)
         for rot in (0.0, np.pi / 8, -np.pi / 8, np.pi / 4, -np.pi / 4)
@@ -727,7 +727,7 @@ class PickCubeController(PickShelfController):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._phase: PickCubeController._Phase = self._Phase.GRASPING
+        self._phase: PickCubeControllerPhase = PickCubeControllerPhase.GRASPING
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         return np.zeros(0, dtype=np.float32)
@@ -740,10 +740,8 @@ class PickCubeController(PickShelfController):
         extend_rot_magnitude: float = np.pi / 8,
     ) -> None:
         del params
-        self._phase = self._Phase.GRASPING
-        # Grasp the cube as if it were upright. Every face-down rest is the same cube,
-        # so the raw rotation only tells the grasp which face happens to be up -- and
-        # for a cube resting on its top that asks the gripper to come from below.
+        self._phase = PickCubeControllerPhase.GRASPING
+        # Grasp as if upright, not from the raw rotation (which could ask for below).
         cube = self.objects[1]
         rotations = upright_grasp_rotations(
             Quaternion(
@@ -776,19 +774,19 @@ class PickCubeController(PickShelfController):
     def terminated(self) -> bool:
         if not super().terminated():
             return False
-        if self._check_grasp_took():
+        if self._check_grasp_successful():
             return True
-        self._phase = self._Phase.RELEASING
+        self._phase = PickCubeControllerPhase.RELEASING
         return self._check_gripper_is_open()
 
     def step(self) -> Array:
-        if self._phase is self._Phase.RELEASING:
+        if self._phase is PickCubeControllerPhase.RELEASING:
             action = np.zeros(11, dtype=np.float32)
             action[-1] = 0
             return action
         return super().step()
 
-    def _check_grasp_took(self) -> bool:
+    def _check_grasp_successful(self) -> bool:
         assert self._last_state is not None
         return bool(self._last_state.get(self.objects[1], "z") > MINIMUM_HOLDING_HEIGHT)
 
@@ -796,6 +794,14 @@ class PickCubeController(PickShelfController):
         assert self._last_state is not None
         pos = self._last_state.get(self.objects[0], "pos_gripper")
         return bool(pos < GRIPPER_OPEN_COMMAND_TOLERANCE)
+
+
+class MoveToTossLocationAndTossControllerPhase(enum.Enum):
+    """Which leg of drive-then-throw step() is currently stepping."""
+
+    BASE_MOTION = enum.auto()
+    WINDUP = enum.auto()
+    SWING = enum.auto()
 
 
 class MoveToTossLocationAndTossController(
@@ -823,26 +829,16 @@ class MoveToTossLocationAndTossController(
     in reset, because it has to start from the arm conf actually reached.
     """
 
-    class _Phase(enum.Enum):
-        """Which leg of drive-then-throw step() is currently stepping."""
-
-        BASE_MOTION = enum.auto()
-        WINDUP = enum.auto()
-        SWING = enum.auto()
-
     # Where a throw is possible; the upper part does not score.
     TARGET_DISTANCE_BOUNDS = (1.25, 1.45)
 
-    # The widest rotation that still spends only half of WAYPOINT_TOLERANCE off the bin
-    # axis at the furthest standoff. Derived, so retuning either cannot invalidate it.
+    # Widest rotation that stays within half of WAYPOINT_TOLERANCE at max standoff.
     MAX_TARGET_ROTATION = float(
         np.arcsin(0.5 * WAYPOINT_TOLERANCE / TARGET_DISTANCE_BOUNDS[1])
     )
     TARGET_ROTATION_BOUNDS = (-MAX_TARGET_ROTATION, MAX_TARGET_ROTATION)
 
-    # The two dials TossController already takes, opened up as sampled parameters. The
-    # speed tops out at the profile's own clamp; the millisecond window is centred on
-    # the demonstrated default.
+    # TossController's two dials, opened up as sampled parameters.
     SPEED_BOUNDS = (np.deg2rad(60.0), TOSS_MAX_VELOCITY)
     RELEASE_MS_BOUNDS = (600.0, 840.0)
 
@@ -851,17 +847,15 @@ class MoveToTossLocationAndTossController(
     ) -> None:
         super().__init__(*args, **kwargs)
 
-        # State and simulator. Injectable so a planner grounding this controller many
-        # times over one search shares a single PyBullet client rather than opening
-        # one per grounding, as create_lifted_controllers' own caller does.
+        # State and simulator; pybullet_sim is injectable so groundings can share one.
         self._last_state: ObjectCentricState | None = None
         self._pybullet_sim: PyBulletSim | None = pybullet_sim
 
-        # The two sampled tossing dials, and the phase they gate.
+        # The two sampled tossing dials.
         self._release_speed: float = TOSS_MAX_VELOCITY
         self._gripper_release_ms: int = TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS
-        self._phase: MoveToTossLocationAndTossController._Phase = (
-            self._Phase.BASE_MOTION
+        self._phase: MoveToTossLocationAndTossControllerPhase = (
+            MoveToTossLocationAndTossControllerPhase.BASE_MOTION
         )
 
         # Base motion: the drive to the toss pose.
@@ -904,7 +898,7 @@ class MoveToTossLocationAndTossController(
         self._last_state = x
         self._release_speed = float(current_params[2])
         self._gripper_release_ms = int(round(float(current_params[3])))
-        self._phase = self._Phase.BASE_MOTION
+        self._phase = MoveToTossLocationAndTossControllerPhase.BASE_MOTION
         self._windup_step_idx = 0
         self._swing = None
         self._swing_step_idx = 0
@@ -930,10 +924,7 @@ class MoveToTossLocationAndTossController(
         assert base_motion_plan is not None
         self._current_base_motion_plan = base_motion_plan
 
-        # Plan the arm from where the base motion will end, as pick_shelf does. The
-        # windup lands within 0.03 rad of its target, which leaves the swing's profile
-        # the same length, so planning it here rather than on arrival costs nothing and
-        # surfaces a planning failure from reset.
+        # Plan the arm from where the base motion will end, as pick_shelf does.
         plan_x = x.copy()
         robot = self.objects[0]
         final_base_pose = base_motion_plan[-1]
@@ -985,9 +976,9 @@ class MoveToTossLocationAndTossController(
 
     def step(self) -> Array:
         assert self._current_base_motion_plan is not None
-        if self._phase is self._Phase.BASE_MOTION:
+        if self._phase is MoveToTossLocationAndTossControllerPhase.BASE_MOTION:
             return self._action_base_motion()
-        if self._phase is self._Phase.WINDUP:
+        if self._phase is MoveToTossLocationAndTossControllerPhase.WINDUP:
             return self._action_windup()
         return self._action_swing()
 
@@ -1002,7 +993,7 @@ class MoveToTossLocationAndTossController(
                 self._current_base_motion_plan.pop(0)
             break
         if self._check_robot_is_close_to_pose(self._current_base_motion_plan[-1]):
-            self._phase = self._Phase.WINDUP
+            self._phase = MoveToTossLocationAndTossControllerPhase.WINDUP
         robot_pose = self._get_current_robot_pose()
         next_pose = self._current_base_motion_plan[0]
         action = np.zeros(11, dtype=np.float32)
@@ -1031,7 +1022,7 @@ class MoveToTossLocationAndTossController(
         action[10] = self._get_current_robot_gripper_pose()
         self._windup_step_idx += 1
         if self._windup_step_idx >= len(self._windup_trajectory):
-            self._phase = self._Phase.SWING
+            self._phase = MoveToTossLocationAndTossControllerPhase.SWING
         return action
 
     def _action_swing(self) -> Array:
