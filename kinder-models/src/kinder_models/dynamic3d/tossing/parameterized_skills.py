@@ -734,9 +734,30 @@ class PickCubeController(PickShelfController):
     # centre seats it on 40/40. Scoped to this controller because the shelf pick,
     # which shares the base class, picks differently-shaped objects off a shelf.
     GRASP_TRANSFORM = Pose(
-        (GRASP_TRANSFORM_TO_OBJECT.position[0], GRASP_TRANSFORM_TO_OBJECT.position[1], 0.0),
+        (
+            GRASP_TRANSFORM_TO_OBJECT.position[0],
+            GRASP_TRANSFORM_TO_OBJECT.position[1],
+            0.0,
+        ),
         GRASP_TRANSFORM_TO_OBJECT.orientation,
     )
+
+    # Let the approach actually arrive before the gripper closes, and cancel the
+    # standing error it would otherwise close on. See
+    # PickShelfController._approach_has_settled for why the profile alone does not
+    # arrive, and why waiting is not enough on its own.
+    #
+    # Measured on Tossing3D-o1 seeds 100-139, at the moment the gripper closes: the
+    # standing error is about 1 degree on the shoulder, which throws the pinch site
+    # roughly 20 mm across the cube's face. The feedforward gain is the proportional
+    # gain, 2.0, because that is the value that nulls the standing error exactly rather
+    # than a tuned one -- 1.0 halves it and 3.0 overshoots, both measured. The delay is
+    # long enough for the profile's own deceleration to finish, so the error being
+    # cancelled is the standing one and not the tail of the approach.
+    APPROACH_SETTLE_STEPS = 60
+    APPROACH_ARRIVAL_TOLERANCE = float(np.deg2rad(0.05))
+    APPROACH_FEEDFORWARD_GAIN = 2.0
+    APPROACH_FEEDFORWARD_DELAY = 12
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
