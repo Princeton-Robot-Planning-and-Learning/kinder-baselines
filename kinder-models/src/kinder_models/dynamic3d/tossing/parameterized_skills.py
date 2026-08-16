@@ -51,6 +51,7 @@ from kinder_models.dynamic3d.utils import (
     _ARM_MAX_VELOCITY,
     _CONTROL_TIMESTEP,
     GRASP_CLOSE_THRESHOLD,
+    GRASP_TRANSFORM_TO_OBJECT,
     GRIPPER_CLOSED_THRESHOLD,
     GRIPPER_OPEN_COMMAND_TOLERANCE,
     MINIMUM_HOLDING_HEIGHT,
@@ -724,12 +725,26 @@ class PickCubeController(PickShelfController):
     # so a failure here is a real planning failure, not a standoff worth retrying.
     STANDOFF = (0.55, 0.0)
 
+    # Aim at the cube's centre, not the shelf pick's +10 mm. The cube is canonicalised
+    # upright just below, so the third component is a height above the cube's centre,
+    # and at +10 mm the pads close 15 mm below a 50 mm cube's top face. Measured on
+    # Tossing3D-o1 seeds 100-139: that leaves the pinch site 34.3-56.0 mm above the
+    # cube's centre on 25/40 seeds -- past the 25 mm half-height, so the cube ends up
+    # dangling off the fingertips instead of seated between the pads. Aiming at the
+    # centre seats it on 40/40. Scoped to this controller because the shelf pick,
+    # which shares the base class, picks differently-shaped objects off a shelf.
+    GRASP_TRANSFORM = Pose(
+        (GRASP_TRANSFORM_TO_OBJECT.position[0], GRASP_TRANSFORM_TO_OBJECT.position[1], 0.0),
+        GRASP_TRANSFORM_TO_OBJECT.orientation,
+    )
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._phase = self.PickCubeControllerPhase.GRASPING
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
-        return np.zeros(0, dtype=np.float32)
+        # No parameters for this controller.
+        return tuple()
 
     def reset(
         self,
