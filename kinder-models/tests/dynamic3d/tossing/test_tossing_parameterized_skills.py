@@ -88,11 +88,18 @@ def _create_robot_state(
             "pos_base_rot": base_theta,
             **{f"pos_arm_joint{i + 1}": v for i, v in enumerate(arm_joints)},
             "pos_gripper": gripper,
+            # The eight Robotiq 2F-85 joints. `pos_gripper` is the commanded ctrl
+            # value; these are where the fingers actually are, and zero is the open
+            # hand this fixture describes. create_state_from_dict reads only the
+            # features the robot type lists, so these keys are ignored by a
+            # kindergarden whose type does not carry them yet.
+            **{f"pos_gripper_joint{i + 1}": 0.0 for i in range(8)},
             "vel_base_x": 0.0,
             "vel_base_y": 0.0,
             "vel_base_rot": 0.0,
             **{f"vel_arm_joint{i + 1}": 0.0 for i in range(7)},
             "vel_gripper": 0.0,
+            **{f"vel_gripper_joint{i + 1}": 0.0 for i in range(8)},
         },
         cube: {
             "x": 0.0,
