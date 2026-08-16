@@ -18,6 +18,7 @@ from kinder.envs.dynamic3d.object_types import (
 from relational_structs import Object, ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
 from relational_structs.utils import create_state_from_dict
+from scipy.spatial.transform import Rotation  # type: ignore[import-untyped]
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
@@ -40,6 +41,7 @@ from kinder_models.dynamic3d.utils import (
     GRASP_TRANSFORM_TO_OBJECT,
     MINIMUM_HOLDING_HEIGHT,
     MOVE_TO_TARGET_DISTANCE_BOUNDS,
+    PyBulletSim,
     _trapezoidal_motion_profile,
 )
 
@@ -1826,3 +1828,95 @@ def test_pick_cube_plans_a_grasp_for_a_cube_resting_on_its_side():
             tipped, controller.sample_parameters(tipped, np.random.default_rng(0))
         )
     env.close()
+
+
+def _pick_and_measure_grasp(env, seed):
+    """Run pick_cube from a fresh reset and report where the cube sits in the jaws.
+
+    The offset is expressed on axes measured from PyBullet rather than assumed: the two
+    `*_inner_finger_pad` links separate along the end effector's own +x, and the gripper
+    base points at their midpoint along +z, so +x is the jaw axis, +z is the approach
+    axis, and y -- perpendicular to both -- is the direction along the gripped face that
+    nothing holds the cube against. Returns (jaw, lateral, depth) in millimetres.
+    """
+    obs, _ = env.reset(seed=seed)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    controller = controllers["pick_cube"].ground((robot, cube))
+    controller.reset(
+        state, controller.sample_parameters(state, np.random.default_rng(0))
+    )
+    for _ in range(3000):
+        if controller.terminated():
+            break
+        obs, _, _, _, _ = env.step(controller.step())
+        state = env.observation_space.devectorize(obs)
+        controller.observe(state)
+    assert controller.terminated()
+    sim = PyBulletSim(state)
+    try:
+        sim.set_state(state)
+        end_effector = sim.get_ee_pose()
+        offset = (
+            Rotation.from_quat(end_effector.orientation)
+            .inv()
+            .apply(
+                np.array(
+                    [state.get(cube, "x"), state.get(cube, "y"), state.get(cube, "z")]
+                )
+                - np.array(end_effector.position)
+            )
+        )
+    finally:
+        sim.close()
+    return offset * 1000
+
+
+def test_pick_cube_closes_on_the_middle_of_a_face_not_near_its_edge():
+    """The pads must end up centred on the gripped face, on every seed.
+
+    Measured on Tossing3D-o1 seeds 100-139 before this: the approach ended when its
+    trapezoidal profile ran out of steps rather than when the arm arrived, and the
+    proportional command it tracks with leaves a standing error it cannot remove -- about
+    1 degree on the shoulder, which throws the pinch site about 20 mm across the cube's
+    face. The cube ended up 0.5-27.2 mm (median 22.9) off the middle of the face along
+    the one axis nothing holds it against, and the seven worst -- all past 25 mm, half a
+    cube width -- dropped the cube during the toss's windup.
+
+    Settling the approach and cancelling that standing error puts all forty at 0.4-7.7 mm
+    (median 5.1), the jaw within 0.7 degrees of the face normal on 40/40, and takes the
+    fixed-parameter toss from 33/40 to 40/40. Half of the half-extent is the bound
+    asserted: comfortably inside the contact patch, and well clear of both measured
+    populations.
+    """
+    env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
+    obs, _ = env.reset(seed=100)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    half_extent_mm = 1000 * state.get(state.get_object_from_name("cube_0"), "bb_x") / 2
+    try:
+        for seed in (100, 113, 127, 135):
+            jaw, lateral, depth = _pick_and_measure_grasp(env, seed)
+            assert abs(lateral) < half_extent_mm / 2, (
+                f"seed {seed}: cube {lateral:.1f} mm off the face's middle, past the "
+                f"{half_extent_mm / 2:.1f} mm this allows"
+            )
+            # The depth the shared transform's height was corrected for; keep it inside
+            # the cube rather than off the fingertips.
+            assert abs(depth) < half_extent_mm, f"seed {seed}: depth {depth:.1f} mm"
+            assert abs(jaw) < half_extent_mm, f"seed {seed}: jaw {jaw:.1f} mm"
+    finally:
+        env.close()
+
+
+def test_the_shelf_pick_still_closes_its_gripper_the_moment_its_profile_ends():
+    """The settling is the cube pick's, by class attribute, exactly as the grasp is.
+
+    The shelf pick reaches for differently-shaped objects on a shelf and has its own
+    measured behaviour; nothing here has been measured against it.
+    """
+    assert shelf_skills.PickShelfController.APPROACH_SETTLE_STEPS == 0
+    assert PickCubeController.APPROACH_SETTLE_STEPS > 0

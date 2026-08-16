@@ -74,6 +74,25 @@ class PickShelfController(GroundParameterizedController[ObjectCentricState, Arra
     # the shared constant.
     GRASP_TRANSFORM = GRASP_TRANSFORM_TO_OBJECT
 
+    # How long the approach may keep tracking after its trapezoidal profile runs out,
+    # and how close to the planned grasp configuration it has to get before the gripper
+    # is allowed to close. Zero steps reproduces the historical behaviour exactly --
+    # the profile's last index is the last one, arrived or not -- and is what the shelf
+    # pick keeps; a subclass reaching for a shape that has to be gripped squarely can
+    # buy the convergence instead. Class attributes for the same reason GRASP_TRANSFORM
+    # is one: the difference belongs to the subclass, not to this controller.
+    APPROACH_SETTLE_STEPS = 0
+    APPROACH_ARRIVAL_TOLERANCE = 0.0
+    # A one-shot feedforward added to the arm command while settling, and how many
+    # settling steps to wait before measuring it. The proportional command alone leaves
+    # a standing joint error and has to: holding the arm against gravity needs a
+    # non-zero command, and the only thing producing one is the error itself. Adding
+    # `gain` times that error to the command shifts the steady state by gain/kp of it,
+    # so a gain of kp nulls it. Zero -- the default, and the shelf pick's -- adds
+    # nothing, and the block is unreachable at zero settle steps anyway.
+    APPROACH_FEEDFORWARD_GAIN = 0.0
+    APPROACH_FEEDFORWARD_DELAY = 0
+
     def __init__(
         self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
     ) -> None:
@@ -97,6 +116,7 @@ class PickShelfController(GroundParameterizedController[ObjectCentricState, Arra
         self._approach_traj_dir: np.ndarray = np.zeros(7)
         self._approach_start_joints: np.ndarray = np.zeros(7)
         self._approach_step_idx: int = 0
+        self._approach_command_offset: np.ndarray = np.zeros(7)
         self._retract_trajectory: np.ndarray = np.array([])
         self._retract_traj_dir: np.ndarray = np.zeros(7)
         self._retract_start_joints: np.ndarray = np.zeros(7)
@@ -267,6 +287,7 @@ class PickShelfController(GroundParameterizedController[ObjectCentricState, Arra
         )
         self._approach_start_joints = curr.copy()
         self._approach_step_idx = 0
+        self._approach_command_offset = np.zeros(7)
         # Compute trapezoidal velocity profile for retract (grasp conf → home).
         self._retract_trajectory, self._retract_traj_dir = _compute_per_joint_profile(
             final, self.home_joints[:7], _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
@@ -280,6 +301,28 @@ class PickShelfController(GroundParameterizedController[ObjectCentricState, Arra
             and self._current_retract_plan is not None
         )
         return self._lifted
+
+    def _approach_has_settled(self) -> bool:
+        """Whether the approach is finished and the gripper may close.
+
+        The trapezoidal profile says when the *commanded* path ends; it says nothing
+        about where the arm actually is, because each step commands a proportional
+        correction (kp times the remaining joint error) rather than a position. So the
+        arm reaches the last profile index still trailing the target. Holding that final
+        command for a few more steps drives the residual down geometrically, since the
+        profile index is clamped to its last entry.
+        """
+        if self._approach_step_idx < len(self._approach_trajectory):
+            return False
+        overrun = self._approach_step_idx - len(self._approach_trajectory)
+        if overrun >= self.APPROACH_SETTLE_STEPS:
+            return True
+        assert self._current_arm_joint_plan is not None
+        error = np.abs(
+            np.array(self._get_current_robot_arm_conf()[:7])
+            - np.array(self._current_arm_joint_plan[-1][:7])
+        )
+        return bool(error.max() <= self.APPROACH_ARRIVAL_TOLERANCE)
 
     def step(self) -> Array:
         assert self._current_arm_joint_plan is not None
@@ -307,15 +350,22 @@ class PickShelfController(GroundParameterizedController[ObjectCentricState, Arra
             action[-1] = self._get_current_robot_gripper_pose()
             return action
         if self._navigated and not self._pre_grasp and not self._closed_gripper:
-            if self._approach_step_idx >= len(self._approach_trajectory):
+            if self._approach_has_settled():
                 self._pre_grasp = True
             idx = min(self._approach_step_idx, len(self._approach_trajectory) - 1)
             s = float(self._approach_trajectory[idx])
             kp = 2.0
             curr = np.array(self._get_current_robot_arm_conf()[:7])
             target = self._approach_start_joints + self._approach_traj_dir * s
+            if (
+                self._approach_step_idx - len(self._approach_trajectory)
+                == self.APPROACH_FEEDFORWARD_DELAY
+            ):
+                self._approach_command_offset = self.APPROACH_FEEDFORWARD_GAIN * (
+                    target - curr
+                )
             action = np.zeros(11, dtype=np.float32)
-            action[3:10] = kp * (target - curr)
+            action[3:10] = kp * (target - curr) + self._approach_command_offset
             action[-1] = self._get_current_robot_gripper_pose()
             self._approach_step_idx += 1
             return action
