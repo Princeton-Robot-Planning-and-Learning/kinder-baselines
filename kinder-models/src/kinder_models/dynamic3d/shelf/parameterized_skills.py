@@ -68,6 +68,12 @@ class PickShelfController(GroundParameterizedController[ObjectCentricState, Arra
         object: The target object.
     """
 
+    # Where the end effector aims, in the target's own frame. A class attribute rather
+    # than the bare module constant so a subclass picking a differently-shaped object
+    # can aim differently without moving the shelf's grasp; the default is, and stays,
+    # the shared constant.
+    GRASP_TRANSFORM = GRASP_TRANSFORM_TO_OBJECT
+
     def __init__(
         self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
     ) -> None:
@@ -193,7 +199,7 @@ class PickShelfController(GroundParameterizedController[ObjectCentricState, Arra
 
         target_end_effector_pose = multiply_poses(
             target_grasp_pose_world,
-            GRASP_TRANSFORM_TO_OBJECT,
+            self.GRASP_TRANSFORM,
         )
 
         self._pybullet_sim.base_link_to_held_obj = multiply_poses(

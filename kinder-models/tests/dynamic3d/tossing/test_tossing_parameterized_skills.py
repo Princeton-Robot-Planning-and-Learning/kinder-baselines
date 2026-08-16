@@ -37,6 +37,7 @@ from kinder_models.dynamic3d.tossing.toss_swing import (
 )
 from kinder_models.dynamic3d.utils import (
     _CONTROL_TIMESTEP,
+    GRASP_TRANSFORM_TO_OBJECT,
     MINIMUM_HOLDING_HEIGHT,
     MOVE_TO_TARGET_DISTANCE_BOUNDS,
     _trapezoidal_motion_profile,
@@ -1499,8 +1500,32 @@ def test_pick_cube_takes_no_continuous_parameters():
     controller = controllers["pick_cube"].ground((robot, cube))
     for seed in range(5):
         params = controller.sample_parameters(state, np.random.default_rng(seed))
+        # The empty tuple every other zero-parameter controller here returns, not a
+        # zero-length array: the refiner only ever passes this straight back to reset.
+        assert params == tuple()
         assert np.asarray(params).shape == (0,)
     env.close()
+
+
+def test_pick_cube_grasps_at_the_cubes_centre_without_moving_the_shelf_pick():
+    """The cube pick aims at the centre; the shelf pick keeps the shared transform.
+
+    Measured on Tossing3D-o1 seeds 100-139: at the shared +10 mm the pinch site ends
+    up 34.3-56.0 mm above the cube's centre on 25/40 seeds -- past the 25 mm
+    half-height, so the cube dangles off the fingertips rather than sitting between
+    the pads. Aiming at the centre puts the pinch inside the cube on 40/40.
+    """
+    toss_grasp = PickCubeController.GRASP_TRANSFORM
+    shelf_grasp = shelf_skills.PickShelfController.GRASP_TRANSFORM
+
+    # The cube is canonicalised upright before the grasp is computed, so the
+    # transform's third component is a height above the cube's own centre.
+    assert toss_grasp.position[2] == 0.0
+    # Only the height moves; the approach offset and the orientation are the shelf's.
+    assert toss_grasp.position[:2] == shelf_grasp.position[:2]
+    assert toss_grasp.orientation == shelf_grasp.orientation
+    # The shelf pick is untouched: still the module-level constant it always used.
+    assert shelf_grasp == GRASP_TRANSFORM_TO_OBJECT
 
 
 def test_pick_cube_stands_head_on_within_the_shelf_picks_reach():
