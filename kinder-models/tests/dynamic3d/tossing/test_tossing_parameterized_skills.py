@@ -6,6 +6,7 @@ from pathlib import Path
 import kinder
 import numpy as np
 import pybullet as p
+from bilevel_planning.structs import GroundParameterizedController
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from kinder.envs.dynamic3d.envs import TidyBot3DEnv
@@ -17,13 +18,32 @@ from kinder.envs.dynamic3d.object_types import (
 from relational_structs import Object, ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
 from relational_structs.utils import create_state_from_dict
+from scipy.spatial.transform import Rotation  # type: ignore[import-untyped]
 from spatialmath import SE2
 
-from kinder_models.dynamic3d.shelf.parameterized_skills import (
-    create_lifted_controllers as shelf_create_lifted_controllers,)
+from kinder_models.dynamic3d import tidybot_pick_controller as pick_base
+from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
+    MoveToTossLocationAndTossController,
+    PickCubeController,
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,
+)
+from kinder_models.dynamic3d.tossing.toss_swing import (
+    TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
+    TOSS_MAX_VELOCITY,
+    TOSS_RELEASE_ARM_CONFIGURATION,
+    TOSS_SLICES_PER_CONTROL_STEP,
+    TOSS_WINDUP_ARM_CONFIGURATION,
+    toss_profile_limits,
+)
+from kinder_models.dynamic3d.utils import (
+    _CONTROL_TIMESTEP,
+    GRASP_TRANSFORM_TO_OBJECT,
+    MINIMUM_HOLDING_HEIGHT,
+    MOVE_TO_TARGET_DISTANCE_BOUNDS,
+    PyBulletSim,
+    _trapezoidal_motion_profile,
 )
 
 kinder.register_all_environments()
@@ -70,15 +90,20 @@ def _create_robot_state(
             "pos_base_x": base_x,
             "pos_base_y": base_y,
             "pos_base_rot": base_theta,
-            **{f"pos_arm_joint{i+1}": v for i, v in enumerate(arm_joints)},
+            **{f"pos_arm_joint{i + 1}": v for i, v in enumerate(arm_joints)},
             "pos_gripper": gripper,
-            **{f"pos_gripper_joint{i+1}": 0.0 for i in range(8)},
+            # The eight Robotiq 2F-85 joints. `pos_gripper` is the commanded ctrl
+            # value; these are where the fingers actually are, and zero is the open
+            # hand this fixture describes. create_state_from_dict reads only the
+            # features the robot type lists, so these keys are ignored by a
+            # kindergarden whose type does not carry them yet.
+            **{f"pos_gripper_joint{i + 1}": 0.0 for i in range(8)},
             "vel_base_x": 0.0,
             "vel_base_y": 0.0,
             "vel_base_rot": 0.0,
-            **{f"vel_arm_joint{i+1}": 0.0 for i in range(7)},
+            **{f"vel_arm_joint{i + 1}": 0.0 for i in range(7)},
             "vel_gripper": 0.0,
-            **{f"vel_gripper_joint{i+1}": 0.0 for i in range(8)},
+            **{f"vel_gripper_joint{i + 1}": 0.0 for i in range(8)},
         },
         cube: {
             "x": 0.0,
@@ -104,7 +129,6 @@ def _create_robot_state(
 
 def test_get_target_robot_pose_from_parameters():
     """Tests for get_target_robot_pose_from_parameters()."""
-
     target = SE2(1.0, 0.0, 0.0)
     robot_pose = get_target_robot_pose_from_parameters(
         target, target_distance=1.0, target_rot=0.0
@@ -160,7 +184,6 @@ def test_get_target_robot_pose_from_parameters():
 
 def test_move_to_target_controller_one_cube():
     """Test move-to-target controller in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = TidyBot3DEnv(
@@ -206,7 +229,6 @@ def test_move_to_target_controller_one_cube():
 
 def test_move_to_target_arm_configuration():
     """Test move-arm-to-conf controller in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = TidyBot3DEnv(
@@ -256,7 +278,6 @@ def test_repeated_grounding_does_not_leak_pybullet_clients():
     planner or data-collection loop creates one PyBulletSim per skill execution. Those
     clients must be released when the controller is dropped.
     """
-
     # Create the environment.
     num_cubes = 1
     env = TidyBot3DEnv(
@@ -331,7 +352,6 @@ def test_repeated_grounding_does_not_leak_pybullet_clients():
 
 def test_move_to_target_arm_end_effector():
     """Test move-arm-to-end-effector controller in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = TidyBot3DEnv(
@@ -386,7 +406,6 @@ def test_move_to_target_arm_end_effector():
 
 def test_close_gripper_controller():
     """Test close-gripper controller in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = TidyBot3DEnv(
@@ -493,7 +512,6 @@ def test_close_gripper_controller():
 
 def test_pick_place_ground():
     """Test pick and place in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = TidyBot3DEnv(
@@ -695,7 +713,6 @@ def test_pick_place_ground():
 
 def test_pick_place_shelf():
     """Test fake interface in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = kinder.make(
@@ -897,7 +914,6 @@ def test_pick_place_shelf():
 
 def test_velocity_tracking_mode():
     """Test pick and place in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = TidyBot3DEnv(
@@ -986,7 +1002,6 @@ def test_velocity_tracking_mode():
 
 def test_pick_toss():
     """Test pick and place in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = kinder.make(
@@ -1192,7 +1207,6 @@ def test_pick_toss():
 
 def test_pick_ground_toss():
     """Test pick and place in ground environment with 1 cube."""
-
     # Create the environment.
     num_cubes = 1
     env = kinder.make(
@@ -1213,7 +1227,7 @@ def test_pick_ground_toss():
     state = env.observation_space.devectorize(obs)
 
     # Create the move-base controller.
-    controllers = shelf_create_lifted_controllers(env.action_space)
+    controllers = shelf_skills.create_lifted_controllers(env.action_space)
 
     # create the pick ground controller.
     lifted_controller = controllers["pick_shelf"]
@@ -1322,3 +1336,597 @@ def test_pick_ground_toss():
     print("distance", distance)
 
     env.close()
+
+
+def test_toss_release_speed_raises_the_speed_the_profile_commands_at_release():
+    """The point of the parameter: a higher setting must actually release faster.
+
+    Compared below the ceiling, since TOSS_MAX_VELOCITY is both the default and the
+    clamp. Asserted against the profile rather than a thrown cube: whether the arm
+    tracks it is measured elsewhere.
+    """
+    total_dist = float(
+        np.linalg.norm(TOSS_RELEASE_ARM_CONFIGURATION - TOSS_WINDUP_ARM_CONFIGURATION)
+    )
+    release_fraction = 0.46
+
+    def commanded_release_speed(release_speed):
+        max_vel, max_accel, max_decel = toss_profile_limits(release_speed)
+        trajectory = _trapezoidal_motion_profile(
+            total_dist,
+            max_vel=max_vel,
+            max_accel=max_accel,
+            max_decel=max_decel,
+            step_size=_CONTROL_TIMESTEP,
+        )
+        final = trajectory[-1]
+        idx = int(np.argmax(trajectory / final >= release_fraction))
+        return (trajectory[idx] - trajectory[idx - 1]) / _CONTROL_TIMESTEP
+
+    default = commanded_release_speed(TOSS_MAX_VELOCITY)
+    slower = commanded_release_speed(0.4 * TOSS_MAX_VELOCITY)
+    assert default > 1.5 * slower
+
+
+def _default_speed_trajectory():
+    """The commanded distance profile of the shipped windup->release swing."""
+    s_total = float(
+        np.linalg.norm(TOSS_RELEASE_ARM_CONFIGURATION - TOSS_WINDUP_ARM_CONFIGURATION)
+    )
+    max_vel, max_accel, max_decel = toss_profile_limits(TOSS_MAX_VELOCITY)
+    trajectory = _trapezoidal_motion_profile(
+        s_total,
+        max_vel=max_vel,
+        max_accel=max_accel,
+        max_decel=max_decel,
+        step_size=_CONTROL_TIMESTEP,
+    )
+    return trajectory, s_total
+
+
+def test_the_default_release_ms_falls_at_fraction_046_of_the_swing():
+    """720 ms is where fraction 0.46 of the swing falls at the default speed.
+
+    720 and not the nominal 723 because reset() profiles the motion-planned path, which
+    moves the crossing 3 ms; a live rollout lands the cube 52 mm further with 723. The
+    tolerance here holds on either path, so only that rollout distinguishes them.
+    """
+    assert TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS == 720
+    trajectory, s_total = _default_speed_trajectory()
+    step, slice_ = divmod(
+        TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS, TOSS_SLICES_PER_CONTROL_STEP
+    )
+    # Linear interpolation between the two samples the release falls between, which is
+    # how the commanded distance actually varies inside one held control period.
+    below, above = float(trajectory[step]), float(trajectory[step + 1])
+    covered = below + (above - below) * (slice_ / TOSS_SLICES_PER_CONTROL_STEP)
+    assert abs(covered / s_total - 0.46) < 0.005
+
+
+def test_a_release_ms_past_the_swing_never_opens_the_gripper():
+    """The degenerate corner is reachable on purpose, not clamped away.
+
+    A release past the swing's end leaves the cube still held when the controller
+    terminates -- a real region of the parameter space a sweep must be able to reach.
+    """
+    trajectory, _ = _default_speed_trajectory()
+    duration_ms = (len(trajectory) - 1) * TOSS_SLICES_PER_CONTROL_STEP
+    assert duration_ms == 1700
+    late_step, _ = divmod(2400, TOSS_SLICES_PER_CONTROL_STEP)
+    assert late_step >= len(trajectory)
+
+
+def test_toss_schedules_its_release_at_the_requested_millisecond():
+    """End to end: exactly one action of a real toss is a control schedule.
+
+    That schedule has to reach the simulator and land on the millisecond asked for
+    rather than the next control-step boundary. Every other action is a plain (18,).
+    """
+    requested_ms = 812  # deliberately not a multiple of 100
+    expected_step, expected_slice = divmod(requested_ms, TOSS_SLICES_PER_CONTROL_STEP)
+
+    env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", scene_bg=False)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    obs, _ = env.reset(seed=125)
+    state = env.observation_space.devectorize(obs)
+    shelf = shelf_skills.create_lifted_controllers(env.action_space)
+    tossing = create_lifted_controllers(env.action_space)
+
+    def _run(controller, params, **reset_kwargs):
+        """Drive one controller to termination, returning the actions it emitted."""
+        nonlocal state
+        controller.reset(state, params, **reset_kwargs)
+        emitted = []
+        for _ in range(400):
+            action = controller.step()
+            emitted.append(np.array(action, copy=True))
+            observation, _, _, _, _ = env.step(action)
+            state = env.observation_space.devectorize(observation)
+            controller.observe(state)
+            if controller.terminated():
+                return emitted
+        assert False, "Controller did not terminate"
+
+    # The cube has to be *in* the gripper, or the release is a no-op: an empty hand
+    # commands 0.0 both sides of the release.
+    robot = _get_robot_from_state(state)
+    pick = shelf["pick_shelf"].ground((robot, state.get_object_from_name("cube_0")))
+    _run(pick, pick.sample_parameters(state, np.random.default_rng(123)))
+
+    robot = _get_robot_from_state(state)
+    move = tossing["move_to_target"].ground(
+        (robot, state.get_object_from_name("bin_0"))
+    )
+    _run(move, np.array([1.35, 0.0]), disable_collision_objects=["cube_0"])
+
+    robot = _get_robot_from_state(state)
+    _run(tossing["move_arm_to_conf"].ground((robot,)), TOSS_WINDUP_ARM_CONFIGURATION)
+
+    robot = _get_robot_from_state(state)
+    toss = tossing["toss"].ground((robot,))
+    actions = _run(
+        toss, TOSS_RELEASE_ARM_CONFIGURATION, gripper_release_ms=requested_ms
+    )
+
+    scheduled = [i for i, action in enumerate(actions) if action.ndim == 2]
+    assert scheduled == [expected_step]
+    schedule = actions[expected_step]
+    # A schedule covers the whole control period, so release is located by index.
+    assert schedule.shape == (TOSS_SLICES_PER_CONTROL_STEP, 18)
+    assert np.all(schedule[:expected_slice, 10] == schedule[0, 10])
+    assert schedule[0, 10] > 0.0
+    assert np.all(schedule[expected_slice:, 10] == 0.0)
+
+    # Only the gripper column varies; the arm is commanded identically across slices.
+    columns = [c for c in range(18) if c != 10]
+    assert np.all(schedule[:, columns] == schedule[0, columns])
+
+    # Everything before the release still holds the cube, everything after is open.
+    assert all(action[10] > 0.0 for action in actions[:expected_step])
+    assert all(action[10] == 0.0 for action in actions[expected_step + 1 :])
+
+    env.close()
+
+
+def test_pick_cube_takes_no_continuous_parameters():
+    """The sampler has nothing to draw, so a refiner has nothing to backtrack over."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    controller = controllers["pick_cube"].ground((robot, cube, barrier))
+    for seed in range(5):
+        params = controller.sample_parameters(state, np.random.default_rng(seed))
+        # The empty tuple every other zero-parameter controller here returns, not a
+        # zero-length array: the refiner only ever passes this straight back to reset.
+        assert params == tuple()
+        assert np.asarray(params).shape == (0,)
+    env.close()
+
+
+def test_pick_cube_grasps_at_the_cubes_centre_without_moving_the_shelf_pick():
+    """The cube pick aims at the centre; the shelf pick keeps the shared transform.
+
+    Measured on Tossing3D-o1 seeds 100-139: at the shared +10 mm the pinch site ends
+    up 34.3-56.0 mm above the cube's centre on 25/40 seeds -- past the 25 mm
+    half-height, so the cube dangles off the fingertips rather than sitting between
+    the pads. Aiming at the centre puts the pinch inside the cube on 40/40.
+    """
+    toss_grasp = PickCubeController.GRASP_TRANSFORM
+    shelf_grasp = pick_base.TidyBotPickController.GRASP_TRANSFORM
+
+    # The cube is canonicalised upright before the grasp is computed, so the
+    # transform's third component is a height above the cube's own centre.
+    assert toss_grasp.position[2] == 0.0
+    # Only the height moves; the approach offset and the orientation are the shelf's.
+    assert toss_grasp.position[:2] == shelf_grasp.position[:2]
+    assert toss_grasp.orientation == shelf_grasp.orientation
+    # The shelf pick is untouched: still the module-level constant it always used.
+    assert shelf_grasp == GRASP_TRANSFORM_TO_OBJECT
+
+
+def test_pick_cube_stands_head_on_within_the_shelf_picks_reach():
+    """No rotation offset from the cube's own facing, at a distance the shelf pick used
+    to sample -- not a range, since the pick zone has nothing to route around."""
+    distance, rot = PickCubeController.STANDOFF
+    assert rot == 0.0
+    assert (
+        MOVE_TO_TARGET_DISTANCE_BOUNDS[0]
+        <= distance
+        <= MOVE_TO_TARGET_DISTANCE_BOUNDS[1]
+    )
+
+
+def test_pick_cube_lifts_the_cube_off_the_ground():
+    """End to end, with no parameters supplied by the caller."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    controller = controllers["pick_cube"].ground((robot, cube, barrier))
+    controller.reset(
+        state, controller.sample_parameters(state, np.random.default_rng(0))
+    )
+    for _ in range(2000):
+        if controller.terminated():
+            break
+        obs, _, _, _, _ = env.step(controller.step())
+        state = env.observation_space.devectorize(obs)
+        controller.observe(state)
+    assert controller.terminated()
+    assert state.get(cube, "z") > MINIMUM_HOLDING_HEIGHT
+    env.close()
+
+
+def test_pick_cube_releases_when_the_grasp_closed_on_nothing():
+    """Otherwise the hand is neither empty nor holding, and no operator applies."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    controller = controllers["pick_cube"].ground((robot, cube, barrier))
+    controller.reset(
+        state, controller.sample_parameters(state, np.random.default_rng(0))
+    )
+    # The arm finished its retract with the cube still on the floor and the gripper
+    # commanded shut: a grasp that closed on nothing.
+    missed = state.copy()
+    missed.set(robot, "pos_gripper", 1.0)
+    controller.observe(missed)
+    controller._lifted = True  # pylint: disable=protected-access
+    assert not controller.terminated()
+    assert controller.step()[-1] == 0
+    opened = missed.copy()
+    opened.set(robot, "pos_gripper", 0.0)
+    controller.observe(opened)
+    assert controller.terminated()
+    env.close()
+
+
+def test_move_to_toss_location_and_toss_samples_four_parameters():
+    """Standoff, rotation, release speed and release millisecond, all in bounds."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    target_bin = state.get_object_from_name("bin_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    controller = controllers["move_to_toss_location_and_toss"].ground(
+        (robot, target_bin, cube, barrier)
+    )
+    draws = np.array(
+        [
+            controller.sample_parameters(state, np.random.default_rng(seed))
+            for seed in range(50)
+        ]
+    )
+    assert draws.shape == (50, 4)
+    for column, (low, high) in enumerate(
+        [
+            MoveToTossLocationAndTossController.TARGET_DISTANCE_BOUNDS,
+            MoveToTossLocationAndTossController.TARGET_ROTATION_BOUNDS,
+            MoveToTossLocationAndTossController.SPEED_BOUNDS,
+            MoveToTossLocationAndTossController.RELEASE_MS_BOUNDS,
+        ]
+    ):
+        assert draws[:, column].min() >= low
+        assert draws[:, column].max() <= high
+        # A sampler, not a constant, in every component.
+        assert draws[:, column].min() < draws[:, column].max()
+    env.close()
+
+
+def test_pick_cube_then_move_and_toss_scores():
+    """The whole domain, end to end: two skills and no third."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    target_bin = state.get_object_from_name("bin_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+
+    def run(controller, params):
+        nonlocal state
+        controller.reset(state, params)
+        for _ in range(3000):
+            if controller.terminated():
+                return
+            obs_, _, _, _, _ = env.step(controller.step())
+            state = env.observation_space.devectorize(obs_)
+            controller.observe(state)
+        raise AssertionError("controller did not terminate")
+
+    pick = controllers["pick_cube"].ground((robot, cube, barrier))
+    run(pick, pick.sample_parameters(state, np.random.default_rng(0)))
+    assert state.get(cube, "z") > MINIMUM_HOLDING_HEIGHT
+
+    toss = controllers["move_to_toss_location_and_toss"].ground(
+        (robot, target_bin, cube, barrier)
+    )
+    run(toss, np.array([1.30, 0.0, TOSS_MAX_VELOCITY, 720.0]))
+    sim = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    assert sim._check_goals()  # pylint: disable=protected-access
+    env.close()
+
+
+def test_open_gripper_commands_open_until_the_gripper_reads_open():
+    """The controller predates this branch and had no test of its own."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    controller = controllers["open_gripper"].ground((robot,))
+
+    shut = state.copy()
+    shut.set(robot, "pos_gripper", 1.0)
+    controller.reset(shut)
+    assert not controller.terminated()
+    action = controller.step()
+    assert action.shape == (11,)
+    assert action[-1] == 0
+
+    opened = state.copy()
+    opened.set(robot, "pos_gripper", 0.0)
+    controller.observe(opened)
+    assert controller.terminated()
+    env.close()
+
+
+def test_move_to_target_from_other_target_drives_to_the_target_it_names():
+    """Three object parameters, but only the target governs where the base goes: the
+    third exists so an operator can say where the robot came from."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    target_bin = state.get_object_from_name("bin_0")
+    controller = controllers["move_to_target_from_other_target"].ground(
+        (robot, cube, target_bin)
+    )
+    controller.reset(state, np.array([0.5, 0.0]))
+    for _ in range(2000):
+        if controller.terminated():
+            break
+        obs_, _, _, _, _ = env.step(controller.step())
+        state = env.observation_space.devectorize(obs_)
+        controller.observe(state)
+    assert controller.terminated()
+    achieved = np.hypot(
+        state.get(cube, "x") - state.get(robot, "pos_base_x"),
+        state.get(cube, "y") - state.get(robot, "pos_base_y"),
+    )
+    assert abs(achieved - 0.5) < 0.1
+    env.close()
+
+
+def test_move_to_toss_location_and_toss_holds_no_sub_controllers():
+    """One flat controller over phase flags, as pick_shelf is, rather than a controller
+    that drives controllers it owns."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    target_bin = state.get_object_from_name("bin_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    controller = controllers["move_to_toss_location_and_toss"].ground(
+        (robot, target_bin, cube, barrier)
+    )
+    nested = [
+        name
+        for name, value in vars(controller).items()
+        if isinstance(value, GroundParameterizedController)
+    ]
+    assert not nested, f"holds sub-controllers: {nested}"
+    env.close()
+
+
+def test_move_to_toss_location_and_toss_plans_every_phase_in_reset():
+    """As pick_shelf does: a planning failure surfaces from reset rather than from the
+    middle of a throw, where a refiner would see a crash instead of a rejected
+    sample."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    target_bin = state.get_object_from_name("bin_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    controller = controllers["move_to_toss_location_and_toss"].ground(
+        (robot, target_bin, cube, barrier)
+    )
+    controller.reset(state, np.array([1.30, 0.0, TOSS_MAX_VELOCITY, 720.0]))
+    # Every phase is planned before the first action is asked for.
+    # pylint: disable-next=protected-access
+    assert controller._current_base_motion_plan is not None
+    assert len(controller._windup_trajectory) > 0  # pylint: disable=protected-access
+    assert controller._swing is not None  # pylint: disable=protected-access
+    env.close()
+
+
+def test_pick_cube_plans_a_grasp_for_a_cube_resting_on_its_side():
+    """pick_shelf derives the grasp from the raw rotation and finds no IK solution for
+    any of the five non-original face-down rests.
+
+    Canonicalising first, all of them plan.
+    """
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    controller = controllers["pick_cube"].ground((robot, cube, barrier))
+
+    def rest(axis, deg):
+        a = np.deg2rad(deg) / 2
+        vec = np.array(axis, dtype=float)
+        return tuple(float(v) for v in np.sin(a) * vec) + (float(np.cos(a)),)
+
+    for axis, deg in [
+        ([1, 0, 0], 90),
+        ([1, 0, 0], 180),
+        ([1, 0, 0], -90),
+        ([0, 1, 0], 90),
+        ([0, 1, 0], -90),
+    ]:
+        tipped = state.copy()
+        for feature, value in zip(("qx", "qy", "qz", "qw"), rest(axis, deg)):
+            tipped.set(cube, feature, value)
+        # Raises if no candidate in the ladder plans.
+        controller.reset(
+            tipped, controller.sample_parameters(tipped, np.random.default_rng(0))
+        )
+    env.close()
+
+
+def _pick_and_measure_grasp(env, seed):
+    """Run pick_cube from a fresh reset and report where the cube sits in the jaws.
+
+    The offset is expressed on axes measured from PyBullet rather than assumed: the two
+    `*_inner_finger_pad` links separate along the end effector's own +x, and the gripper
+    base points at their midpoint along +z, so +x is the jaw axis, +z is the approach
+    axis, and y -- perpendicular to both -- is the direction along the gripped face that
+    nothing holds the cube against. Returns (jaw, lateral, depth) in millimetres.
+    """
+    obs, _ = env.reset(seed=seed)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    controller = controllers["pick_cube"].ground((robot, cube, barrier))
+    controller.reset(
+        state, controller.sample_parameters(state, np.random.default_rng(0))
+    )
+    for _ in range(3000):
+        if controller.terminated():
+            break
+        obs, _, _, _, _ = env.step(controller.step())
+        state = env.observation_space.devectorize(obs)
+        controller.observe(state)
+    assert controller.terminated()
+    sim = PyBulletSim(state)
+    try:
+        sim.set_state(state)
+        end_effector = sim.get_ee_pose()
+        offset = (
+            Rotation.from_quat(end_effector.orientation)
+            .inv()
+            .apply(
+                np.array(
+                    [state.get(cube, "x"), state.get(cube, "y"), state.get(cube, "z")]
+                )
+                - np.array(end_effector.position)
+            )
+        )
+    finally:
+        sim.close()
+    return offset * 1000
+
+
+def test_pick_cube_closes_on_the_middle_of_a_face_not_near_its_edge():
+    """The pads must end up centred on the gripped face, on every seed.
+
+    Measured on Tossing3D-o1 seeds 100-139 before this: the approach ended when its
+    trapezoidal profile ran out of steps rather than when the arm arrived, and the
+    proportional command it tracks with leaves a standing error it cannot remove -- about
+    1 degree on the shoulder, which throws the pinch site about 20 mm across the cube's
+    face. The cube ended up 0.5-27.2 mm (median 22.9) off the middle of the face along
+    the one axis nothing holds it against, and the seven worst -- all past 25 mm, half a
+    cube width -- dropped the cube during the toss's windup.
+
+    Settling the approach and cancelling that standing error puts all forty at 0.4-7.7 mm
+    (median 5.1), the jaw within 0.7 degrees of the face normal on 40/40, and takes the
+    fixed-parameter toss from 33/40 to 40/40. Half of the half-extent is the bound
+    asserted: comfortably inside the contact patch, and well clear of both measured
+    populations.
+    """
+    env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
+    obs, _ = env.reset(seed=100)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    half_extent_mm = 1000 * state.get(state.get_object_from_name("cube_0"), "bb_x") / 2
+    try:
+        for seed in (100, 113, 127, 135):
+            jaw, lateral, depth = _pick_and_measure_grasp(env, seed)
+            assert abs(lateral) < half_extent_mm / 2, (
+                f"seed {seed}: cube {lateral:.1f} mm off the face's middle, past the "
+                f"{half_extent_mm / 2:.1f} mm this allows"
+            )
+            # The depth the shared transform's height was corrected for; keep it inside
+            # the cube rather than off the fingertips.
+            assert abs(depth) < half_extent_mm, f"seed {seed}: depth {depth:.1f} mm"
+            assert abs(jaw) < half_extent_mm, f"seed {seed}: jaw {jaw:.1f} mm"
+    finally:
+        env.close()
+
+
+def test_the_shelf_pick_still_closes_its_gripper_the_moment_its_profile_ends():
+    """The settling is the cube pick's, by class attribute, exactly as the grasp is.
+
+    The shelf pick reaches for differently-shaped objects on a shelf and has its own
+    measured behaviour; nothing here has been measured against it.
+    """
+    assert pick_base.TidyBotPickController.APPROACH_SETTLE_STEPS == 0
+    assert PickCubeController.APPROACH_SETTLE_STEPS > 0
