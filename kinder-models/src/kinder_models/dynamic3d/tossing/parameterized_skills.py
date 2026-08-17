@@ -130,14 +130,14 @@ class MoveToTargetGroundController(
 
     def terminated(self) -> bool:
         assert self._current_base_motion_plan is not None
-        return self._check_robot_is_close_to_pose(self._current_base_motion_plan[-1])
+        return self._robot_is_close_to_pose(self._current_base_motion_plan[-1])
 
     def step(self) -> Array:
         assert self._current_base_motion_plan is not None
         while len(self._current_base_motion_plan) > 1:
             peek_pose = self._current_base_motion_plan[0]
             # Close enough, pop and continue.
-            if self._check_robot_is_close_to_pose(peek_pose):
+            if self._robot_is_close_to_pose(peek_pose):
                 self._current_base_motion_plan.pop(0)
             # Not close enough, stop popping.
             break
@@ -174,7 +174,7 @@ class MoveToTargetGroundController(
             return GRASP_CLOSE_THRESHOLD
         return 0.0
 
-    def _check_robot_is_close_to_pose(
+    def _robot_is_close_to_pose(
         self, pose: SE2, atol: float = WAYPOINT_TOLERANCE
     ) -> bool:
         robot_pose = self._get_current_robot_pose()
