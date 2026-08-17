@@ -45,15 +45,6 @@ HandEmpty = Predicate("HandEmpty", [MujocoTidyBotRobotObjectType])
 MovableIsDownX = Predicate(
     "MovableIsDownX", [MujocoMovableObjectType, MujocoMovableObjectType]
 )
-# Static (name-derived, never changes): which object a throw should aim at. Upstream
-# types the bin as a MujocoMovableObjectType exactly like the cube and the barrier, so
-# without this an operator's ?target grounds to any of the three -- silently including
-# the cube being thrown and the barrier, neither of which can ever score. Measured: the
-# classical planner picked the wrong one on 6/9 seeds sampled, dooming refinement no
-# matter how many continuous samples it was given, since a discrete grounding mistake
-# has nothing to do with sampling and max_abstract_plans=1 never tries a second one.
-IsThrowTarget = Predicate("IsThrowTarget", [MujocoObjectType])
-
 # The environment's inflated region, not the task JSON's "ranges".
 GOAL_REGION_NAME = "blocks_goal_region"
 
@@ -90,10 +81,6 @@ class Tossing3DStateAbstractor:
         all_mujoco_objects = set(fixtures) | set(movables)
         cubes = self._get_cubes(state)
         barriers = [o for o in movables if o.name == BARRIER_NAME]
-
-        for obj in all_mujoco_objects:
-            if obj.name == BIN_NAME:
-                atoms.add(GroundAtom(IsThrowTarget, [obj]))
 
         if self._check_gripper_open(state, robot):
             atoms.add(GroundAtom(HandEmpty, [robot]))

@@ -31,7 +31,6 @@ from kinder_models.dynamic3d.tossing.parameterized_skills import (
 from kinder_models.dynamic3d.tossing.state_abstractions import (
     HandEmpty,
     Holding,
-    IsThrowTarget,
     MovableInGoalRegion,
     MovableIsDownX,
     OnGround,
@@ -109,7 +108,6 @@ def create_bilevel_planning_models(
     predicates = {
         HandEmpty,
         Holding,
-        IsThrowTarget,
         MovableInGoalRegion,
         MovableIsDownX,
         OnGround,
@@ -138,27 +136,15 @@ def create_bilevel_planning_models(
 
     # Drive to a pose to throw from, and throw.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
-    target = Variable("?target", MujocoObjectType)
     held = Variable("?held", MujocoMovableObjectType)
     barrier = Variable("?barrier", MujocoMovableObjectType)
 
     MoveToTossLocationAndTossOperator = LiftedOperator(
         "move_to_toss_location_and_toss",
-        [robot, target, held, barrier],
+        [robot, held, barrier],
         preconditions={
             LiftedAtom(Holding, [robot, held]),
-            # Upstream gives the bin the same type as the cube and the barrier, so
-            # without this the grounder is free to bind ?target to either of those --
-            # a discrete mistake no amount of continuous sampling can recover from.
-            LiftedAtom(IsThrowTarget, [target]),
-            # ?barrier is unconstrained the same way: without this, the grounder can
-            # bind it to an object the held cube was never down-x of (e.g. the bin
-            # itself). The delete effect below would then target an atom that was
-            # never true, so the real, physical "cube crossed the barrier" fact
-            # would survive refinement's exact-state-equality check unexpectedly,
-            # and every sample would fail regardless of how the throw itself lands.
-            # Still true here: pick_cube's own precondition requires it and no
-            # effect between pick and this operator touches it.
+            # Only toss if the held cube is still on this side of the barrier.
             LiftedAtom(MovableIsDownX, [held, barrier]),
         },
         add_effects={

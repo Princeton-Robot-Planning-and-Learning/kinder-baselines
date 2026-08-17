@@ -858,8 +858,9 @@ class MoveToTossLocationAndTossController(
     ) -> list[SE2]:
         # The robot's own cargo would otherwise reject every base plan.
         if disable_collision_objects is None:
-            disable_collision_objects = [self.objects[2].name]
-        target_object_pose = get_overhead_object_se2_pose(x, self.objects[1])
+            disable_collision_objects = [self.objects[1].name]
+        target_object = x.get_object_from_name("bin_0")
+        target_object_pose = get_overhead_object_se2_pose(x, target_object)
         target_base_pose = get_target_robot_pose_from_parameters(
             target_object_pose, current_params[0], current_params[1]
         )
@@ -1127,13 +1128,12 @@ def create_lifted_controllers(
             super().__init__(objects, pybullet_sim=pybullet_sim)
 
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
-    target = Variable("?target", MujocoObjectType)
     held = Variable("?held", MujocoMovableObjectType)
     barrier = Variable("?barrier", MujocoMovableObjectType)
 
     LiftedMoveToTossLocationAndTossController: LiftedParameterizedController = (
         LiftedParameterizedController(
-            [robot, target, held, barrier],
+            [robot, held, barrier],
             MoveToTossLocationAndToss,
         )
     )

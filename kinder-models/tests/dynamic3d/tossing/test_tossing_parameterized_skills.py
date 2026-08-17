@@ -1561,7 +1561,7 @@ def test_move_to_toss_location_and_toss_samples_four_parameters():
     target_bin = state.get_object_from_name("bin_0")
     barrier = state.get_object_from_name("cuboid_barrier")
     controller = controllers["move_to_toss_location_and_toss"].ground(
-        (robot, target_bin, cube, barrier)
+        (robot, cube, barrier)
     )
     draws = np.array(
         [
@@ -1662,10 +1662,9 @@ def test_move_to_toss_location_and_toss_holds_no_sub_controllers():
     controllers = create_lifted_controllers(env.action_space)
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
-    target_bin = state.get_object_from_name("bin_0")
     barrier = state.get_object_from_name("cuboid_barrier")
     controller = controllers["move_to_toss_location_and_toss"].ground(
-        (robot, target_bin, cube, barrier)
+        (robot, cube, barrier)
     )
     nested = [
         name
@@ -1690,10 +1689,9 @@ def test_move_to_toss_location_and_toss_plans_every_phase_in_reset():
     controllers = create_lifted_controllers(env.action_space)
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
-    target_bin = state.get_object_from_name("bin_0")
     barrier = state.get_object_from_name("cuboid_barrier")
     controller = controllers["move_to_toss_location_and_toss"].ground(
-        (robot, target_bin, cube, barrier)
+        (robot, cube, barrier)
     )
     controller.reset(state, np.array([1.30, 0.0, TOSS_MAX_VELOCITY, 720.0]))
     # Every phase is planned before the first action is asked for.
