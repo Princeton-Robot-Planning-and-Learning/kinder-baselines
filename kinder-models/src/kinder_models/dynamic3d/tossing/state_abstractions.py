@@ -50,7 +50,6 @@ GOAL_REGION_NAME = "blocks_goal_region"
 
 CUBE_NAME_PREFIX = "cube"
 BARRIER_NAME = "cuboid_barrier"
-BIN_NAME = "bin_0"
 
 
 class Tossing3DStateAbstractor:

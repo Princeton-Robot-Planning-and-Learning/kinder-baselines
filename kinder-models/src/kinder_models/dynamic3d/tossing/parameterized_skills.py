@@ -950,10 +950,10 @@ class MoveToTossLocationAndTossController(
         assert self._current_base_motion_plan is not None
         while len(self._current_base_motion_plan) > 1:
             peek_pose = self._current_base_motion_plan[0]
-            if self._check_robot_is_close_to_pose(peek_pose):
+            if self._robot_is_close_to_pose(peek_pose):
                 self._current_base_motion_plan.pop(0)
             break
-        if self._check_robot_is_close_to_pose(self._current_base_motion_plan[-1]):
+        if self._robot_is_close_to_pose(self._current_base_motion_plan[-1]):
             self._phase = self.MoveToTossLocationAndTossControllerPhase.WINDUP
         robot_pose = self._get_current_robot_pose()
         next_pose = self._current_base_motion_plan[0]
@@ -1009,7 +1009,7 @@ class MoveToTossLocationAndTossController(
             self._last_state.get(robot, "pos_base_rot"),
         )
 
-    def _check_robot_is_close_to_pose(self, pose: SE2) -> bool:
+    def _robot_is_close_to_pose(self, pose: SE2) -> bool:
         robot_pose = self._get_current_robot_pose()
         return bool(
             np.hypot(pose.x - robot_pose.x, pose.y - robot_pose.y) < WAYPOINT_TOLERANCE
