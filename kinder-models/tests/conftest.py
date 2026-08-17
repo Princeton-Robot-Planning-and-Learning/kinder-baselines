@@ -1,5 +1,9 @@
 """Configure pytest."""
 
+import os
+os.environ["PYOPENGL_PLATFORM"] = "egl"
+os.environ["MUJOCO_GL"] = "egl"
+
 from _pytest.config import Config
 from _pytest.config.argparsing import Parser
 

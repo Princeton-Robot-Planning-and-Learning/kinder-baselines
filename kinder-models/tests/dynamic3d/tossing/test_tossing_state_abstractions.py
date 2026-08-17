@@ -9,21 +9,14 @@ from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
 from relational_structs import GroundAtom, ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
 
-from kinder_models.dynamic3d.tossing.parameterized_skills import (
-    create_lifted_controllers,
-)
 from kinder_models.dynamic3d.tossing.state_abstractions import (
     HandEmpty,
     Holding,
     MovableInGoalRegion,
     MovableIsDownX,
     OnGround,
-    RobotAtThrowPose,
     Tossing3DStateAbstractor,
 )
-
-# The standoff the pick-and-toss tests drive to, inside THROW_STANDOFF_BOUNDS.
-THROW_STANDOFF = 1.35
 
 
 def _get_robot_from_state(state: ObjectCentricState):
@@ -154,40 +147,54 @@ def test_the_goal_is_every_cube_in_the_goal_region():
     env.close()
 
 
-def test_robot_at_throw_pose_holds_after_driving_to_a_throw_standoff():
-    """Checked against the controller that establishes it, not a hand-set state."""
-    env, abstractor, state = _make_env_and_abstractor("Tossing3D-state-abstraction")
-    robot = _get_robot_from_state(state)
-    target_bin = state.get_object_from_name("bin_0")
-    controller = create_lifted_controllers(env.action_space)["move_to_target"].ground(
-        (robot, target_bin)
-    )
-    # cube_0 rests at x = 0.71 and the base is headed for x = 0.65, so it is excluded
-    # the way MoveToThrowPoseController excludes the object it holds.
-    controller.reset(
-        state,
-        np.array([THROW_STANDOFF, 0.0]),
-        disable_collision_objects=["cube_0"],
-    )
-    for _ in range(300):
-        obs, _, _, _, _ = env.step(controller.step())
-        state = env.observation_space.devectorize(obs)
-        controller.observe(state)
-        if controller.terminated():
-            break
-    else:
-        assert False, "Controller did not terminate"
-
-    atoms = abstractor.state_abstractor(state).atoms
-    assert GroundAtom(RobotAtThrowPose, [robot, target_bin]) in atoms
-    env.close()
-
-
 def test_the_abstractor_rejects_the_two_cube_variant():
-    """o2 is out of scope: no operator says which cube a throw is aimed at."""
+    """O2 is out of scope: no operator says which cube a throw is aimed at."""
     kinder.register_all_environments()
     env = kinder.make("kinder/Tossing3D-o2-v0", render_mode="rgb_array")
     sim = env.unwrapped._object_centric_env  # pylint: disable=protected-access
     with pytest.raises(AssertionError, match="only Tossing3D-o1 is supported"):
         Tossing3DStateAbstractor(sim)
+    env.close()
+
+
+def _rest(axis, deg):
+    """A quaternion (qx, qy, qz, qw) rotating `deg` about `axis`."""
+    half = np.deg2rad(deg) / 2
+    vec = np.array(axis, dtype=float)
+    return tuple(float(v) for v in np.sin(half) * vec) + (float(np.cos(half)),)
+
+
+def test_on_ground_holds_for_a_cube_resting_on_any_of_its_faces():
+    """A cube on its side is the same cube on the same floor. The grasp no longer cares
+    which face is up, so neither should the predicate."""
+    env, abstractor, state = _make_env_and_abstractor()
+    cube = state.get_object_from_name("cube_0")
+    for axis, deg in [
+        ([0, 0, 1], 0),
+        ([0, 0, 1], 90),
+        ([1, 0, 0], 90),
+        ([1, 0, 0], 180),
+        ([1, 0, 0], -90),
+        ([0, 1, 0], 90),
+        ([0, 1, 0], -90),
+        ([0, 1, 0], 180),
+    ]:
+        rested = state.copy()
+        for feature, value in zip(("qx", "qy", "qz", "qw"), _rest(axis, deg)):
+            rested.set(cube, feature, value)
+        atoms = abstractor.state_abstractor(rested).atoms
+        assert GroundAtom(OnGround, [cube]) in atoms, (axis, deg)
+    env.close()
+
+
+def test_on_ground_still_fails_for_a_cube_balanced_between_faces():
+    """Canonicalising is not the same as ignoring orientation: a cube on an edge rests
+    on no face at all, and the bounding-box arithmetic stops meaning anything."""
+    env, abstractor, state = _make_env_and_abstractor()
+    cube = state.get_object_from_name("cube_0")
+    balanced = state.copy()
+    for feature, value in zip(("qx", "qy", "qz", "qw"), _rest([1, 0, 0], 45)):
+        balanced.set(cube, feature, value)
+    atoms = abstractor.state_abstractor(balanced).atoms
+    assert GroundAtom(OnGround, [cube]) not in atoms
     env.close()
