@@ -9,10 +9,6 @@ from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 kinder.register_all_environments()
 
 
-@pytest.mark.xfail(
-    raises=NotImplementedError,
-    reason="PickCubeController is currently a stub raising NotImplementedError",
-)
 def test_tidybot3d_tossing3d_bilevel_planning():
     """Plan and execute a pick and a throw in the Tossing3D environment."""
 
