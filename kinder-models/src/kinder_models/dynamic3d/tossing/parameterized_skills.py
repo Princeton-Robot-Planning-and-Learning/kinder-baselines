@@ -1,7 +1,7 @@
 """Parameterized skills for the TidyBot3D tossing environment."""
 
 import enum
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 from bilevel_planning.structs import (
@@ -55,6 +55,8 @@ from kinder_models.dynamic3d.utils import (
     GRIPPER_CLOSED_THRESHOLD,
     GRIPPER_OPEN_COMMAND_TOLERANCE,
     MINIMUM_HOLDING_HEIGHT,
+    MOVE_TO_TARGET_DISTANCE_BOUNDS,
+    MOVE_TO_TARGET_ROT_BOUNDS,
     WAYPOINT_TOLERANCE,
     WORLD_X_BOUNDS,
     WORLD_Y_BOUNDS,
@@ -709,18 +711,32 @@ class PickCubeController(
     Stub controller for picking a cube; raises NotImplementedError.
     """
 
-    STANDOFF = (0.55, 0.0)
+    TARGET_DISTANCE = 0.55
+    TARGET_ROTATION = 0.0
 
-    class PickCubeController(enum.Enum):
+    class PickCubeControllerPhase(enum.Enum):
         BASE_MOTION = enum.auto()
         MOVE_ARM_TO_HOVER_OVER_CUBE = enum.auto()
         MOVE_ARM_DOWN_AROUND_CUBE = enum.auto()
         CLOSE_GRIPPER_TO_GRASP_CUBE = enum.auto()
         LIFT_CUBE_TO_HOME = enum.auto()
 
+    class Trajectory(NamedTuple):
+        # The starting configuration of the robot
+        start_joints: np.ndarray
+        # The direction in configuration space that the robot moves in
+        trajectory_direction: np.ndarray
+        # The distance to be achieved at this "tick" of the controller
+        trajectory: np.ndarray
+        current_step: int
+
+
     def __init__(self, *args: Any,pybullet_sim: PyBulletSim | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.current_phase = self.PickCubeController.BASE_MOTION
+
+        self.MAX_SAMPLER_ATTEMPTS = 100
+
+        self.current_phase = self.PickCubeControllerPhase.BASE_MOTION
 
         self._pybullet_sim = pybullet_sim
 
@@ -728,27 +744,56 @@ class PickCubeController(
             [0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0]
         )  # retract configuration
 
-        self.trajectories = {
-            self.PickCubeController.BASE_MOTION: np.array([]),
-            self.PickCubeController.MOVE_ARM_TO_HOVER_OVER_CUBE: np.array([]),
-            self.PickCubeController.MOVE_ARM_DOWN_AROUND_CUBE: np.array([]),
-            self.PickCubeController.CLOSE_GRIPPER_TO_GRASP_CUBE: np.array([]),
-            self.PickCubeController.LIFT_CUBE_TO_HOME: np.array([]),
+        self.trajectories: dict[PickCubeController.PickCubeControllerPhase, PickCubeController.Trajectory | None] = {
+            self.PickCubeControllerPhase.BASE_MOTION: None,
+            self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE: None,
+            self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE: None,
+            self.PickCubeControllerPhase.CLOSE_GRIPPER_TO_GRASP_CUBE: None,
+            self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME: None,
         }
 
-        self.plans = {
-            self.PickCubeController.BASE_MOTION: None,
-            self.PickCubeController.MOVE_ARM_TO_HOVER_OVER_CUBE: None,
-            self.PickCubeController.MOVE_ARM_DOWN_AROUND_CUBE: None,
-            self.PickCubeController.CLOSE_GRIPPER_TO_GRASP_CUBE: None,
-            self.PickCubeController.LIFT_CUBE_TO_HOME: None,
+        self.plans: dict[PickCubeController.PickCubeControllerPhase, list[SE2] | None] = {
+            self.PickCubeControllerPhase.BASE_MOTION: None,
+            self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE: None,
+            self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE: None,
+            self.PickCubeControllerPhase.CLOSE_GRIPPER_TO_GRASP_CUBE: None,
+            self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME: None,
         }
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
-        """ This controller is entirely hardcoded. """
-        return tuple()
+        target_object = self.objects[1]
+        target_object_pose = get_overhead_object_se2_pose(x, target_object)
 
-    def reset(self, x: ObjectCentricState, params: Any) -> None:
+        for _ in range(self.MAX_SAMPLER_ATTEMPTS):
+            distance = rng.uniform(*MOVE_TO_TARGET_DISTANCE_BOUNDS)
+            rot = rng.uniform(*MOVE_TO_TARGET_ROT_BOUNDS)
+            target_base_pose = get_target_robot_pose_from_parameters(
+                target_object_pose, distance, rot
+            )
+            collision = False
+            for other_object in x.get_objects(MujocoMovableObjectType):
+                if (
+                    "cube" in other_object.name
+                    and other_object.name != target_object.name
+                ):
+                    other_object_pose = get_overhead_object_se2_pose(x, other_object)
+                    collision_distance = float(
+                        np.linalg.norm(
+                            [
+                                target_base_pose.x - other_object_pose.x,
+                                target_base_pose.y - other_object_pose.y,
+                            ]
+                        )
+                    )
+                    if collision_distance < 0.6:
+                        collision = True
+                        break
+            if not collision:
+                return np.array([distance, rot])
+
+        raise ValueError("No valid parameters found")
+
+    def reset(self, x: ObjectCentricState, params: Any, extend_xy_magnitude: float = 0.025, extend_rot_magnitude: float = np.pi / 8) -> None:
         # This is an entirely hardcoded controller
         del params
         # Initialize the PyBullet interface if this is the first time ever.
@@ -756,28 +801,33 @@ class PickCubeController(
             self._pybullet_sim = PyBulletSim(x)
 
         # Reset to the first phase
-        self.current_phase = self.PickCubeController.BASE_MOTION
+        self.current_phase = self.PickCubeControllerPhase.BASE_MOTION
+
+        cube_to_pick_up = self.objects[1] # The cube should always be set at construction time to the index 1 object and the barrier to the index 2 object
 
         # Pre-compute all motion planning
-
         # BASE_MOTION planning
-        self.plans[self.PickCubeController.BASE_MOTION] = run_base_motion_planning(
+        cube_pose = get_overhead_object_se2_pose(x, cube_to_pick_up)
+        target_base_pose = get_target_robot_pose_from_parameters(cube_pose, self.TARGET_DISTANCE, self.TARGET_ROTATION)
+        self.plans[self.PickCubeControllerPhase.BASE_MOTION] = run_base_motion_planning(
             state=x,
-            target_base_pose= # TODO: Fill in,
+            target_base_pose=target_base_pose,
             x_bounds=WORLD_X_BOUNDS,
             y_bounds=WORLD_Y_BOUNDS,
             seed=0, # To make this effectively deterministic
-            extend_xy_magnitude= # TODO: Fill in,
-            extend_rot_magnitude= # TODO: Fill in
+            extend_xy_magnitude=extend_xy_magnitude,
+            extend_rot_magnitude=extend_rot_magnitude
         )
-        assert self.plans[self.PickCubeController.BASE_MOTION] is not None
+        assert self.plans[self.PickCubeControllerPhase.BASE_MOTION] is not None
 
         # MOVE_ARM_TO_HOVER_OVER_CUBE planning
         # Get the last state from the BASE_MOTION plan so that next steps can build on it
         state_after_base_motion = x.copy()
         robot = self.objects[0] # robot is the first parameter
-        target_base_pose = self.plans[self.PickCubeController.BASE_MOTION][-1]
-        assert self.current_phase == self.PickCubeController.BASE_MOTION
+        target_base_pose_plan = self.plans[self.PickCubeControllerPhase.BASE_MOTION]
+        assert target_base_pose_plan is not None
+        target_base_pose = target_base_pose_plan[-1]
+        assert self.current_phase == self.PickCubeControllerPhase.BASE_MOTION
         state_after_base_motion.set(robot, "pos_base_x", target_base_pose.x)
         state_after_base_motion.set(robot, "pos_base_y", target_base_pose.y)
         state_after_base_motion.set(robot, "pos_base_rot", target_base_pose.theta())
@@ -785,7 +835,6 @@ class PickCubeController(
         # Set the simulation to the state after base motion so that it can be used for grasp planning
         self._pybullet_sim.set_state(state_after_base_motion)
 
-        cube_to_pick_up = self.objects[1] # The cube should always be set at construction time to the index 1 object and the barrier to the index 2 object
         target_hover_end_effector_pose = Pose(
             (
                 state_after_base_motion.get(cube_to_pick_up, "x"),
@@ -800,7 +849,7 @@ class PickCubeController(
             )
         )
         target_hover_joints = inverse_kinematics(self._pybullet_sim.robot, target_hover_end_effector_pose, set_joints=False)
-        self.plans[self.PickCubeController.MOVE_ARM_TO_HOVER_OVER_CUBE] = run_motion_planning(
+        self.plans[self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE] = run_motion_planning(
             self._pybullet_sim.robot,
             self._pybullet_sim.get_robot_joints(),
             target_hover_joints,
@@ -829,7 +878,7 @@ class PickCubeController(
             target_around_cube_end_effector_pose,
             set_joints=False
         )
-        self.plans[self.PickCubeController.MOVE_ARM_DOWN_AROUND_CUBE] = run_motion_planning(
+        self.plans[self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE] = run_motion_planning(
             self._pybullet_sim.robot,
             target_hover_joints, # Going from the hover joints to the around joints
             target_around_joints,
@@ -844,7 +893,7 @@ class PickCubeController(
         # LIFT_CUBE_TO_HOME planning
         held_object = self._pybullet_sim._cubes[cube_to_pick_up.name] # For collision detection
         self._pybullet_sim.base_link_to_held_obj = GRASP_TRANSFORM_TO_OBJECT # For Motion planning so it knows to avoid bonking the cube on things
-        self.plans[self.PickCubeController.LIFT_CUBE_TO_HOME] = run_motion_planning(
+        self.plans[self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME] = run_motion_planning(
             self._pybullet_sim.robot,
             target_around_joints,
             self.home_joints.tolist(),
@@ -863,8 +912,9 @@ class PickCubeController(
             self.plans[name] = remap_joint_position_plan_to_constant_distance(self.plans[name], self._pybullet_sim.robot, max_distance=0.4)
 
             # Map the plan into a trapezoidal velocity controller within realistic max velocity and acceleration
-
-
+            start_joints = self.plans[name][0]
+            trajectory, direction = _compute_per_joint_profile(start_joints, self.plans[name][-1], _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION)
+            self.trajectories[name] = self.Trajectory(start_joints=start_joints, trajectory_direction=direction, trajectory=trajectory, current_step=0)
         
 
 
