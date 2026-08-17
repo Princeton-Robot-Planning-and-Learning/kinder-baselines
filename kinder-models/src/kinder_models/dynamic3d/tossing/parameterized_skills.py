@@ -727,6 +727,7 @@ class PickCubeController(
     TARGET_ROTATION = 0.0
 
     class PickCubeControllerPhase(enum.Enum):
+        OPEN_GRIPPER = enum.auto()
         BASE_MOTION = enum.auto()
         MOVE_ARM_TO_HOVER_OVER_CUBE = enum.auto()
         MOVE_ARM_DOWN_AROUND_CUBE = enum.auto()
@@ -750,7 +751,7 @@ class PickCubeController(
 
         self.MAX_SAMPLER_ATTEMPTS = 100
 
-        self.current_phase = self.PickCubeControllerPhase.BASE_MOTION
+        self.current_phase = self.PickCubeControllerPhase.OPEN_GRIPPER
 
         self._pybullet_sim = pybullet_sim
         self._last_state: ObjectCentricState | None = None
@@ -772,6 +773,7 @@ class PickCubeController(
         )  # retract configuration
 
         self.trajectories: dict[PickCubeController.PickCubeControllerPhase, PickCubeController.Trajectory | None] = {
+            self.PickCubeControllerPhase.OPEN_GRIPPER: None,
             self.PickCubeControllerPhase.BASE_MOTION: None,
             self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE: None,
             self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE: None,
@@ -780,6 +782,7 @@ class PickCubeController(
         }
 
         self.plans: dict[PickCubeController.PickCubeControllerPhase, list[SE2] | list[JointPositions] | None] = {
+            self.PickCubeControllerPhase.OPEN_GRIPPER: None,
             self.PickCubeControllerPhase.BASE_MOTION: None,
             self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE: None,
             self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE: None,
@@ -828,7 +831,7 @@ class PickCubeController(
             self._pybullet_sim = PyBulletSim(x)
 
         # Reset to the first phase
-        self.current_phase = self.PickCubeControllerPhase.BASE_MOTION
+        self.current_phase = self.PickCubeControllerPhase.OPEN_GRIPPER
         self._last_state = x
         self._last_gripper_state = 0.0
         self._closed_gripper = False
@@ -859,7 +862,7 @@ class PickCubeController(
         assert target_base_pose_plan is not None
         target_base_pose = target_base_pose_plan[-1]
         assert isinstance(target_base_pose, SE2)
-        assert self.current_phase == self.PickCubeControllerPhase.BASE_MOTION
+        assert self.current_phase == self.PickCubeControllerPhase.OPEN_GRIPPER
         state_after_base_motion.set(robot, "pos_base_x", target_base_pose.x)
         state_after_base_motion.set(robot, "pos_base_y", target_base_pose.y)
         state_after_base_motion.set(robot, "pos_base_rot", target_base_pose.theta())
@@ -937,7 +940,7 @@ class PickCubeController(
         )
 
         for name in self.plans.keys():
-            if name in {self.PickCubeControllerPhase.BASE_MOTION, self.PickCubeControllerPhase.CLOSE_GRIPPER_TO_GRASP_CUBE}:
+            if name in {self.PickCubeControllerPhase.OPEN_GRIPPER, self.PickCubeControllerPhase.BASE_MOTION, self.PickCubeControllerPhase.CLOSE_GRIPPER_TO_GRASP_CUBE}:
                 continue # There is no arm motion planning for these phases, so we don't need to remap or compute a trajectory
             # Ensure motion planning didn't fail
             plan = self.plans[name]
@@ -957,6 +960,8 @@ class PickCubeController(
 
 
     def step(self) -> Array:
+        if self.current_phase == self.PickCubeControllerPhase.OPEN_GRIPPER:
+            return self._step_open_gripper()
         if self.current_phase == self.PickCubeControllerPhase.BASE_MOTION:
             return self._step_base_motion()
         if self.current_phase == self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE:
@@ -977,6 +982,20 @@ class PickCubeController(
                 None,
             )
         raise ValueError(f"Invalid phase: {self.current_phase}")
+
+    def _step_open_gripper(self) -> Array:
+        """Open the gripper before reaching for the cube.
+
+        A no-op when the gripper already reads open: the phase falls straight through to
+        the base motion in the same step rather than spending a control step commanding
+        a state the gripper is already in.
+        """
+        if self._robot_gripper_is_open():
+            self.current_phase = self.PickCubeControllerPhase.BASE_MOTION
+            return self._step_base_motion()
+        action = np.zeros(11, dtype=np.float32)
+        action[-1] = 0
+        return action
 
     def _step_base_motion(self) -> Array:
         base_plan = self.plans[self.PickCubeControllerPhase.BASE_MOTION]
@@ -1110,6 +1129,19 @@ class PickCubeController(
         assert self._pybullet_sim is not None
         dist = self._pybullet_sim.get_joint_distance(current_conf, conf)
         return dist < atol
+
+    def _robot_gripper_is_open(
+        self, atol: float = GRIPPER_OPEN_COMMAND_TOLERANCE
+    ) -> bool:
+        """Whether the gripper is commanded open.
+
+        Reads pos_gripper directly rather than through _get_current_robot_gripper_pose,
+        which quantises to 0.0 / GRASP_CLOSE_THRESHOLD and so cannot distinguish
+        "open" from "nearly open".
+        """
+        x = self._last_state
+        assert x is not None
+        return bool(x.get(self.objects[0], "pos_gripper") < atol)
 
     def _record_arm_conf(self, conf: np.ndarray) -> None:
         """Remember this tick's arm conf, so the next tick can measure motion."""
