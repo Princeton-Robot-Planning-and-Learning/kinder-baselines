@@ -734,18 +734,6 @@ class PickCubeController(
         CLOSE_GRIPPER_TO_GRASP_CUBE = enum.auto()
         LIFT_CUBE_TO_HOME = enum.auto()
 
-    # arbitrary_types_allowed because the fields are numpy arrays, which pydantic has
-    # no schema for; without it the module fails to import at class-creation time.
-    @dataclass(config={"arbitrary_types_allowed": True})
-    class Trajectory:
-        # The starting configuration of the robot
-        start_joints: np.ndarray
-        # The direction in configuration space that the robot moves in
-        trajectory_direction: np.ndarray
-        # The distance to be achieved at this "tick" of the controller
-        trajectory: np.ndarray
-        current_step: int
-
     def __init__(self, *args: Any,pybullet_sim: PyBulletSim | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
 
@@ -771,15 +759,6 @@ class PickCubeController(
         self.home_joints = np.deg2rad(
             [0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0]
         )  # retract configuration
-
-        self.trajectories: dict[PickCubeController.PickCubeControllerPhase, PickCubeController.Trajectory | None] = {
-            self.PickCubeControllerPhase.OPEN_GRIPPER: None,
-            self.PickCubeControllerPhase.BASE_MOTION: None,
-            self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE: None,
-            self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE: None,
-            self.PickCubeControllerPhase.CLOSE_GRIPPER_TO_GRASP_CUBE: None,
-            self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME: None,
-        }
 
         self.plans: dict[PickCubeController.PickCubeControllerPhase, list[SE2] | list[JointPositions] | None] = {
             self.PickCubeControllerPhase.OPEN_GRIPPER: None,
@@ -941,22 +920,14 @@ class PickCubeController(
 
         for name in self.plans.keys():
             if name in {self.PickCubeControllerPhase.OPEN_GRIPPER, self.PickCubeControllerPhase.BASE_MOTION, self.PickCubeControllerPhase.CLOSE_GRIPPER_TO_GRASP_CUBE}:
-                continue # There is no arm motion planning for these phases, so we don't need to remap or compute a trajectory
+                continue # There is no arm motion planning for these phases, so we don't need to remap
             # Ensure motion planning didn't fail
             plan = self.plans[name]
             assert plan is not None, f"Motion Planning Failed at {name}"
 
             # Map the plan onto real robot space, with constant distance
             self.plans[name] = remap_joint_position_plan_to_constant_distance(plan, self._pybullet_sim.robot, max_distance=0.2)
-            plan = self.plans[name]
-            assert plan is not None
 
-            # Map the plan into a trapezoidal velocity controller within realistic max velocity and acceleration. Cut to 7 because we only care about the positions, not the velocities (we assume velocities are 0)
-            start_joints = np.array(plan[0][:7])
-            end_joints = np.array(plan[-1][:7])
-            trajectory, direction = _compute_per_joint_profile(start_joints, end_joints, _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION)
-            self.trajectories[name] = self.Trajectory(start_joints=start_joints, trajectory_direction=direction, trajectory=trajectory, current_step=0)
-        
 
 
     def step(self) -> Array:
