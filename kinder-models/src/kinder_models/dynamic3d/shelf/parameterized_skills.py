@@ -74,15 +74,13 @@ class PickShelfController(GroundParameterizedController[ObjectCentricState, Arra
     # the shared constant.
     GRASP_TRANSFORM = GRASP_TRANSFORM_TO_OBJECT
 
-    # How long the approach may keep tracking after its trapezoidal profile runs out,
-    # and how close to the planned grasp configuration it has to get before the gripper
-    # is allowed to close. Zero steps reproduces the historical behaviour exactly --
-    # the profile's last index is the last one, arrived or not -- and is what the shelf
-    # pick keeps; a subclass reaching for a shape that has to be gripped squarely can
-    # buy the convergence instead. Class attributes for the same reason GRASP_TRANSFORM
-    # is one: the difference belongs to the subclass, not to this controller.
+    # How long the approach may keep tracking after its trapezoidal profile runs out.
+    # Zero reproduces the historical behaviour exactly -- the profile's last index is
+    # the last one, arrived or not -- and is what the shelf pick keeps; a subclass
+    # reaching for a shape that has to be gripped squarely can wait instead. A class
+    # attribute for the same reason GRASP_TRANSFORM is one: the difference belongs to
+    # the subclass, not to this controller.
     APPROACH_SETTLE_STEPS = 0
-    APPROACH_ARRIVAL_TOLERANCE = 0.0
     # A one-shot feedforward added to the arm command while settling, and how many
     # settling steps to wait before measuring it. The proportional command alone leaves
     # a standing joint error and has to: holding the arm against gravity needs a
@@ -308,21 +306,19 @@ class PickShelfController(GroundParameterizedController[ObjectCentricState, Arra
         The trapezoidal profile says when the *commanded* path ends; it says nothing
         about where the arm actually is, because each step commands a proportional
         correction (kp times the remaining joint error) rather than a position. So the
-        arm reaches the last profile index still trailing the target. Holding that final
-        command for a few more steps drives the residual down geometrically, since the
-        profile index is clamped to its last entry.
+        arm reaches the last profile index still trailing the target, and holding that
+        final command for APPROACH_SETTLE_STEPS more steps is what closes the gap.
+
+        The residual plateaus rather than converging -- proportional velocity control
+        against gravity needs a non-zero command to hold a pose, and the only thing
+        producing one is the error itself. Measured over six seeds it settles at
+        0.72-1.04 degrees, so this waits a fixed number of steps rather than for a
+        tolerance it would never reach.
         """
         if self._approach_step_idx < len(self._approach_trajectory):
             return False
         overrun = self._approach_step_idx - len(self._approach_trajectory)
-        if overrun >= self.APPROACH_SETTLE_STEPS:
-            return True
-        assert self._current_arm_joint_plan is not None
-        error = np.abs(
-            np.array(self._get_current_robot_arm_conf()[:7])
-            - np.array(self._current_arm_joint_plan[-1][:7])
-        )
-        return bool(error.max() <= self.APPROACH_ARRIVAL_TOLERANCE)
+        return overrun >= self.APPROACH_SETTLE_STEPS
 
     def step(self) -> Array:
         assert self._current_arm_joint_plan is not None

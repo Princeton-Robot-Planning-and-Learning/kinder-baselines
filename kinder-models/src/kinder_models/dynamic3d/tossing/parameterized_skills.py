@@ -755,7 +755,6 @@ class PickCubeController(PickShelfController):
     # long enough for the profile's own deceleration to finish, so the error being
     # cancelled is the standing one and not the tail of the approach.
     APPROACH_SETTLE_STEPS = 60
-    APPROACH_ARRIVAL_TOLERANCE = float(np.deg2rad(0.05))
     APPROACH_FEEDFORWARD_GAIN = 2.0
     APPROACH_FEEDFORWARD_DELAY = 12
 
