@@ -29,6 +29,7 @@ from pybullet_helpers.motion_planning import (
     remap_joint_position_plan_to_constant_distance,
     run_motion_planning,
 )
+from pydantic.dataclasses import dataclass
 from relational_structs import (
     Array,
     ObjectCentricState,
@@ -721,7 +722,8 @@ class PickCubeController(
         CLOSE_GRIPPER_TO_GRASP_CUBE = enum.auto()
         LIFT_CUBE_TO_HOME = enum.auto()
 
-    class Trajectory(NamedTuple):
+    @dataclass
+    class Trajectory:
         # The starting configuration of the robot
         start_joints: np.ndarray
         # The direction in configuration space that the robot moves in
@@ -752,7 +754,7 @@ class PickCubeController(
             self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME: None,
         }
 
-        self.plans: dict[PickCubeController.PickCubeControllerPhase, list[SE2] | None] = {
+        self.plans: dict[PickCubeController.PickCubeControllerPhase, list[SE2] | list[JointPositions] | None] = {
             self.PickCubeControllerPhase.BASE_MOTION: None,
             self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE: None,
             self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE: None,
@@ -827,6 +829,7 @@ class PickCubeController(
         target_base_pose_plan = self.plans[self.PickCubeControllerPhase.BASE_MOTION]
         assert target_base_pose_plan is not None
         target_base_pose = target_base_pose_plan[-1]
+        assert isinstance(target_base_pose, SE2)
         assert self.current_phase == self.PickCubeControllerPhase.BASE_MOTION
         state_after_base_motion.set(robot, "pos_base_x", target_base_pose.x)
         state_after_base_motion.set(robot, "pos_base_y", target_base_pose.y)
@@ -848,6 +851,7 @@ class PickCubeController(
                 state_after_base_motion.get(cube_to_pick_up, "qw"),
             )
         )
+        target_hover_end_effector_pose = multiply_poses(target_hover_end_effector_pose, GRASP_TRANSFORM_TO_OBJECT) # Offset by the intended grasp location
         target_hover_joints = inverse_kinematics(self._pybullet_sim.robot, target_hover_end_effector_pose, set_joints=False)
         self.plans[self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE] = run_motion_planning(
             self._pybullet_sim.robot,
@@ -892,7 +896,7 @@ class PickCubeController(
 
         # LIFT_CUBE_TO_HOME planning
         held_object = self._pybullet_sim._cubes[cube_to_pick_up.name] # For collision detection
-        self._pybullet_sim.base_link_to_held_obj = GRASP_TRANSFORM_TO_OBJECT # For Motion planning so it knows to avoid bonking the cube on things
+        self._pybullet_sim.base_link_to_held_obj = GRASP_TRANSFORM_TO_OBJECT.invert() # For Motion planning so it knows to avoid bonking the cube on things
         self.plans[self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME] = run_motion_planning(
             self._pybullet_sim.robot,
             target_around_joints,
@@ -905,15 +909,21 @@ class PickCubeController(
         )
 
         for name in self.plans.keys():
+            if name in {self.PickCubeControllerPhase.BASE_MOTION, self.PickCubeControllerPhase.CLOSE_GRIPPER_TO_GRASP_CUBE}:
+                continue # There is no arm motion planning for these phases, so we don't need to remap or compute a trajectory
             # Ensure motion planning didn't fail
-            assert self.plans[name] is not None, f"Motion Planning Failed at {name}"
+            plan = self.plans[name]
+            assert plan is not None, f"Motion Planning Failed at {name}"
 
             # Map the plan onto real robot space, with constant distance
-            self.plans[name] = remap_joint_position_plan_to_constant_distance(self.plans[name], self._pybullet_sim.robot, max_distance=0.4)
+            self.plans[name] = remap_joint_position_plan_to_constant_distance(plan, self._pybullet_sim.robot, max_distance=0.4)
+            plan = self.plans[name]
+            assert plan is not None
 
             # Map the plan into a trapezoidal velocity controller within realistic max velocity and acceleration
-            start_joints = self.plans[name][0]
-            trajectory, direction = _compute_per_joint_profile(start_joints, self.plans[name][-1], _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION)
+            start_joints = np.array(plan[0])
+            end_joints = np.array(plan[-1])
+            trajectory, direction = _compute_per_joint_profile(start_joints, end_joints, _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION)
             self.trajectories[name] = self.Trajectory(start_joints=start_joints, trajectory_direction=direction, trajectory=trajectory, current_step=0)
         
 
