@@ -63,6 +63,32 @@ class TidyBotPickController(GroundParameterizedController[ObjectCentricState, Ar
         object: The target object.
     """
 
+    # Where the end effector aims, in the target's own frame. The default is the shared
+    # module constant: a small approach offset and a height 10 mm above the object's
+    # own origin, which suits an object whose origin sits at its base. A class attribute
+    # rather than the bare constant so a subclass picking a differently-shaped object
+    # can aim elsewhere without moving anyone else's grasp.
+    GRASP_TRANSFORM = GRASP_TRANSFORM_TO_OBJECT
+
+    # How long the approach may keep tracking after its trapezoidal profile runs out.
+    # Zero -- the base behaviour -- makes the profile's last index the last step taken,
+    # arrived or not, and closes the gripper immediately after it. That is enough
+    # wherever the residual joint error at the end of the profile is small against the
+    # grasp's own tolerance. A subclass reaching for a shape that has to be gripped
+    # squarely can wait instead. A class attribute for the same reason GRASP_TRANSFORM
+    # is one: the difference belongs to the subclass, not to this controller.
+    APPROACH_SETTLE_STEPS = 0
+    # A one-shot feedforward added to the arm command while settling, and how many
+    # settling steps to wait before measuring it. The proportional command alone leaves
+    # a standing joint error and has to: holding the arm against gravity needs a
+    # non-zero command, and the only thing producing one is the error itself. Adding
+    # `gain` times that error to the command shifts the steady state by gain/kp of it,
+    # so a gain of kp nulls it. Zero -- the base behaviour -- adds nothing, and the
+    # block is unreachable at zero settle steps anyway, so a subclass that wants the
+    # cancellation has to raise APPROACH_SETTLE_STEPS as well.
+    APPROACH_FEEDFORWARD_GAIN = 0.0
+    APPROACH_FEEDFORWARD_DELAY = 0
+
     def __init__(
         self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
     ) -> None:
@@ -86,6 +112,7 @@ class TidyBotPickController(GroundParameterizedController[ObjectCentricState, Ar
         self._approach_traj_dir: np.ndarray = np.zeros(7)
         self._approach_start_joints: np.ndarray = np.zeros(7)
         self._approach_step_idx: int = 0
+        self._approach_command_offset: np.ndarray = np.zeros(7)
         self._retract_trajectory: np.ndarray = np.array([])
         self._retract_traj_dir: np.ndarray = np.zeros(7)
         self._retract_start_joints: np.ndarray = np.zeros(7)
@@ -188,7 +215,7 @@ class TidyBotPickController(GroundParameterizedController[ObjectCentricState, Ar
 
         target_end_effector_pose = multiply_poses(
             target_grasp_pose_world,
-            GRASP_TRANSFORM_TO_OBJECT,
+            self.GRASP_TRANSFORM,
         )
 
         self._pybullet_sim.base_link_to_held_obj = multiply_poses(
@@ -256,6 +283,7 @@ class TidyBotPickController(GroundParameterizedController[ObjectCentricState, Ar
         )
         self._approach_start_joints = curr.copy()
         self._approach_step_idx = 0
+        self._approach_command_offset = np.zeros(7)
         # Compute trapezoidal velocity profile for retract (grasp conf → home).
         self._retract_trajectory, self._retract_traj_dir = _compute_per_joint_profile(
             final, self.home_joints[:7], _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
@@ -269,6 +297,26 @@ class TidyBotPickController(GroundParameterizedController[ObjectCentricState, Ar
             and self._current_retract_plan is not None
         )
         return self._lifted
+
+    def _approach_has_settled(self) -> bool:
+        """Whether the approach is finished and the gripper may close.
+
+        The trapezoidal profile says when the *commanded* path ends; it says nothing
+        about where the arm actually is, because each step commands a proportional
+        correction (kp times the remaining joint error) rather than a position. So the
+        arm reaches the last profile index still trailing the target, and holding that
+        final command for APPROACH_SETTLE_STEPS more steps is what closes the gap.
+
+        The residual plateaus rather than converging -- proportional velocity control
+        against gravity needs a non-zero command to hold a pose, and the only thing
+        producing one is the error itself. Measured over six seeds it settles at
+        0.72-1.04 degrees, so this waits a fixed number of steps rather than for a
+        tolerance it would never reach.
+        """
+        if self._approach_step_idx < len(self._approach_trajectory):
+            return False
+        overrun = self._approach_step_idx - len(self._approach_trajectory)
+        return overrun >= self.APPROACH_SETTLE_STEPS
 
     def step(self) -> Array:
         assert self._current_arm_joint_plan is not None
@@ -296,15 +344,22 @@ class TidyBotPickController(GroundParameterizedController[ObjectCentricState, Ar
             action[-1] = self._get_current_robot_gripper_pose()
             return action
         if self._navigated and not self._pre_grasp and not self._closed_gripper:
-            if self._approach_step_idx >= len(self._approach_trajectory):
+            if self._approach_has_settled():
                 self._pre_grasp = True
             idx = min(self._approach_step_idx, len(self._approach_trajectory) - 1)
             s = float(self._approach_trajectory[idx])
             kp = 2.0
             curr = np.array(self._get_current_robot_arm_conf()[:7])
             target = self._approach_start_joints + self._approach_traj_dir * s
+            if (
+                self._approach_step_idx - len(self._approach_trajectory)
+                == self.APPROACH_FEEDFORWARD_DELAY
+            ):
+                self._approach_command_offset = self.APPROACH_FEEDFORWARD_GAIN * (
+                    target - curr
+                )
             action = np.zeros(11, dtype=np.float32)
-            action[3:10] = kp * (target - curr)
+            action[3:10] = kp * (target - curr) + self._approach_command_offset
             action[-1] = self._get_current_robot_gripper_pose()
             self._approach_step_idx += 1
             return action

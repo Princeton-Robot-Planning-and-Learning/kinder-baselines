@@ -72,11 +72,13 @@ def _create_robot_state(
             "pos_base_rot": base_theta,
             **{f"pos_arm_joint{i+1}": v for i, v in enumerate(arm_joints)},
             "pos_gripper": gripper,
+            **{f"pos_gripper_joint{i+1}": 0.0 for i in range(8)},
             "vel_base_x": 0.0,
             "vel_base_y": 0.0,
             "vel_base_rot": 0.0,
             **{f"vel_arm_joint{i+1}": 0.0 for i in range(7)},
             "vel_gripper": 0.0,
+            **{f"vel_gripper_joint{i+1}": 0.0 for i in range(8)},
         },
         cube: {
             "x": 0.0,
