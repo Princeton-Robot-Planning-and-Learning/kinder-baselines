@@ -1,23 +1,27 @@
-"""Parameterized skills for the TidyBot3D shelf environment."""
+"""The TidyBot arm's pick: drive to the object, grasp it, retract to home.
+
+Nothing here is specific to a scene or a task. What the controller does is base
+navigation, IK and motion planning through :mod:`kinder_models.dynamic3d.utils`'s
+``PyBulletSim``, a trapezoidal approach profile, a gripper close, and a trapezoidal
+retract to the arm's home configuration -- TidyBot-arm logic, all of it, over the
+shared constants in that same module.
+
+It lived in ``shelf/parameterized_skills.py`` until now only because shelf was the
+first domain that needed it, which left the tossing domain subclassing across a domain
+boundary to reuse an arm. It sits beside ``utils.py`` and ``ik_solver.py`` instead, so
+every domain reaches for it as a peer.
+
+Domains specialise it by subclassing and overriding the class attributes below --
+where the end effector aims, and how the approach settles before the gripper closes.
+"""
 
 from typing import Any
 
 import numpy as np
-from bilevel_planning.structs import (
-    GroundParameterizedController,
-    LiftedParameterizedController,
-)
-from gymnasium.spaces import Box
-from kinder.envs.dynamic3d.object_types import (
-    MujocoFixtureObjectType,
-    MujocoMovableObjectType,
-    MujocoTidyBotRobotObjectType,
-)
-from kinder.envs.dynamic3d.robots.tidybot_robot_env import (
-    TidyBot3DRobotActionSpace,
-)
+from bilevel_planning.structs import GroundParameterizedController
+from kinder.envs.dynamic3d.object_types import MujocoMovableObjectType
 from prpl_utils.utils import get_signed_angle_distance
-from pybullet_helpers.geometry import multiply_poses
+from pybullet_helpers.geometry import Pose, multiply_poses
 from pybullet_helpers.inverse_kinematics import (
     JointPositions,
     inverse_kinematics,
@@ -29,26 +33,17 @@ from pybullet_helpers.motion_planning import (
 from relational_structs import (
     Array,
     ObjectCentricState,
-    Variable,
 )
 from spatialmath import SE2
 
-from kinder_models.dynamic3d.tidybot_pick_controller import TidyBotPickController
 from kinder_models.dynamic3d.utils import (
     _ARM_MAX_ACCELERATION,
     _ARM_MAX_VELOCITY,
-    ARM_MOVEMENT_CUPBOARD,
-    BASE_DISTANCE_TO_CUPBOARD,
-    BASE_TO_CUPBOARD_ROTATION,
     GRASP_CLOSE_THRESHOLD,
-    GRIPPER_OPEN_COMMAND_TOLERANCE,
+    GRASP_TRANSFORM_TO_OBJECT,
     MAX_SAMPLER_ATTEMPTS,
     MOVE_TO_TARGET_DISTANCE_BOUNDS,
     MOVE_TO_TARGET_ROT_BOUNDS,
-    PLACE_SAMPLER_COLLISION_THRESHOLD,
-    PLACE_SAMPLER_X_OFFSET_BOUNDS,
-    PLACE_SAMPLER_Y_OFFSET_BOUNDS,
-    ROBOT_ARM_POSE_TO_BASE,
     WAYPOINT_TOLERANCE,
     WORLD_X_BOUNDS,
     WORLD_Y_BOUNDS,
@@ -60,8 +55,8 @@ from kinder_models.dynamic3d.utils import (
 )
 
 
-class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Array]):
-    """Controller for motion planning to place a target.
+class TidyBotPickController(GroundParameterizedController[ObjectCentricState, Array]):
+    """Controller for motion planning to pick up a target.
 
     The object parameters are:
         robot: The robot itself.
@@ -79,9 +74,9 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
         self._current_base_motion_plan: list[SE2] | None = None
         self._pybullet_sim: PyBulletSim | None = pybullet_sim
         self._navigated: bool = False
-        self._pre_place: bool = False
-        self._open_gripper: bool = False
-        self._returned: bool = False
+        self._pre_grasp: bool = False
+        self._closed_gripper: bool = False
+        self._lifted: bool = False
         self._last_gripper_state: float = 0.0
         self.home_joints = np.deg2rad(
             [0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0]
@@ -97,42 +92,36 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
         self._retract_step_idx: int = 0
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
-        cupboard_obj = x.get_object_from_name("cupboard_1")
-        cupboard_pose = get_overhead_object_se2_pose(x, cupboard_obj)
-        rot = BASE_TO_CUPBOARD_ROTATION
-        # sample placements
+        target_object = self.objects[1]
+        target_object_pose = get_overhead_object_se2_pose(x, target_object)
+
         for _ in range(MAX_SAMPLER_ATTEMPTS):
-            pose_x_offset = rng.uniform(*PLACE_SAMPLER_X_OFFSET_BOUNDS)
-            pose_y_offset = rng.uniform(*PLACE_SAMPLER_Y_OFFSET_BOUNDS)
+            distance = rng.uniform(*MOVE_TO_TARGET_DISTANCE_BOUNDS)  # type: ignore
+            rot = rng.uniform(*MOVE_TO_TARGET_ROT_BOUNDS)
+            target_base_pose = get_target_robot_pose_from_parameters(
+                target_object_pose, distance, rot
+            )
             collision = False
-            for other_obj in x.get_objects(MujocoMovableObjectType):
-                if other_obj.name == self.objects[1].name:
-                    continue
-                other_object_pose = get_overhead_object_se2_pose(x, other_obj)
+            for other_object in x.get_objects(MujocoMovableObjectType):
                 if (
-                    np.linalg.norm(
-                        np.array(
+                    "cube" in other_object.name
+                    and other_object.name != target_object.name
+                ):
+                    other_object_pose = get_overhead_object_se2_pose(x, other_object)
+                    collision_distance = float(
+                        np.linalg.norm(
                             [
-                                pose_x_offset
-                                + cupboard_pose.x
-                                + (
-                                    ARM_MOVEMENT_CUPBOARD.position[0]
-                                    + ROBOT_ARM_POSE_TO_BASE.position[0]
-                                    - BASE_DISTANCE_TO_CUPBOARD
-                                ),  # the offset of the cupboard from the cubes.
-                                pose_y_offset + cupboard_pose.y,
+                                target_base_pose.x - other_object_pose.x,
+                                target_base_pose.y - other_object_pose.y,
                             ]
                         )
-                        - np.array([other_object_pose.x, other_object_pose.y])
                     )
-                    < PLACE_SAMPLER_COLLISION_THRESHOLD
-                ):
-                    collision = True
-                    break
+                    if collision_distance < 0.6:
+                        collision = True
+                        break
             if not collision:
-                return np.array(
-                    [BASE_DISTANCE_TO_CUPBOARD + pose_x_offset, pose_y_offset, rot]
-                )
+                return np.array([distance, rot])
+
         raise ValueError("No valid parameters found")
 
     def reset(
@@ -151,14 +140,9 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
         # Convert params to ndarray for compatibility (accepts tuple or array)
         self._current_params = np.asarray(params, dtype=np.float32)
         # Derive the target pose for the robot.
-        target_distance, target_offset, target_rot = self._current_params
-        target_object = self.objects[2]
-        target_object_pose_temp = get_overhead_object_se2_pose(x, target_object)
-        target_object_pose = SE2(
-            target_object_pose_temp.x,
-            target_object_pose_temp.y + target_offset,
-            target_object_pose_temp.theta(),
-        )
+        target_distance, target_rot = self._current_params
+        target_object = self.objects[1]
+        target_object_pose = get_overhead_object_se2_pose(x, target_object)
         target_base_pose = get_target_robot_pose_from_parameters(
             target_object_pose, target_distance, target_rot
         )
@@ -171,7 +155,6 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
             seed=0,  # use a constant seed to effectively make this "deterministic"
             extend_xy_magnitude=extend_xy_magnitude,
             extend_rot_magnitude=extend_rot_magnitude,
-            disable_collision_objects=[self.objects[1].name],
         )
         assert base_motion_plan is not None
         self._current_base_motion_plan = base_motion_plan
@@ -179,22 +162,38 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
         plan_x = x.copy()
         robot = self.objects[0]  # Robot is first parameter
         target_base_pose = self._current_base_motion_plan[-1]
-        plan_x.set(robot, "pos_base_x", target_base_pose.x)
-        plan_x.set(robot, "pos_base_y", target_base_pose.y)
-        plan_x.set(robot, "pos_base_rot", target_base_pose.theta())
+        if not self._navigated:
+            plan_x.set(robot, "pos_base_x", target_base_pose.x)
+            plan_x.set(robot, "pos_base_y", target_base_pose.y)
+            plan_x.set(robot, "pos_base_rot", target_base_pose.theta())
 
-        target_object_place = self.objects[1]
-
-        assert target_object_place is not None
         # Reset PyBullet given the current state.
-        self._pybullet_sim.set_state(plan_x, target_object_place)
+        self._pybullet_sim.set_state(plan_x)
 
-        current_arm_base_pose = self._pybullet_sim.robot.get_base_pose()
+        target_object = self.objects[1]
 
-        target_end_effector_pose = ARM_MOVEMENT_CUPBOARD
+        target_grasp_pose_world = Pose(
+            (
+                plan_x.get(target_object, "x"),
+                plan_x.get(target_object, "y"),
+                plan_x.get(target_object, "z"),
+            ),
+            (
+                plan_x.get(target_object, "qx"),
+                plan_x.get(target_object, "qy"),
+                plan_x.get(target_object, "qz"),
+                plan_x.get(target_object, "qw"),
+            ),
+        )
 
         target_end_effector_pose = multiply_poses(
-            current_arm_base_pose, target_end_effector_pose
+            target_grasp_pose_world,
+            GRASP_TRANSFORM_TO_OBJECT,
+        )
+
+        self._pybullet_sim.base_link_to_held_obj = multiply_poses(
+            target_end_effector_pose.invert(),
+            target_grasp_pose_world,
         )
 
         target_joints = inverse_kinematics(
@@ -208,16 +207,8 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
             self._pybullet_sim.robot,
             self._pybullet_sim.get_robot_joints(),
             target_joints,
-            collision_bodies=self._pybullet_sim.get_collision_bodies(
-                held_object=self._pybullet_sim._cubes[  # pylint: disable=protected-access
-                    target_object_place.name
-                ]
-            ),
+            collision_bodies=self._pybullet_sim.get_collision_bodies(),
             seed=0,  # use a constant seed to make this effectively deterministic
-            held_object=self._pybullet_sim._cubes[  # pylint: disable=protected-access
-                target_object_place.name
-            ],
-            base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
 
@@ -225,7 +216,15 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
             self._pybullet_sim.robot,
             target_joints,
             self.home_joints.tolist(),
-            collision_bodies=self._pybullet_sim.get_collision_bodies(),
+            collision_bodies=self._pybullet_sim.get_collision_bodies(  # pylint: disable=protected-access
+                held_object=self._pybullet_sim._cubes[  # pylint: disable=protected-access
+                    target_object.name
+                ]
+            ),
+            held_object=self._pybullet_sim._cubes[  # pylint: disable=protected-access
+                target_object.name
+            ],
+            base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,  # pylint: disable=protected-access
             seed=0,  # use a constant seed to make this effectively deterministic
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
@@ -249,7 +248,7 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
 
         self._current_arm_joint_plan = plan
         self._current_retract_plan = retract_plan
-        # Compute trapezoidal velocity profile for approach (current → place conf).
+        # Compute trapezoidal velocity profile for approach (current → grasp conf).
         curr = np.array(self._get_current_robot_arm_conf()[:7])
         final = np.array(plan[-1][:7])
         self._approach_trajectory, self._approach_traj_dir = _compute_per_joint_profile(
@@ -257,7 +256,7 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
         )
         self._approach_start_joints = curr.copy()
         self._approach_step_idx = 0
-        # Compute trapezoidal velocity profile for retract (place conf → home).
+        # Compute trapezoidal velocity profile for retract (grasp conf → home).
         self._retract_trajectory, self._retract_traj_dir = _compute_per_joint_profile(
             final, self.home_joints[:7], _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
         )
@@ -269,7 +268,7 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
             self._current_arm_joint_plan is not None
             and self._current_retract_plan is not None
         )
-        return self._returned
+        return self._lifted
 
     def step(self) -> Array:
         assert self._current_arm_joint_plan is not None
@@ -296,9 +295,9 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
             action[2] = drot
             action[-1] = self._get_current_robot_gripper_pose()
             return action
-        if self._navigated and not self._pre_place and not self._open_gripper:
+        if self._navigated and not self._pre_grasp and not self._closed_gripper:
             if self._approach_step_idx >= len(self._approach_trajectory):
-                self._pre_place = True
+                self._pre_grasp = True
             idx = min(self._approach_step_idx, len(self._approach_trajectory) - 1)
             s = float(self._approach_trajectory[idx])
             kp = 2.0
@@ -309,16 +308,20 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
             action[-1] = self._get_current_robot_gripper_pose()
             self._approach_step_idx += 1
             return action
-        if self._pre_place and not self._open_gripper:
-            if self._get_current_robot_gripper_pose() < GRIPPER_OPEN_COMMAND_TOLERANCE:
-                self._open_gripper = True
+        if self._pre_grasp and not self._closed_gripper:
+            if self._get_current_robot_gripper_pose() > 0.2 and np.isclose(
+                self._get_current_robot_gripper_pose(),
+                self._last_gripper_state,
+                atol=0.02,
+            ):
+                self._closed_gripper = True
             action = np.zeros(11, dtype=np.float32)
-            action[-1] = 0
+            action[-1] = 1
             self._last_gripper_state = self._get_current_robot_gripper_pose()
             return action
-        if self._pre_place and self._open_gripper:
+        if self._pre_grasp and self._closed_gripper:
             if self._retract_step_idx >= len(self._retract_trajectory):
-                self._returned = True
+                self._lifted = True
             idx = min(self._retract_step_idx, len(self._retract_trajectory) - 1)
             s = float(self._retract_trajectory[idx])
             kp = 2.0
@@ -393,90 +396,3 @@ class PlaceShelfController(GroundParameterizedController[ObjectCentricState, Arr
                 atol=atol,
             )
         )
-
-
-def create_lifted_controllers(
-    action_space: TidyBot3DRobotActionSpace,
-    init_constant_state: ObjectCentricState | None = None,
-    pybullet_sim: PyBulletSim | None = None,
-) -> dict[str, LiftedParameterizedController]:
-    """Create lifted parameterized controllers for the TidyBot3D ground environment."""
-
-    del action_space, init_constant_state  # not used
-
-    # Create wrapper class that captures pybullet_sim
-    class PickController(TidyBotPickController):
-        """Pick controller with pre-configured PyBullet sim."""
-
-        def __init__(self, objects):
-            super().__init__(pybullet_sim=pybullet_sim, objects=objects)
-
-    class PlaceController(PlaceShelfController):
-        """Place controller with pre-configured PyBullet sim."""
-
-        def __init__(self, objects):
-            super().__init__(pybullet_sim=pybullet_sim, objects=objects)
-
-    # Pick shelf controller.
-    robot = Variable("?robot", MujocoTidyBotRobotObjectType)
-    target = Variable("?target", MujocoMovableObjectType)
-
-    # Parameter space: [distance, rotation]
-    pick_shelf_params_space = Box(
-        low=np.array(
-            [MOVE_TO_TARGET_DISTANCE_BOUNDS[0], MOVE_TO_TARGET_ROT_BOUNDS[0]],
-            dtype=np.float32,
-        ),
-        high=np.array(
-            [MOVE_TO_TARGET_DISTANCE_BOUNDS[1], MOVE_TO_TARGET_ROT_BOUNDS[1]],
-            dtype=np.float32,
-        ),
-        dtype=np.float32,
-    )
-
-    LiftedPickShelfController: LiftedParameterizedController = (
-        LiftedParameterizedController(
-            [robot, target],
-            PickController,
-            params_space=pick_shelf_params_space,
-        )
-    )
-
-    # Place controller.
-    robot = Variable("?robot", MujocoTidyBotRobotObjectType)
-    target = Variable("?target", MujocoMovableObjectType)
-    target_place = Variable("?target_place", MujocoFixtureObjectType)
-
-    # Parameter space: [distance, y_offset, rotation]
-    place_shelf_params_space = Box(
-        low=np.array(
-            [
-                BASE_DISTANCE_TO_CUPBOARD + PLACE_SAMPLER_X_OFFSET_BOUNDS[0],
-                PLACE_SAMPLER_Y_OFFSET_BOUNDS[0],
-                BASE_TO_CUPBOARD_ROTATION,
-            ],
-            dtype=np.float32,
-        ),
-        high=np.array(
-            [
-                BASE_DISTANCE_TO_CUPBOARD + PLACE_SAMPLER_X_OFFSET_BOUNDS[1],
-                PLACE_SAMPLER_Y_OFFSET_BOUNDS[1],
-                BASE_TO_CUPBOARD_ROTATION,
-            ],
-            dtype=np.float32,
-        ),
-        dtype=np.float32,
-    )
-
-    LiftedPlaceShelfController: LiftedParameterizedController = (
-        LiftedParameterizedController(
-            [robot, target, target_place],
-            PlaceController,
-            params_space=place_shelf_params_space,
-        )
-    )
-
-    return {
-        "pick_shelf": LiftedPickShelfController,
-        "place_shelf": LiftedPlaceShelfController,
-    }
