@@ -928,9 +928,9 @@ class PickCubeController(
             plan = self.plans[name]
             assert plan is not None
 
-            # Map the plan into a trapezoidal velocity controller within realistic max velocity and acceleration
-            start_joints = np.array(plan[0])
-            end_joints = np.array(plan[-1])
+            # Map the plan into a trapezoidal velocity controller within realistic max velocity and acceleration. Cut to 7 because we only care about the positions, not the velocities (we assume velocities are 0)
+            start_joints = np.array(plan[0][:7])
+            end_joints = np.array(plan[-1][:7])
             trajectory, direction = _compute_per_joint_profile(start_joints, end_joints, _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION)
             self.trajectories[name] = self.Trajectory(start_joints=start_joints, trajectory_direction=direction, trajectory=trajectory, current_step=0)
         
