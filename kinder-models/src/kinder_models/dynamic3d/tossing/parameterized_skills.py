@@ -352,7 +352,7 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
     ) -> None:
         """Plan the swing, and fix the millisecond the gripper opens on.
 
-        The two knobs the real robot's movej_primitive.execute() takes.
+        The two knobs the real robot's movej_primitive.execute() takes (used by the real robot's kinova controller).
         gripper_release_ms is deliberately NOT clamped to the swing's duration: a value
         at or past the end means the gripper never opens and the cube is never thrown.
         """
