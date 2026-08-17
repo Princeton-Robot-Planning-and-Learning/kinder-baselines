@@ -42,7 +42,7 @@ def test_canonical_upright_rotation_flattens_every_face_down_rest():
         ([0, 1, 0], -90),
         ([0, 1, 0], 180),
     ]:
-        x, y, z, w = canonical_upright_rotation(quat(axis, deg))
+        x, y, _, _ = canonical_upright_rotation(quat(axis, deg))
         assert abs(x) < 1e-6, (axis, deg, x)
         assert abs(y) < 1e-6, (axis, deg, y)
 
@@ -52,7 +52,7 @@ def test_canonical_upright_rotation_keeps_the_yaw():
     for deg in (0.0, 30.0, 90.0, 200.0):
         a = np.deg2rad(deg) / 2
         q = (0.0, 0.0, float(np.sin(a)), float(np.cos(a)))
-        x, y, z, w = canonical_upright_rotation(q)
+        _, _, z, w = canonical_upright_rotation(q)
         got = np.rad2deg(2 * np.arctan2(z, w)) % 90.0
         assert np.isclose(got, deg % 90.0, atol=1e-4) or np.isclose(
             got, deg % 90.0 - 90.0, atol=1e-4

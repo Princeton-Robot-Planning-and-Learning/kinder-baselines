@@ -9,10 +9,6 @@ from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
 from relational_structs import GroundAtom, ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
 
-from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
-from kinder_models.dynamic3d.tossing.parameterized_skills import (
-    create_lifted_controllers,
-)
 from kinder_models.dynamic3d.tossing.state_abstractions import (
     HandEmpty,
     Holding,
