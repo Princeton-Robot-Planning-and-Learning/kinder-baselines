@@ -52,5 +52,7 @@ def test_tidybot3d_tossing3d_bilevel_planning():
         assert False, "Did not terminate successfully"
 
     sim = env.unwrapped._object_centric_env  # pylint: disable=protected-access
-    assert sim._check_goals(), "Planned and executed, but the cube did not score"
+    assert (
+        sim._check_goals()  # pylint: disable=protected-access
+    ), "Planned and executed, but the cube did not score"
     env.close()
