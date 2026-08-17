@@ -68,6 +68,17 @@ from kinder_models.dynamic3d.utils import (
     run_base_motion_planning,
 )
 
+# Per-joint motion between consecutive control steps below which the arm counts as
+# stopped. A stand-in for joint velocity, which the state does not expose for the arm.
+# Measured floor: the proportional controller's tail creeps at ~2.6e-3 rad/step and never
+# fully stops, so a threshold below that never fires and the phase hangs forever.
+ARM_SETTLE_TOLERANCE = 5e-3
+
+# How close the arm must be to a phase's final conf before the settling gate applies.
+# Tighter than WAYPOINT_TOLERANCE (4e-2), which is the pass-through band for intermediate
+# waypoints: handing off to the gripper at 4e-2 leaves the grasp ~2.8cm off the cube.
+ARM_FINAL_CONF_TOLERANCE = 5e-3
+
 
 class MoveToTargetGroundController(
     GroundParameterizedController[ObjectCentricState, Array]
@@ -746,6 +757,15 @@ class PickCubeController(
         self._last_gripper_state: float = 0.0
         self._closed_gripper: bool = False
         self._lifted: bool = False
+        # Previous tick's arm conf, for the settling check in _robot_arm_has_settled.
+        self._prev_arm_conf: np.ndarray | None = None
+        # Which waypoint of self.plans[phase] step() is currently driving toward. A fresh
+        # controller is ground per refinement attempt, so this starts at 0 per attempt.
+        self._plan_step_idx: dict[PickCubeController.PickCubeControllerPhase, int] = {
+            self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE: 0,
+            self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE: 0,
+            self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME: 0,
+        }
 
         self.home_joints = np.deg2rad(
             [0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0]
@@ -924,7 +944,7 @@ class PickCubeController(
             assert plan is not None, f"Motion Planning Failed at {name}"
 
             # Map the plan onto real robot space, with constant distance
-            self.plans[name] = remap_joint_position_plan_to_constant_distance(plan, self._pybullet_sim.robot, max_distance=0.4)
+            self.plans[name] = remap_joint_position_plan_to_constant_distance(plan, self._pybullet_sim.robot, max_distance=0.2)
             plan = self.plans[name]
             assert plan is not None
 
@@ -991,26 +1011,27 @@ class PickCubeController(
         phase: "PickCubeController.PickCubeControllerPhase",
         next_phase: "PickCubeController.PickCubeControllerPhase | None",
     ) -> Array:
-        traj = self.trajectories[phase]
-        assert traj is not None, f"No trajectory computed for {phase}"
-        # The trapezoidal profile is a schedule of distances along the straight line
-        # start_joints -> end_joints; current_step is how far into that schedule we are.
-        if traj.current_step >= len(traj.trajectory):
+        plan = self.plans[phase]
+        assert plan is not None and len(plan) > 0, f"No plan computed for {phase}"
+        idx = self._plan_step_idx[phase]
+        # Drive through the waypoints of the actual (collision-checked) motion-planned
+        # path, advancing once close to the current one, rather than interpolating a
+        # straight line between only the first and last confs.
+        while idx < len(plan) - 1 and self._robot_is_close_to_conf(plan[idx]):
+            idx += 1
+        self._plan_step_idx[phase] = idx
+        target_waypoint = plan[idx]
+        kp = 2.0
+        curr = np.array(self._get_current_robot_arm_conf()[:7])
+        target = np.array(target_waypoint[:7])
+        action = np.zeros(11, dtype=np.float32)
+        action[3:10] = kp * (target - curr)
+        action[-1] = self._get_current_robot_gripper_pose()
+        if idx >= len(plan) - 1 and self._robot_is_close_to_conf(target_waypoint):
             if next_phase is not None:
                 self.current_phase = next_phase
             else:
                 self._lifted = True
-        idx = min(traj.current_step, len(traj.trajectory) - 1)
-        s = float(traj.trajectory[idx])
-        kp = 2.0
-        curr = np.array(self._get_current_robot_arm_conf()[:7])
-        # Only the first 7 DOFs are the arm; the trailing entries are fingers, which
-        # the gripper commands separately through action[-1].
-        target = np.asarray(traj.start_joints + traj.trajectory_direction * s)[:7]
-        action = np.zeros(11, dtype=np.float32)
-        action[3:10] = kp * (target - curr)
-        action[-1] = self._get_current_robot_gripper_pose()
-        traj.current_step += 1
         return action
 
     def _step_close_gripper(self) -> Array:
@@ -1089,6 +1110,22 @@ class PickCubeController(
         assert self._pybullet_sim is not None
         dist = self._pybullet_sim.get_joint_distance(current_conf, conf)
         return dist < atol
+
+    def _record_arm_conf(self, conf: np.ndarray) -> None:
+        """Remember this tick's arm conf, so the next tick can measure motion."""
+        self._prev_arm_conf = np.array(conf)
+
+    def _robot_arm_has_settled(self, atol: float = ARM_SETTLE_TOLERANCE) -> bool:
+        """Whether the arm has stopped moving since the previous control step.
+
+        The second of the two gates on a phase handoff. Proximity says the arm is inside
+        the tolerance band; this says it is no longer travelling through it, so the next
+        phase (notably closing the gripper) does not act on a moving target.
+        """
+        if self._prev_arm_conf is None:
+            return False
+        curr = np.array(self._get_current_robot_arm_conf()[:7])
+        return bool(np.max(np.abs(curr - self._prev_arm_conf)) < atol)
 
 
 class MoveToTossLocationAndTossController(
