@@ -442,7 +442,7 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
             return GRASP_CLOSE_THRESHOLD
         return 0.0
 
-    def _check_robot_is_close_to_conf(self, conf: JointPositions) -> bool:
+    def _robot_is_close_to_conf(self, conf: JointPositions) -> bool:
         current_conf = self._get_current_robot_arm_conf()
         assert self._pybullet_sim is not None
         dist = self._pybullet_sim.get_joint_distance(current_conf, conf)
@@ -627,7 +627,7 @@ class CloseGripperController(GroundParameterizedController[ObjectCentricState, A
         self._last_state = x
 
     def terminated(self) -> bool:
-        return self._check_robot_gripper_is_closed(atol=0.02)
+        return self._robot_gripper_is_closed(atol=0.02)
 
     def step(self) -> Array:
         self.last_gripper_state = self._get_current_gripper_pose()
@@ -644,7 +644,7 @@ class CloseGripperController(GroundParameterizedController[ObjectCentricState, A
         robot = self.objects[0]
         return state.get(robot, "pos_gripper")
 
-    def _check_robot_gripper_is_closed(
+    def _robot_gripper_is_closed(
         self, atol: float = GRIPPER_CLOSED_THRESHOLD
     ) -> bool:
         current_gripper_pose = self._get_current_gripper_pose()
@@ -676,7 +676,7 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
         self._last_state = x
 
     def terminated(self) -> bool:
-        return self._check_robot_gripper_is_open()
+        return self._robot_gripper_is_open()
 
     def step(self) -> Array:
         self.last_gripper_state = self._get_current_gripper_pose()
@@ -693,7 +693,7 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
         robot = self.objects[0]
         return state.get(robot, "pos_gripper")
 
-    def _check_robot_gripper_is_open(
+    def _robot_gripper_is_open(
         self, atol: float = GRIPPER_OPEN_COMMAND_TOLERANCE
     ) -> bool:
         current_gripper_pose = self._get_current_gripper_pose()
