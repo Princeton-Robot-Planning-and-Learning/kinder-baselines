@@ -1,4 +1,5 @@
-import pytest
+"""Tests for tidybot3d_tossing3D.py."""
+
 import kinder
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo

@@ -15,11 +15,9 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoObjectTypeFeatures,
     MujocoTidyBotRobotObjectType,
 )
-import pytest
 from relational_structs import Object, ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
 from relational_structs.utils import create_state_from_dict
-from scipy.spatial.transform import Rotation  # type: ignore[import-untyped]
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
@@ -39,10 +37,8 @@ from kinder_models.dynamic3d.tossing.toss_swing import (
 )
 from kinder_models.dynamic3d.utils import (
     _CONTROL_TIMESTEP,
-    GRASP_TRANSFORM_TO_OBJECT,
-    MINIMUM_HOLDING_HEIGHT,
     MOVE_TO_TARGET_DISTANCE_BOUNDS,
-    PyBulletSim,
+    MOVE_TO_TARGET_ROT_BOUNDS,
     _trapezoidal_motion_profile,
 )
 
@@ -1488,8 +1484,9 @@ def test_toss_schedules_its_release_at_the_requested_millisecond():
     env.close()
 
 
-def test_pick_cube_takes_no_continuous_parameters():
-    """The sampler has nothing to draw, so a refiner has nothing to backtrack over."""
+def test_pick_cube_samples_a_standoff_within_bounds():
+    """The sampler draws (distance, rot) for the base standoff, so a refiner has two
+    continuous parameters to backtrack over."""
     num_cubes = 1
     env = kinder.make(
         "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
@@ -1504,17 +1501,21 @@ def test_pick_cube_takes_no_continuous_parameters():
     controller = controllers["pick_cube"].ground((robot, cube, barrier))
     for seed in range(5):
         params = controller.sample_parameters(state, np.random.default_rng(seed))
-        # The empty tuple every other zero-parameter controller here returns, not a
-        # zero-length array: the refiner only ever passes this straight back to reset.
-        assert params == tuple()
-        assert np.asarray(params).shape == (0,)
+        distance, rot = np.asarray(params)
+        assert (
+            MOVE_TO_TARGET_DISTANCE_BOUNDS[0]
+            <= distance
+            <= MOVE_TO_TARGET_DISTANCE_BOUNDS[1]
+        )
+        assert MOVE_TO_TARGET_ROT_BOUNDS[0] <= rot <= MOVE_TO_TARGET_ROT_BOUNDS[1]
     env.close()
 
 
 def test_pick_cube_stands_head_on_within_the_shelf_picks_reach():
     """No rotation offset from the cube's own facing, at a distance the shelf pick used
     to sample -- not a range, since the pick zone has nothing to route around."""
-    distance, rot = PickCubeController.STANDOFF
+    distance = PickCubeController.TARGET_DISTANCE
+    rot = PickCubeController.TARGET_ROTATION
     assert rot == 0.0
     assert (
         MOVE_TO_TARGET_DISTANCE_BOUNDS[0]
@@ -1523,8 +1524,8 @@ def test_pick_cube_stands_head_on_within_the_shelf_picks_reach():
     )
 
 
-def test_pick_cube_raises_not_implemented_error():
-    """PickCubeController is currently a stub raising NotImplementedError."""
+def test_pick_cube_resets_and_steps():
+    """The controller is implemented: reset plans, and step drives the first phase."""
     num_cubes = 1
     env = kinder.make(
         "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
@@ -1537,12 +1538,11 @@ def test_pick_cube_raises_not_implemented_error():
     cube = state.get_object_from_name("cube_0")
     barrier = state.get_object_from_name("cuboid_barrier")
     controller = controllers["pick_cube"].ground((robot, cube, barrier))
-    with pytest.raises(NotImplementedError):
-        controller.reset(state, ())
-    with pytest.raises(NotImplementedError):
-        controller.step()
-    with pytest.raises(NotImplementedError):
-        controller.terminated()
+    params = controller.sample_parameters(state, np.random.default_rng(0))
+    controller.reset(state, params)
+    assert not controller.terminated()
+    action = controller.step()
+    assert np.asarray(action).shape == env.action_space.shape
     env.close()
 
 
@@ -1558,7 +1558,6 @@ def test_move_to_toss_location_and_toss_samples_four_parameters():
     controllers = create_lifted_controllers(env.action_space)
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
-    target_bin = state.get_object_from_name("bin_0")
     barrier = state.get_object_from_name("cuboid_barrier")
     controller = controllers["move_to_toss_location_and_toss"].ground(
         (robot, cube, barrier)
@@ -1583,9 +1582,6 @@ def test_move_to_toss_location_and_toss_samples_four_parameters():
         # A sampler, not a constant, in every component.
         assert draws[:, column].min() < draws[:, column].max()
     env.close()
-
-
-
 
 
 def test_open_gripper_commands_open_until_the_gripper_reads_open():
@@ -1700,6 +1696,3 @@ def test_move_to_toss_location_and_toss_plans_every_phase_in_reset():
     assert len(controller._windup_trajectory) > 0  # pylint: disable=protected-access
     assert controller._swing is not None  # pylint: disable=protected-access
     env.close()
-
-
-

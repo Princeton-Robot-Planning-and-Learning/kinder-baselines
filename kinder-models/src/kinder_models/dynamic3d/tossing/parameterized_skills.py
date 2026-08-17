@@ -1,7 +1,7 @@
 """Parameterized skills for the TidyBot3D tossing environment."""
 
 import enum
-from typing import Any, NamedTuple
+from typing import Any
 
 import numpy as np
 from bilevel_planning.structs import (
@@ -29,7 +29,6 @@ from pybullet_helpers.motion_planning import (
     remap_joint_position_plan_to_constant_distance,
     run_motion_planning,
 )
-from pydantic.dataclasses import dataclass
 from relational_structs import (
     Array,
     ObjectCentricState,
@@ -55,7 +54,6 @@ from kinder_models.dynamic3d.utils import (
     GRASP_TRANSFORM_TO_OBJECT,
     GRIPPER_CLOSED_THRESHOLD,
     GRIPPER_OPEN_COMMAND_TOLERANCE,
-    MINIMUM_HOLDING_HEIGHT,
     MOVE_TO_TARGET_DISTANCE_BOUNDS,
     MOVE_TO_TARGET_ROT_BOUNDS,
     WAYPOINT_TOLERANCE,
@@ -367,7 +365,8 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
     ) -> None:
         """Plan the swing, and fix the millisecond the gripper opens on.
 
-        The two knobs the real robot's movej_primitive.execute() takes (used by the real robot's kinova controller).
+        The two knobs the real robot's movej_primitive.execute() takes (used by
+        the real robot's kinova controller).
         gripper_release_ms is deliberately NOT clamped to the swing's duration: a value
         at or past the end means the gripper never opens and the cube is never thrown.
         """
@@ -659,9 +658,7 @@ class CloseGripperController(GroundParameterizedController[ObjectCentricState, A
         robot = self.objects[0]
         return state.get(robot, "pos_gripper")
 
-    def _robot_gripper_is_closed(
-        self, atol: float = GRIPPER_CLOSED_THRESHOLD
-    ) -> bool:
+    def _robot_gripper_is_closed(self, atol: float = GRIPPER_CLOSED_THRESHOLD) -> bool:
         current_gripper_pose = self._get_current_gripper_pose()
         return bool(
             current_gripper_pose > 0.2
@@ -715,9 +712,7 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
         return current_gripper_pose < atol
 
 
-class PickCubeController(
-    GroundParameterizedController[ObjectCentricState, Array]
-):
+class PickCubeController(GroundParameterizedController[ObjectCentricState, Array]):
     """Pick a cube up off the ground.
 
     Stub controller for picking a cube; raises NotImplementedError.
@@ -727,6 +722,8 @@ class PickCubeController(
     TARGET_ROTATION = 0.0
 
     class PickCubeControllerPhase(enum.Enum):
+        """The ordered stages of a pick, stepped through in this order."""
+
         OPEN_GRIPPER = enum.auto()
         BASE_MOTION = enum.auto()
         MOVE_ARM_TO_HOVER_OVER_CUBE = enum.auto()
@@ -734,7 +731,9 @@ class PickCubeController(
         CLOSE_GRIPPER_TO_GRASP_CUBE = enum.auto()
         LIFT_CUBE_TO_HOME = enum.auto()
 
-    def __init__(self, *args: Any,pybullet_sim: PyBulletSim | None = None, **kwargs: Any) -> None:
+    def __init__(
+        self, *args: Any, pybullet_sim: PyBulletSim | None = None, **kwargs: Any
+    ) -> None:
         super().__init__(*args, **kwargs)
 
         self.MAX_SAMPLER_ATTEMPTS = 100
@@ -760,7 +759,10 @@ class PickCubeController(
             [0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0]
         )  # retract configuration
 
-        self.plans: dict[PickCubeController.PickCubeControllerPhase, list[SE2] | list[JointPositions] | None] = {
+        self.plans: dict[
+            PickCubeController.PickCubeControllerPhase,
+            list[SE2] | list[JointPositions] | None,
+        ] = {
             self.PickCubeControllerPhase.OPEN_GRIPPER: None,
             self.PickCubeControllerPhase.BASE_MOTION: None,
             self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE: None,
@@ -802,7 +804,13 @@ class PickCubeController(
 
         raise ValueError("No valid parameters found")
 
-    def reset(self, x: ObjectCentricState, params: Any, extend_xy_magnitude: float = 0.025, extend_rot_magnitude: float = np.pi / 8) -> None:
+    def reset(
+        self,
+        x: ObjectCentricState,
+        params: Any,
+        extend_xy_magnitude: float = 0.025,
+        extend_rot_magnitude: float = np.pi / 8,
+    ) -> None:
         # This is an entirely hardcoded controller
         del params
         # Initialize the PyBullet interface if this is the first time ever.
@@ -816,27 +824,31 @@ class PickCubeController(
         self._closed_gripper = False
         self._lifted = False
 
-        cube_to_pick_up = self.objects[1] # The cube should always be set at construction time to the index 1 object and the barrier to the index 2 object
+        cube_to_pick_up = self.objects[1]
+        # The cube is always the index 1 object at construction time, and the
+        # barrier the index 2 object.
 
         # Pre-compute all motion planning
         # BASE_MOTION planning
         cube_pose = get_overhead_object_se2_pose(x, cube_to_pick_up)
-        target_base_pose = get_target_robot_pose_from_parameters(cube_pose, self.TARGET_DISTANCE, self.TARGET_ROTATION)
+        target_base_pose = get_target_robot_pose_from_parameters(
+            cube_pose, self.TARGET_DISTANCE, self.TARGET_ROTATION
+        )
         self.plans[self.PickCubeControllerPhase.BASE_MOTION] = run_base_motion_planning(
             state=x,
             target_base_pose=target_base_pose,
             x_bounds=WORLD_X_BOUNDS,
             y_bounds=WORLD_Y_BOUNDS,
-            seed=0, # To make this effectively deterministic
+            seed=0,  # To make this effectively deterministic
             extend_xy_magnitude=extend_xy_magnitude,
-            extend_rot_magnitude=extend_rot_magnitude
+            extend_rot_magnitude=extend_rot_magnitude,
         )
         assert self.plans[self.PickCubeControllerPhase.BASE_MOTION] is not None
 
         # MOVE_ARM_TO_HOVER_OVER_CUBE planning
         # Get the last state from the BASE_MOTION plan so that next steps can build on it
         state_after_base_motion = x.copy()
-        robot = self.objects[0] # robot is the first parameter
+        robot = self.objects[0]  # robot is the first parameter
         target_base_pose_plan = self.plans[self.PickCubeControllerPhase.BASE_MOTION]
         assert target_base_pose_plan is not None
         target_base_pose = target_base_pose_plan[-1]
@@ -846,7 +858,8 @@ class PickCubeController(
         state_after_base_motion.set(robot, "pos_base_y", target_base_pose.y)
         state_after_base_motion.set(robot, "pos_base_rot", target_base_pose.theta())
 
-        # Set the simulation to the state after base motion so that it can be used for grasp planning
+        # Set the simulation to the state after base motion so that it can be used
+        # for grasp planning.
         self._pybullet_sim.set_state(state_after_base_motion)
 
         # We care about the cube's graspable orientation, not absolute orentiation.
@@ -856,25 +869,38 @@ class PickCubeController(
             state_after_base_motion.get(cube_to_pick_up, "qz"),
             state_after_base_motion.get(cube_to_pick_up, "qw"),
         )
-        cube_grasp_qx, cube_grasp_qy, cube_grasp_qz, cube_grasp_qw = upright_grasp_rotations(cube_raw_quat)[0]
+        cube_grasp_qx, cube_grasp_qy, cube_grasp_qz, cube_grasp_qw = (
+            upright_grasp_rotations(cube_raw_quat)[0]
+        )
 
         target_hover_end_effector_pose = Pose(
             (
                 state_after_base_motion.get(cube_to_pick_up, "x"),
                 state_after_base_motion.get(cube_to_pick_up, "y"),
-                state_after_base_motion.get(cube_to_pick_up, "z") + state_after_base_motion.get(cube_to_pick_up, "bb_z") / 2 + 0.12, # 12 centimeters above the top surface of cube. "z" is the center of the cube, so we have to add half it's height ("bb_z")
+                state_after_base_motion.get(cube_to_pick_up, "z")
+                + state_after_base_motion.get(cube_to_pick_up, "bb_z") / 2
+                # 12 cm above the cube's top surface. "z" is the cube's centre, so
+                # we add half its height ("bb_z").
+                + 0.12,
             ),
             (cube_grasp_qx, cube_grasp_qy, cube_grasp_qz, cube_grasp_qw),
         )
-        target_hover_end_effector_pose = multiply_poses(target_hover_end_effector_pose, GRASP_TRANSFORM_TO_OBJECT) # Offset by the intended grasp location
-        target_hover_joints = inverse_kinematics(self._pybullet_sim.robot, target_hover_end_effector_pose, set_joints=False)
-        self.plans[self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE] = run_motion_planning(
-            self._pybullet_sim.robot,
-            self._pybullet_sim.get_robot_joints(),
-            target_hover_joints,
-            collision_bodies=self._pybullet_sim.get_collision_bodies(), # this includes the cube to grasp, because we haven't yet grasped it
-            seed=0,
-            physics_client_id=self._pybullet_sim.physics_client_id,
+        target_hover_end_effector_pose = multiply_poses(
+            target_hover_end_effector_pose, GRASP_TRANSFORM_TO_OBJECT
+        )  # Offset by the intended grasp location
+        target_hover_joints = inverse_kinematics(
+            self._pybullet_sim.robot, target_hover_end_effector_pose, set_joints=False
+        )
+        self.plans[self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE] = (
+            run_motion_planning(
+                self._pybullet_sim.robot,
+                self._pybullet_sim.get_robot_joints(),
+                target_hover_joints,
+                # Includes the cube to grasp, because we have not grasped it yet.
+                collision_bodies=self._pybullet_sim.get_collision_bodies(),
+                seed=0,
+                physics_client_id=self._pybullet_sim.physics_client_id,
+            )
         )
 
         # MOVE_ARM_DOWN_AROUND_CUBE planning
@@ -886,56 +912,77 @@ class PickCubeController(
             ),
             (cube_grasp_qx, cube_grasp_qy, cube_grasp_qz, cube_grasp_qw),
         )
-        target_around_cube_end_effector_pose = multiply_poses(target_around_cube_end_effector_pose, GRASP_TRANSFORM_TO_OBJECT) # Offset by the intended grasp location
+        target_around_cube_end_effector_pose = multiply_poses(
+            target_around_cube_end_effector_pose, GRASP_TRANSFORM_TO_OBJECT
+        )  # Offset by the intended grasp location
         target_around_joints = inverse_kinematics(
             self._pybullet_sim.robot,
             target_around_cube_end_effector_pose,
-            set_joints=False
+            set_joints=False,
         )
-        self.plans[self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE] = run_motion_planning(
-            self._pybullet_sim.robot,
-            target_hover_joints, # Going from the hover joints to the around joints
-            target_around_joints,
-            collision_bodies=self._pybullet_sim.get_collision_bodies(), # the cube is still a collision body
-            seed=0,
-            physics_client_id=self._pybullet_sim.physics_client_id
+        self.plans[self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE] = (
+            run_motion_planning(
+                self._pybullet_sim.robot,
+                target_hover_joints,  # Going from the hover joints to the around joints
+                target_around_joints,
+                # The cube is still a collision body here.
+                collision_bodies=self._pybullet_sim.get_collision_bodies(),
+                seed=0,
+                physics_client_id=self._pybullet_sim.physics_client_id,
+            )
         )
 
         # CLOSE_GRIPPER_TO_GRASP_CUBE planning
         # Nothing, because the arm is opened/closed at inference time, not planning time
 
         # LIFT_CUBE_TO_HOME planning
-        held_object = self._pybullet_sim._cubes[cube_to_pick_up.name] # For collision detection
-        self._pybullet_sim.base_link_to_held_obj = GRASP_TRANSFORM_TO_OBJECT.invert() # For Motion planning so it knows to avoid bonking the cube on things
-        self.plans[self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME] = run_motion_planning(
-            self._pybullet_sim.robot,
-            target_around_joints,
-            self.home_joints.tolist(),
-            collision_bodies=self._pybullet_sim.get_collision_bodies(held_object=held_object),
-            held_object=held_object,
-            base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,
-            seed=0,
-            physics_client_id=self._pybullet_sim.physics_client_id,
+        # pylint: disable=protected-access
+        held_object = self._pybullet_sim._cubes[
+            cube_to_pick_up.name
+        ]  # For collision detection
+        self._pybullet_sim.base_link_to_held_obj = (
+            GRASP_TRANSFORM_TO_OBJECT.invert()
+        )  # For Motion planning so it knows to avoid bonking the cube on things
+        self.plans[self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME] = (
+            run_motion_planning(
+                self._pybullet_sim.robot,
+                target_around_joints,
+                self.home_joints.tolist(),
+                collision_bodies=self._pybullet_sim.get_collision_bodies(
+                    held_object=held_object
+                ),
+                held_object=held_object,
+                base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,
+                seed=0,
+                physics_client_id=self._pybullet_sim.physics_client_id,
+            )
         )
 
-        for name in self.plans.keys():
-            if name in {self.PickCubeControllerPhase.OPEN_GRIPPER, self.PickCubeControllerPhase.BASE_MOTION, self.PickCubeControllerPhase.CLOSE_GRIPPER_TO_GRASP_CUBE}:
-                continue # There is no arm motion planning for these phases, so we don't need to remap
+        for name, plan in self.plans.items():
+            if name in {
+                self.PickCubeControllerPhase.OPEN_GRIPPER,
+                self.PickCubeControllerPhase.BASE_MOTION,
+                self.PickCubeControllerPhase.CLOSE_GRIPPER_TO_GRASP_CUBE,
+            }:
+                # No arm motion planning for these phases, so nothing to remap.
+                continue
             # Ensure motion planning didn't fail
-            plan = self.plans[name]
             assert plan is not None, f"Motion Planning Failed at {name}"
 
             # Map the plan onto real robot space, with constant distance
-            self.plans[name] = remap_joint_position_plan_to_constant_distance(plan, self._pybullet_sim.robot, max_distance=0.2)
-
-
+            self.plans[name] = remap_joint_position_plan_to_constant_distance(
+                plan, self._pybullet_sim.robot, max_distance=0.2
+            )
 
     def step(self) -> Array:
         if self.current_phase == self.PickCubeControllerPhase.OPEN_GRIPPER:
             return self._step_open_gripper()
         if self.current_phase == self.PickCubeControllerPhase.BASE_MOTION:
             return self._step_base_motion()
-        if self.current_phase == self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE:
+        if (
+            self.current_phase
+            == self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE
+        ):
             return self._step_trajectory_phase(
                 self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE,
                 self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE,
@@ -945,7 +992,10 @@ class PickCubeController(
                 self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE,
                 self.PickCubeControllerPhase.CLOSE_GRIPPER_TO_GRASP_CUBE,
             )
-        if self.current_phase == self.PickCubeControllerPhase.CLOSE_GRIPPER_TO_GRASP_CUBE:
+        if (
+            self.current_phase
+            == self.PickCubeControllerPhase.CLOSE_GRIPPER_TO_GRASP_CUBE
+        ):
             return self._step_close_gripper()
         if self.current_phase == self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME:
             return self._step_trajectory_phase(
@@ -982,7 +1032,9 @@ class PickCubeController(
         final_pose = base_plan[-1]
         assert isinstance(final_pose, SE2)
         if self._robot_is_close_to_pose(final_pose):
-            self.current_phase = self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE
+            self.current_phase = (
+                self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE
+            )
         robot_pose = self._get_current_robot_pose()
         next_pose = base_plan[0]
         assert isinstance(next_pose, SE2)
@@ -1081,7 +1133,9 @@ class PickCubeController(
             return GRASP_CLOSE_THRESHOLD
         return 0.0
 
-    def _robot_is_close_to_pose(self, pose: SE2, atol: float = WAYPOINT_TOLERANCE) -> bool:
+    def _robot_is_close_to_pose(
+        self, pose: SE2, atol: float = WAYPOINT_TOLERANCE
+    ) -> bool:
         robot_pose = self._get_current_robot_pose()
         return bool(
             np.isclose(robot_pose.x, pose.x, atol=atol)
