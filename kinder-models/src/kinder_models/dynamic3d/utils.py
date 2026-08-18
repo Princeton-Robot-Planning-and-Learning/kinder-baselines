@@ -16,7 +16,7 @@ from kinder.envs.kinematic3d.utils import extend_joints_to_include_fingers
 from matplotlib import pyplot as plt
 from prpl_utils.motion_planning import BiRRT
 from prpl_utils.utils import get_signed_angle_distance, wrap_angle
-from pybullet_helpers.geometry import Pose, multiply_poses, set_pose
+from pybullet_helpers.geometry import Pose, Quaternion, multiply_poses, set_pose
 from pybullet_helpers.gui import create_gui_connection
 from pybullet_helpers.inverse_kinematics import (
     set_robot_joints_with_held_object,
@@ -29,6 +29,7 @@ from relational_structs import (
     Object,
     ObjectCentricState,
 )
+from scipy.spatial.transform import Rotation  # type: ignore[import-untyped]
 from spatialmath import SE2, UnitQuaternion
 from tomsgeoms2d.structs import Geom2D, Rectangle
 from tomsgeoms2d.utils import geom2ds_intersect
@@ -44,6 +45,14 @@ _ARM_MAX_VELOCITY = np.deg2rad(np.array([80.0, 80.0, 80.0, 80.0, 70.0, 70.0, 70.
 _ARM_MAX_ACCELERATION = np.deg2rad(
     np.array([297.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0])
 )
+
+# The arm's continuous joints, as indices into a 7-joint arm configuration. PyBullet
+# reports them with lower=0, upper=-1: they have no limit, so a difference across one is
+# only defined up to a whole turn. The indices live here because the callers that need
+# them work on bare arrays with no robot to ask, and
+# test_the_circular_arm_joints_are_the_ones_the_robot_reports checks them against a live
+# robot so a different arm cannot leave this quietly wrong.
+CIRCULAR_ARM_JOINT_INDICES = (0, 2, 4, 6)
 
 # Base motion limits.
 MAX_BASE_MOVEMENT_MAGNITUDE = 1e-1
@@ -187,7 +196,6 @@ def plot_overhead_scene(
     fontsize: int = 6,
 ) -> tuple[plt.Figure, plt.Axes]:
     """Create a matplotlib figure with a top-down scene rendering."""
-
     fig, ax = plt.subplots()
 
     fontdict = {
@@ -230,7 +238,6 @@ def run_base_motion_planning(
     disable_collision_objects: list[str] | None = None,
 ) -> list[SE2] | None:
     """Run motion planning for the robot base."""
-
     rng = np.random.default_rng(seed)
 
     # Construct geoms.
@@ -366,6 +373,25 @@ def _trapezoidal_motion_profile(
     return pos
 
 
+def wrap_arm_joint_difference(difference: np.ndarray) -> np.ndarray:
+    """Route an arm difference the short way round the arm's continuous joints.
+
+    A continuous joint at q and at q plus a whole turn is the same pose, so a raw
+    subtraction can report 2*pi of travel between two identical configurations -- and a
+    proportional controller handed that difference will faithfully drive the long way
+    round to a pose it is already standing in.
+
+    Only differences that are actually ambiguous are touched, so a difference already
+    inside a half turn comes back bit-identical: this is a guard against a wrong 2*pi
+    representative, never a re-derivation of a difference that was fine.
+    """
+    wrapped = np.array(difference, dtype=float)
+    for index in CIRCULAR_ARM_JOINT_INDICES:
+        if index < len(wrapped) and abs(wrapped[index]) > np.pi:
+            wrapped[index] = wrap_angle(wrapped[index])
+    return wrapped
+
+
 def _compute_per_joint_profile(
     start_conf: np.ndarray,
     end_conf: np.ndarray,
@@ -381,7 +407,7 @@ def _compute_per_joint_profile(
     Returns (trajectory_positions, direction) where trajectory_positions is a 1-D array
     of s values at each control step.
     """
-    dq = end_conf - start_conf
+    dq = wrap_arm_joint_difference(end_conf - start_conf)
     s_total = float(np.linalg.norm(dq))
     if s_total < 1e-8:
         return np.array([0.0]), np.zeros(len(end_conf))
@@ -433,8 +459,10 @@ class PyBulletSim:
         self, initial_state: ObjectCentricState, rendering: bool = False
     ) -> None:
         """NOTE: for now, this is extremely specific to the Ground environment where
-        there is exactly one cube. We will generalize this later."""
+        there is exactly one cube.
 
+        We will generalize this later.
+        """
         # Hardcode the transform from the base pose to the arm pose.
         self._base_to_arm_pose = ROBOT_ARM_POSE_TO_BASE
 
@@ -608,10 +636,60 @@ class PyBulletSim:
         return self._joint_distance_fn(conf1, conf2)
 
     def close(self) -> None:
-        """Close the PyBullet simulator. Safe to call more than once.
+        """Close the PyBullet simulator.
 
-        Collection runs the finalizer, not this method, so put any further cleanup in
-        __init__'s callback. Do not call p.disconnect by hand: ids get reused, so a
-        stale finalizer would disconnect an unrelated sim.
+        Safe to call more than once.         Collection runs the finalizer, not this
+        method, so put any further cleanup in         __init__'s callback. Do not call
+        p.disconnect by hand: ids get reused, so a         stale finalizer would
+        disconnect an unrelated sim.
         """
         self._finalizer()
+
+
+# The 24 rotations mapping a cube onto itself: 6 faces down, each at 4 yaws.
+CUBE_ROTATION_SYMMETRIES: tuple[Quaternion, ...] = tuple(
+    (float(q[0]), float(q[1]), float(q[2]), float(q[3]))
+    for q in Rotation.create_group("O").as_quat()
+)
+_CUBE_ROTATION_SYMMETRY_GROUP = Rotation.from_quat(np.array(CUBE_ROTATION_SYMMETRIES))
+_CUBE_ROTATION_SYMMETRY_ANGLES = _CUBE_ROTATION_SYMMETRY_GROUP.magnitude()
+
+
+def cube_tilt_from_upright(rotation: Quaternion) -> float:
+    """How far a cube is from resting flat on one of its faces.
+
+    Zero for any face-down rest at any yaw, and larger the closer the cube is to
+    balancing on an edge or a corner.
+    """
+    composed = (Rotation.from_quat(rotation) * _CUBE_ROTATION_SYMMETRY_GROUP).as_quat()
+    return float(np.min(composed[:, 0] ** 2 + composed[:, 1] ** 2))
+
+
+def upright_grasp_rotations(rotation: Quaternion) -> tuple[Quaternion, ...]:
+    """Every upright rotation the cube could equally be grasped at, nearest yaw first.
+
+    Deriving a grasp from the measured rotation asks the gripper to approach along
+    whichever face happens to be up, from underneath the floor for a cube on its top.
+    Resting on a face a cube is also four-fold symmetric about the vertical, so all four
+    yaws are the same grasp and a caller can fall through when the arm cannot reach one.
+    """
+    composed = (Rotation.from_quat(rotation) * _CUBE_ROTATION_SYMMETRY_GROUP).as_quat()
+    x, y, z, w = composed[:, 0], composed[:, 1], composed[:, 2], composed[:, 3]
+    tilt = x * x + y * y
+    # Every minimal-tilt family is at least a tied 180-degree pair, so the tilt alone
+    # never picks a unique winner. Break the tie toward the symmetry closest to
+    # identity, so an already-near-upright cube keeps its own measured yaw instead of
+    # jumping to an arbitrary tied alternative -- which the real robot cannot always
+    # reach from the same standoff.
+    tied = np.flatnonzero(tilt < tilt.min() + 1e-12)
+    nearest = int(tied[np.argmin(_CUBE_ROTATION_SYMMETRY_ANGLES[tied])])
+    yaw = float(
+        np.arctan2(
+            2 * (w[nearest] * z[nearest] + x[nearest] * y[nearest]),
+            1 - 2 * (y[nearest] ** 2 + z[nearest] ** 2),
+        )
+    )
+    return tuple(
+        (0.0, 0.0, float(np.sin(angle / 2)), float(np.cos(angle / 2)))
+        for angle in (yaw, yaw + np.pi / 2, yaw - np.pi / 2, yaw + np.pi)
+    )

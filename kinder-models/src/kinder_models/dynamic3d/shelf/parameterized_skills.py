@@ -69,7 +69,7 @@ class PickShelfController(GroundParameterizedController[ObjectCentricState, Arra
     """
 
     def __init__(
-        self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
+        self, *args: Any, pybullet_sim: PyBulletSim | None = None, **kwargs: Any
     ) -> None:
         super().__init__(*args, **kwargs)
         self._last_state: ObjectCentricState | None = None

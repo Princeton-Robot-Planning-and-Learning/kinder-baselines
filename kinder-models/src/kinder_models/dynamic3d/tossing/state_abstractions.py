@@ -19,7 +19,7 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoObjectType,
     MujocoTidyBotRobotObjectType,
 )
-from prpl_utils.utils import get_signed_angle_distance
+from pybullet_helpers.geometry import Quaternion
 from relational_structs import (
     GroundAtom,
     Object,
@@ -33,8 +33,8 @@ from kinder_models.dynamic3d.utils import (
     GRIPPER_OPEN_COMMAND_TOLERANCE,
     MINIMUM_HOLDING_HEIGHT,
     ON_GROUND_TOLERANCE,
-    WAYPOINT_TOLERANCE,
     PyBulletSim,
+    cube_tilt_from_upright,
 )
 
 # Upstream types cube, bin and barrier alike, so names state the type, not the subset.
@@ -45,22 +45,11 @@ HandEmpty = Predicate("HandEmpty", [MujocoTidyBotRobotObjectType])
 MovableIsDownX = Predicate(
     "MovableIsDownX", [MujocoMovableObjectType, MujocoMovableObjectType]
 )
-RobotAtThrowPose = Predicate(
-    "RobotAtThrowPose", [MujocoTidyBotRobotObjectType, MujocoMovableObjectType]
-)
-
 # The environment's inflated region, not the task JSON's "ranges".
 GOAL_REGION_NAME = "blocks_goal_region"
 
 CUBE_NAME_PREFIX = "cube"
-BIN_NAME_PREFIX = "bin"
 BARRIER_NAME = "cuboid_barrier"
-
-# Throwable-from standoffs, not the 0.5 m grasping one. Brackets the test's 1.35 m.
-THROW_STANDOFF_BOUNDS = (1.20, 1.65)
-
-# Wider than WAYPOINT_TOLERANCE: the sampler already spends half of it off-axis.
-THROW_POSE_TOLERANCE = 2 * WAYPOINT_TOLERANCE
 
 
 class Tossing3DStateAbstractor:
@@ -90,7 +79,6 @@ class Tossing3DStateAbstractor:
         movables = state.get_objects(MujocoMovableObjectType)
         all_mujoco_objects = set(fixtures) | set(movables)
         cubes = self._get_cubes(state)
-        bins = [o for o in movables if o.name.startswith(BIN_NAME_PREFIX)]
         barriers = [o for o in movables if o.name == BARRIER_NAME]
 
         if self._check_gripper_open(state, robot):
@@ -106,10 +94,6 @@ class Tossing3DStateAbstractor:
             for barrier in barriers:
                 if self._check_is_down_x(state, cube, barrier):
                     atoms.add(GroundAtom(MovableIsDownX, [cube, barrier]))
-
-        for target_bin in bins:
-            if self._check_at_throw_pose(state, robot, target_bin):
-                atoms.add(GroundAtom(RobotAtThrowPose, [robot, target_bin]))
 
         objects = {robot} | all_mujoco_objects
         return RelationalAbstractState(atoms, objects)
@@ -130,18 +114,32 @@ class Tossing3DStateAbstractor:
 
     @staticmethod
     def _check_on_ground(state: ObjectCentricState, movable: Object) -> bool:
-        """Whether a movable rests flat on the ground.
+        """Whether a movable rests flat on the ground, on any of its faces.
 
-        Flat because the bounding box is pose-independent, so the bottom-face
-        arithmetic only holds while axis-aligned. A toss cannot predict this.
+        Flat because the bounding box is pose-independent, so the bottom-face arithmetic
+        only holds while a face is down. Which face is down is not asked: for a cube
+        those are the same rest, and the grasp is derived from the upright rotation, so
+        a predicate that distinguished them would refuse picks that work.
         """
         z = state.get(movable, "z")
         bounding_box_height = state.get(movable, "bb_z")
-        return bool(
-            np.isclose(z - bounding_box_height / 2, 0.0, atol=ON_GROUND_TOLERANCE)
-            and np.isclose(state.get(movable, "qx"), 0.0, atol=ON_GROUND_TOLERANCE)
-            and np.isclose(state.get(movable, "qy"), 0.0, atol=ON_GROUND_TOLERANCE)
+        if not np.isclose(z - bounding_box_height / 2, 0.0, atol=ON_GROUND_TOLERANCE):
+            return False
+        rotation: Quaternion = (
+            state.get(movable, "qx"),
+            state.get(movable, "qy"),
+            state.get(movable, "qz"),
+            state.get(movable, "qw"),
         )
+        # Only a cube's faces are interchangeable; anything else keeps the strict test.
+        extents = [state.get(movable, f) for f in ("bb_x", "bb_y", "bb_z")]
+        if not np.allclose(extents, extents[0]):
+            qx, qy, _, _ = rotation
+            return bool(
+                np.isclose(qx, 0.0, atol=ON_GROUND_TOLERANCE)
+                and np.isclose(qy, 0.0, atol=ON_GROUND_TOLERANCE)
+            )
+        return bool(cube_tilt_from_upright(rotation) < ON_GROUND_TOLERANCE)
 
     def _check_holding(
         self, state: ObjectCentricState, robot: Object, movable: Object
@@ -168,25 +166,6 @@ class Tossing3DStateAbstractor:
     ) -> bool:
         """Whether a movable is at lower x than another, read live rather than fixed."""
         return state.get(movable, "x") < state.get(other, "x")
-
-    @staticmethod
-    def _check_at_throw_pose(
-        state: ObjectCentricState, robot: Object, target: Object
-    ) -> bool:
-        """Whether the base is at a throwable standoff, on axis, facing the target."""
-        low, high = THROW_STANDOFF_BOUNDS
-        dx = state.get(target, "x") - state.get(robot, "pos_base_x")
-        dy = state.get(target, "y") - state.get(robot, "pos_base_y")
-        heading_error = abs(
-            get_signed_angle_distance(
-                np.arctan2(dy, dx), state.get(robot, "pos_base_rot")
-            )
-        )
-        return bool(
-            abs(dy) <= THROW_POSE_TOLERANCE
-            and low - THROW_POSE_TOLERANCE <= dx <= high + THROW_POSE_TOLERANCE
-            and heading_error <= THROW_POSE_TOLERANCE
-        )
 
     def goal_deriver(self, state: ObjectCentricState) -> RelationalAbstractGoal:
         """The goal is to toss every cube into the goal region."""
