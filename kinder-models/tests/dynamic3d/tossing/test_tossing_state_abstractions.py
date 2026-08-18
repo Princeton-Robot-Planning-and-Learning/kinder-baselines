@@ -165,8 +165,10 @@ def _rest(axis, deg):
 
 
 def test_on_ground_holds_for_a_cube_resting_on_any_of_its_faces():
-    """A cube on its side is the same cube on the same floor. The grasp no longer cares
-    which face is up, so neither should the predicate."""
+    """A cube on its side is the same cube on the same floor.
+
+    The grasp no longer cares which face is up, so neither should the predicate.
+    """
     env, abstractor, state = _make_env_and_abstractor()
     cube = state.get_object_from_name("cube_0")
     for axis, deg in [

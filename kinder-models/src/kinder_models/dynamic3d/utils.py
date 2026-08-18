@@ -18,7 +18,6 @@ from prpl_utils.motion_planning import BiRRT
 from prpl_utils.utils import get_signed_angle_distance, wrap_angle
 from pybullet_helpers.geometry import Pose, Quaternion, multiply_poses, set_pose
 from pybullet_helpers.gui import create_gui_connection
-from scipy.spatial.transform import Rotation  # type: ignore[import-untyped]
 from pybullet_helpers.inverse_kinematics import (
     set_robot_joints_with_held_object,
 )
@@ -30,6 +29,7 @@ from relational_structs import (
     Object,
     ObjectCentricState,
 )
+from scipy.spatial.transform import Rotation  # type: ignore[import-untyped]
 from spatialmath import SE2, UnitQuaternion
 from tomsgeoms2d.structs import Geom2D, Rectangle
 from tomsgeoms2d.utils import geom2ds_intersect
@@ -196,7 +196,6 @@ def plot_overhead_scene(
     fontsize: int = 6,
 ) -> tuple[plt.Figure, plt.Axes]:
     """Create a matplotlib figure with a top-down scene rendering."""
-
     fig, ax = plt.subplots()
 
     fontdict = {
@@ -239,7 +238,6 @@ def run_base_motion_planning(
     disable_collision_objects: list[str] | None = None,
 ) -> list[SE2] | None:
     """Run motion planning for the robot base."""
-
     rng = np.random.default_rng(seed)
 
     # Construct geoms.
@@ -461,8 +459,10 @@ class PyBulletSim:
         self, initial_state: ObjectCentricState, rendering: bool = False
     ) -> None:
         """NOTE: for now, this is extremely specific to the Ground environment where
-        there is exactly one cube. We will generalize this later."""
+        there is exactly one cube.
 
+        We will generalize this later.
+        """
         # Hardcode the transform from the base pose to the arm pose.
         self._base_to_arm_pose = ROBOT_ARM_POSE_TO_BASE
 
@@ -636,11 +636,12 @@ class PyBulletSim:
         return self._joint_distance_fn(conf1, conf2)
 
     def close(self) -> None:
-        """Close the PyBullet simulator. Safe to call more than once.
+        """Close the PyBullet simulator.
 
-        Collection runs the finalizer, not this method, so put any further cleanup in
-        __init__'s callback. Do not call p.disconnect by hand: ids get reused, so a
-        stale finalizer would disconnect an unrelated sim.
+        Safe to call more than once.         Collection runs the finalizer, not this
+        method, so put any further cleanup in         __init__'s callback. Do not call
+        p.disconnect by hand: ids get reused, so a         stale finalizer would
+        disconnect an unrelated sim.
         """
         self._finalizer()
 
@@ -692,4 +693,3 @@ def upright_grasp_rotations(rotation: Quaternion) -> tuple[Quaternion, ...]:
         (0.0, 0.0, float(np.sin(angle / 2)), float(np.cos(angle / 2)))
         for angle in (yaw, yaw + np.pi / 2, yaw - np.pi / 2, yaw + np.pi)
     )
-

@@ -40,7 +40,6 @@ def _get_robot_from_state(state: ObjectCentricState):
 
 def test_get_overhead_object_se2_pose():
     """Tests for get_overhead_object_se2_pose()."""
-
     # Get a real object-centric state.
     env = TidyBot3DEnv(task_config_path=str(_TEST_TASKS / "tidybot-ground-o1.json"))
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
@@ -68,7 +67,6 @@ def test_get_overhead_object_se2_pose():
 
 def test_get_overhead_robot_se2_pose():
     """Tests for get_overhead_robot_se2_pose()."""
-
     # Get a real object-centric state.
     env = TidyBot3DEnv(task_config_path=str(_TEST_TASKS / "tidybot-ground-o1.json"))
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
@@ -105,7 +103,6 @@ def test_get_overhead_kinematic2ds():
 
 def test_plot_overhead_scene():
     """Tests for plot_overhead_scene()."""
-
     env = TidyBot3DEnv(
         task_config_path=str(_TEST_TASKS / "tidybot-ground-o3.json"),
         render_mode="rgb_array",
@@ -134,7 +131,6 @@ def test_plot_overhead_scene():
 
 def test_run_base_motion_planning():
     """Tests for run_base_motion_planning()."""
-
     env = kinder.make("kinder/Shelf3D-o1-v0", render_mode="rgb_array")
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     obs, _ = env.reset(seed=123)
@@ -243,7 +239,6 @@ def test_run_base_motion_planning():
 
 def test_run_base_motion_planning_avoids_obstacles():
     """Tests that run_base_motion_planning() avoids scene obstacles."""
-
     env = kinder.make("kinder/Shelf3D-o1-v0", render_mode="rgb_array")
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     obs, _ = env.reset(seed=123)
@@ -283,8 +278,7 @@ def test_run_base_motion_planning_avoids_obstacles():
 
 
 def test_wrap_arm_joint_difference_leaves_an_unambiguous_difference_alone():
-    """Anything inside a half turn comes back bit-identical, limited joints
-    included.
+    """Anything inside a half turn comes back bit-identical, limited joints included.
 
     The guard exists to correct a wrong 2*pi representative, not to re-derive a
     difference that was already fine, so an ordinary difference must survive it
@@ -307,9 +301,8 @@ def test_wrap_arm_joint_difference_routes_a_continuous_joint_the_short_way():
 def test_wrap_arm_joint_difference_leaves_a_limited_joint_a_whole_turn_alone():
     """Only the continuous joints are ambiguous.
 
-    A limited joint cannot reach the same pose two ways, so a large
-    difference there is real travel and wrapping it would silently ask
-    for a different pose.
+    A limited joint cannot reach the same pose two ways, so a large difference there is
+    real travel and wrapping it would silently ask for a different pose.
     """
     difference = np.zeros(7)
     limited = [i for i in range(7) if i not in CIRCULAR_ARM_JOINT_INDICES]
@@ -320,8 +313,8 @@ def test_wrap_arm_joint_difference_leaves_a_limited_joint_a_whole_turn_alone():
 
 
 def test_the_circular_arm_joints_are_the_ones_the_robot_reports():
-    """CIRCULAR_ARM_JOINT_INDICES is a constant because two callers have no
-    robot to ask.
+    """CIRCULAR_ARM_JOINT_INDICES is a constant because two callers have no robot to
+    ask.
 
     This is what stops it going quietly wrong: PyBullet's own joint info is the
     authority, and a different arm fails here rather than inside a rollout.

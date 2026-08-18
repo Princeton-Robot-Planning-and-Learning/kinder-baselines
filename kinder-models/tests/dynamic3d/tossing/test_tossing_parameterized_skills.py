@@ -38,7 +38,6 @@ from kinder_models.dynamic3d.tossing.toss_swing import (
 from kinder_models.dynamic3d.utils import (
     _CONTROL_TIMESTEP,
     MOVE_TO_TARGET_DISTANCE_BOUNDS,
-    MOVE_TO_TARGET_ROT_BOUNDS,
     _trapezoidal_motion_profile,
 )
 
@@ -1548,8 +1547,7 @@ def _pick_cube_arm_conf(state, robot):
 
 
 def _ground_pick_cube_on_seed_125():
-    """A reset pick_cube controller on the canonical seed, plus its env and
-    state."""
+    """A reset pick_cube controller on the canonical seed, plus its env and state."""
     env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
     obs, _ = env.reset(seed=125)
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
@@ -1565,14 +1563,12 @@ def _ground_pick_cube_on_seed_125():
 
 
 def test_pick_cube_hands_each_arm_plan_off_where_the_previous_one_ended():
-    """Consecutive arm plans must be chained by the previous plan's own
-    endpoint.
+    """Consecutive arm plans must be chained by the previous plan's own endpoint.
 
-    Joints 1/3/5/7 are continuous, so a motion plan routes them the
-    short way and lands on whichever 2*pi representative that reaches --
-    not necessarily the one inverse kinematics returned. Starting the
-    next plan from the raw IK solution therefore puts its waypoints a
-    full turn from where the arm physically is, and the arm unwinds to
+    Joints 1/3/5/7 are continuous, so a motion plan routes them the short way and lands
+    on whichever 2*pi representative that reaches -- not necessarily the one inverse
+    kinematics returned. Starting the next plan from the raw IK solution therefore puts
+    its waypoints a full turn from where the arm physically is, and the arm unwinds to
     get there.
     """
     env, _, _, controller = _ground_pick_cube_on_seed_125()
@@ -1599,11 +1595,11 @@ def test_pick_cube_hands_each_arm_plan_off_where_the_previous_one_ended():
 def test_pick_cube_never_unwinds_a_joint_by_a_whole_turn():
     """Executed travel must stay near planned travel, joint by joint.
 
-    Tracking a waypoint costs a little more than the plan says -- the
-    command is proportional, so the arm settles into each waypoint
-    rather than arriving on it -- but a joint that travels a further
-    2*pi is not settling, it is taking the long way round to a pose it
-    is already standing in. Bounding the excess by pi separates the two.
+    Tracking a waypoint costs a little more than the plan says -- the command is
+    proportional, so the arm settles into each waypoint rather than arriving on it --
+    but a joint that travels a further 2*pi is not settling, it is taking the long way
+    round to a pose it is already standing in. Bounding the excess by pi separates the
+    two.
     """
     env, state, robot, controller = _ground_pick_cube_on_seed_125()
     Phase = PickCubeController.PickCubeControllerPhase

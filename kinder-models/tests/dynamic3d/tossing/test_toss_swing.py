@@ -165,14 +165,13 @@ def test_the_release_speeds_the_sampler_draws_are_never_clamped():
 
 
 def test_plan_toss_swing_is_unmoved_by_a_whole_turn_on_a_continuous_joint():
-    """The swing is timed off the arm's measured conf, so a wrong 2*pi
-    representative there would silently change how far the swing thinks it has
-    to travel -- and s_total is what fixes the release millisecond, hence where
-    the cube lands.
+    """The swing is timed off the arm's measured conf, so a wrong 2*pi representative
+    there would silently change how far the swing thinks it has to travel -- and s_total
+    is what fixes the release millisecond, hence where the cube lands.
 
-    Joints 1/3/5/7 are continuous, so the arm can arrive at the windup
-    pose reading either sign of 180 degrees on joint 3. Both readings
-    are the same pose and must time the same swing.
+    Joints 1/3/5/7 are continuous, so the arm can arrive at the windup pose reading
+    either sign of 180 degrees on joint 3. Both readings are the same pose and must time
+    the same swing.
     """
     start = list(TOSS_WINDUP_ARM_CONFIGURATION) + [0.0] * 6
     end = list(TOSS_RELEASE_ARM_CONFIGURATION) + [0.0] * 6

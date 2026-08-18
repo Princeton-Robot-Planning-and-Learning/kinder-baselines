@@ -36,7 +36,6 @@ from relational_structs import (
 )
 from spatialmath import SE2
 
-from kinder_models.dynamic3d.utils import upright_grasp_rotations
 from kinder_models.dynamic3d.tossing.toss_swing import (
     TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
     TOSS_MAX_VELOCITY,
@@ -54,8 +53,6 @@ from kinder_models.dynamic3d.utils import (
     GRASP_TRANSFORM_TO_OBJECT,
     GRIPPER_CLOSED_THRESHOLD,
     GRIPPER_OPEN_COMMAND_TOLERANCE,
-    MOVE_TO_TARGET_DISTANCE_BOUNDS,
-    MOVE_TO_TARGET_ROT_BOUNDS,
     WAYPOINT_TOLERANCE,
     WORLD_X_BOUNDS,
     WORLD_Y_BOUNDS,
@@ -64,6 +61,7 @@ from kinder_models.dynamic3d.utils import (
     get_overhead_object_se2_pose,
     get_target_robot_pose_from_parameters,
     run_base_motion_planning,
+    upright_grasp_rotations,
     wrap_arm_joint_difference,
 )
 
@@ -366,10 +364,10 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
     ) -> None:
         """Plan the swing, and fix the millisecond the gripper opens on.
 
-        The two knobs the real robot's movej_primitive.execute() takes (used by
-        the real robot's kinova controller).
-        gripper_release_ms is deliberately NOT clamped to the swing's duration: a value
-        at or past the end means the gripper never opens and the cube is never thrown.
+        The two knobs the real robot's movej_primitive.execute() takes (used by the real
+        robot's kinova controller). gripper_release_ms is deliberately NOT clamped to
+        the swing's duration: a value at or past the end means the gripper never opens
+        and the cube is never thrown.
         """
         # Initialize the PyBullet interface if this is the first time ever.
         if self._pybullet_sim is None:
@@ -772,9 +770,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME: None,
         }
 
-    def sample_parameters(
-        self, x: ObjectCentricState, rng: np.random.Generator
-    ) -> Any:
+    def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         del x, rng
         return np.zeros(0)
 
@@ -1150,8 +1146,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         """Whether the gripper is commanded open.
 
         Reads pos_gripper directly rather than through _get_current_robot_gripper_pose,
-        which quantises to 0.0 / GRASP_CLOSE_THRESHOLD and so cannot distinguish
-        "open" from "nearly open".
+        which quantises to 0.0 / GRASP_CLOSE_THRESHOLD and so cannot distinguish "open"
+        from "nearly open".
         """
         x = self._last_state
         assert x is not None
