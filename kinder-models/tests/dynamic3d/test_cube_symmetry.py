@@ -1,8 +1,8 @@
-"""Tests for cube_symmetry.py."""
+"""Tests for cube symmetry helpers in utils.py."""
 
 import numpy as np
 
-from kinder_models.dynamic3d.cube_symmetry import (
+from kinder_models.dynamic3d.utils import (
     CUBE_ROTATION_SYMMETRIES,
     upright_grasp_rotations,
 )

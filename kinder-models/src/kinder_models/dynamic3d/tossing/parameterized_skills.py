@@ -36,7 +36,7 @@ from relational_structs import (
 )
 from spatialmath import SE2
 
-from kinder_models.dynamic3d.cube_symmetry import upright_grasp_rotations
+from kinder_models.dynamic3d.utils import upright_grasp_rotations
 from kinder_models.dynamic3d.tossing.toss_swing import (
     TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
     TOSS_MAX_VELOCITY,

@@ -27,7 +27,6 @@ from relational_structs import (
     Predicate,
 )
 
-from kinder_models.dynamic3d.cube_symmetry import cube_tilt_from_upright
 from kinder_models.dynamic3d.utils import (
     END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE,
     GRIPPER_GRASPING_THRESHOLD,
@@ -35,6 +34,7 @@ from kinder_models.dynamic3d.utils import (
     MINIMUM_HOLDING_HEIGHT,
     ON_GROUND_TOLERANCE,
     PyBulletSim,
+    cube_tilt_from_upright,
 )
 
 # Upstream types cube, bin and barrier alike, so names state the type, not the subset.
