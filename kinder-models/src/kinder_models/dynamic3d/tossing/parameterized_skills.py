@@ -772,38 +772,11 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME: None,
         }
 
-    def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
-        target_object = self.objects[1]
-        target_object_pose = get_overhead_object_se2_pose(x, target_object)
-
-        for _ in range(self.MAX_SAMPLER_ATTEMPTS):
-            distance = rng.uniform(*MOVE_TO_TARGET_DISTANCE_BOUNDS)
-            rot = rng.uniform(*MOVE_TO_TARGET_ROT_BOUNDS)
-            target_base_pose = get_target_robot_pose_from_parameters(
-                target_object_pose, distance, rot
-            )
-            collision = False
-            for other_object in x.get_objects(MujocoMovableObjectType):
-                if (
-                    "cube" in other_object.name
-                    and other_object.name != target_object.name
-                ):
-                    other_object_pose = get_overhead_object_se2_pose(x, other_object)
-                    collision_distance = float(
-                        np.linalg.norm(
-                            [
-                                target_base_pose.x - other_object_pose.x,
-                                target_base_pose.y - other_object_pose.y,
-                            ]
-                        )
-                    )
-                    if collision_distance < 0.6:
-                        collision = True
-                        break
-            if not collision:
-                return np.array([distance, rot])
-
-        raise ValueError("No valid parameters found")
+    def sample_parameters(
+        self, x: ObjectCentricState, rng: np.random.Generator
+    ) -> Any:
+        del x, rng
+        return np.zeros(0)
 
     def reset(
         self,

@@ -1484,9 +1484,8 @@ def test_toss_schedules_its_release_at_the_requested_millisecond():
     env.close()
 
 
-def test_pick_cube_samples_a_standoff_within_bounds():
-    """The sampler draws (distance, rot) for the base standoff, so a refiner has two
-    continuous parameters to backtrack over."""
+def test_pick_cube_takes_no_continuous_parameters():
+    """PickCube is fully hardcoded, so sample_parameters is a 0-dim noop."""
     num_cubes = 1
     env = kinder.make(
         "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
@@ -1501,13 +1500,7 @@ def test_pick_cube_samples_a_standoff_within_bounds():
     controller = controllers["pick_cube"].ground((robot, cube, barrier))
     for seed in range(5):
         params = controller.sample_parameters(state, np.random.default_rng(seed))
-        distance, rot = np.asarray(params)
-        assert (
-            MOVE_TO_TARGET_DISTANCE_BOUNDS[0]
-            <= distance
-            <= MOVE_TO_TARGET_DISTANCE_BOUNDS[1]
-        )
-        assert MOVE_TO_TARGET_ROT_BOUNDS[0] <= rot <= MOVE_TO_TARGET_ROT_BOUNDS[1]
+        assert len(params) == 0
     env.close()
 
 
