@@ -64,6 +64,7 @@ from kinder_models.dynamic3d.utils import (
     get_overhead_object_se2_pose,
     get_target_robot_pose_from_parameters,
     run_base_motion_planning,
+    wrap_arm_joint_difference,
 )
 
 # Per-joint motion between consecutive control steps below which the arm counts as
@@ -891,17 +892,18 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         target_hover_joints = inverse_kinematics(
             self._pybullet_sim.robot, target_hover_end_effector_pose, set_joints=False
         )
-        self.plans[self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE] = (
-            run_motion_planning(
-                self._pybullet_sim.robot,
-                self._pybullet_sim.get_robot_joints(),
-                target_hover_joints,
-                # Includes the cube to grasp, because we have not grasped it yet.
-                collision_bodies=self._pybullet_sim.get_collision_bodies(),
-                seed=0,
-                physics_client_id=self._pybullet_sim.physics_client_id,
-            )
+        hover_plan = run_motion_planning(
+            self._pybullet_sim.robot,
+            self._pybullet_sim.get_robot_joints(),
+            target_hover_joints,
+            # Includes the cube to grasp, because we have not grasped it yet.
+            collision_bodies=self._pybullet_sim.get_collision_bodies(),
+            seed=0,
+            physics_client_id=self._pybullet_sim.physics_client_id,
         )
+        assert hover_plan is not None, "Motion Planning Failed at hover"
+        hover_phase = self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE
+        self.plans[hover_phase] = hover_plan
 
         # MOVE_ARM_DOWN_AROUND_CUBE planning
         target_around_cube_end_effector_pose = Pose(
@@ -920,17 +922,24 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             target_around_cube_end_effector_pose,
             set_joints=False,
         )
-        self.plans[self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE] = (
-            run_motion_planning(
-                self._pybullet_sim.robot,
-                target_hover_joints,  # Going from the hover joints to the around joints
-                target_around_joints,
-                # The cube is still a collision body here.
-                collision_bodies=self._pybullet_sim.get_collision_bodies(),
-                seed=0,
-                physics_client_id=self._pybullet_sim.physics_client_id,
-            )
+        around_plan = run_motion_planning(
+            self._pybullet_sim.robot,
+            # Where the hover plan actually ENDS, not the inverse-kinematics solution it
+            # was asked for. Joints 1/3/5/7 are continuous, so the planner routes them
+            # the short way and lands on whichever 2*pi representative that reaches --
+            # which is not always the one IK returned. Starting here from the IK
+            # solution puts this plan's waypoints a full turn from where the arm
+            # physically is, and _step_trajectory_phase's proportional command then
+            # unwinds the joint all the way round to reach a pose it is standing in.
+            hover_plan[-1],
+            target_around_joints,
+            # The cube is still a collision body here.
+            collision_bodies=self._pybullet_sim.get_collision_bodies(),
+            seed=0,
+            physics_client_id=self._pybullet_sim.physics_client_id,
         )
+        assert around_plan is not None, "Motion Planning Failed at around"
+        self.plans[self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE] = around_plan
 
         # CLOSE_GRIPPER_TO_GRASP_CUBE planning
         # Nothing, because the arm is opened/closed at inference time, not planning time
@@ -946,7 +955,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         self.plans[self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME] = (
             run_motion_planning(
                 self._pybullet_sim.robot,
-                target_around_joints,
+                # Again where the previous plan ends, not the IK target it aimed at.
+                around_plan[-1],
                 self.home_joints.tolist(),
                 collision_bodies=self._pybullet_sim.get_collision_bodies(
                     held_object=held_object
@@ -1067,7 +1077,13 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         curr = np.array(self._get_current_robot_arm_conf()[:7])
         target = np.array(target_waypoint[:7])
         action = np.zeros(11, dtype=np.float32)
-        action[3:10] = kp * (target - curr)
+        # Wrapped, so a continuous joint sitting a whole turn from the waypoint's
+        # representative is commanded to stay put rather than to unwind to it. The
+        # plans are chained by their own endpoints (see reset), so this should never
+        # fire; it is here because the cost of it firing is the arm sweeping 2*pi
+        # through the scene, and _robot_is_close_to_conf compares wrapped and so
+        # cannot see it.
+        action[3:10] = kp * wrap_arm_joint_difference(target - curr)
         action[-1] = self._get_current_robot_gripper_pose()
         if idx >= len(plan) - 1 and self._robot_is_close_to_conf(target_waypoint):
             if next_phase is not None:

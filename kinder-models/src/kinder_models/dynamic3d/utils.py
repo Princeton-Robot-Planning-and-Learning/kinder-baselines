@@ -45,6 +45,14 @@ _ARM_MAX_ACCELERATION = np.deg2rad(
     np.array([297.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0])
 )
 
+# The arm's continuous joints, as indices into a 7-joint arm configuration. PyBullet
+# reports them with lower=0, upper=-1: they have no limit, so a difference across one is
+# only defined up to a whole turn. The indices live here because the callers that need
+# them work on bare arrays with no robot to ask, and
+# test_the_circular_arm_joints_are_the_ones_the_robot_reports checks them against a live
+# robot so a different arm cannot leave this quietly wrong.
+CIRCULAR_ARM_JOINT_INDICES = (0, 2, 4, 6)
+
 # Base motion limits.
 MAX_BASE_MOVEMENT_MAGNITUDE = 1e-1
 
@@ -366,6 +374,25 @@ def _trapezoidal_motion_profile(
     return pos
 
 
+def wrap_arm_joint_difference(difference: np.ndarray) -> np.ndarray:
+    """Route an arm difference the short way round the arm's continuous joints.
+
+    A continuous joint at q and at q plus a whole turn is the same pose, so a raw
+    subtraction can report 2*pi of travel between two identical configurations -- and a
+    proportional controller handed that difference will faithfully drive the long way
+    round to a pose it is already standing in.
+
+    Only differences that are actually ambiguous are touched, so a difference already
+    inside a half turn comes back bit-identical: this is a guard against a wrong 2*pi
+    representative, never a re-derivation of a difference that was fine.
+    """
+    wrapped = np.array(difference, dtype=float)
+    for index in CIRCULAR_ARM_JOINT_INDICES:
+        if index < len(wrapped) and abs(wrapped[index]) > np.pi:
+            wrapped[index] = wrap_angle(wrapped[index])
+    return wrapped
+
+
 def _compute_per_joint_profile(
     start_conf: np.ndarray,
     end_conf: np.ndarray,
@@ -381,7 +408,7 @@ def _compute_per_joint_profile(
     Returns (trajectory_positions, direction) where trajectory_positions is a 1-D array
     of s values at each control step.
     """
-    dq = end_conf - start_conf
+    dq = wrap_arm_joint_difference(end_conf - start_conf)
     s_total = float(np.linalg.norm(dq))
     if s_total < 1e-8:
         return np.array([0.0]), np.zeros(len(end_conf))

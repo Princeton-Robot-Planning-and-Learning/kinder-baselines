@@ -162,3 +162,25 @@ def test_the_release_speeds_the_sampler_draws_are_never_clamped():
     """SPEED_BOUNDS' top edge is the clamp point, so it must pass through."""
     for speed in np.linspace(*MoveToTossLocationAndTossController.SPEED_BOUNDS, 25):
         assert np.isclose(toss_profile_limits(speed)[0], speed)
+
+
+def test_plan_toss_swing_is_unmoved_by_a_whole_turn_on_a_continuous_joint():
+    """The swing is timed off the arm's measured conf, so a wrong 2*pi
+    representative there would silently change how far the swing thinks it has
+    to travel -- and s_total is what fixes the release millisecond, hence where
+    the cube lands.
+
+    Joints 1/3/5/7 are continuous, so the arm can arrive at the windup
+    pose reading either sign of 180 degrees on joint 3. Both readings
+    are the same pose and must time the same swing.
+    """
+    start = list(TOSS_WINDUP_ARM_CONFIGURATION) + [0.0] * 6
+    end = list(TOSS_RELEASE_ARM_CONFIGURATION) + [0.0] * 6
+    turned = list(start)
+    turned[2] -= 2 * np.pi
+    plain = plan_toss_swing([end], start, TOSS_MAX_VELOCITY)
+    wrapped = plan_toss_swing([end], turned, TOSS_MAX_VELOCITY)
+    assert np.allclose(wrapped.trajectory, plain.trajectory)
+    assert np.allclose(wrapped.direction, plain.direction)
+    assert wrapped.release_step == plain.release_step
+    assert wrapped.release_slice == plain.release_slice

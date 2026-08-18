@@ -1546,6 +1546,106 @@ def test_pick_cube_resets_and_steps():
     env.close()
 
 
+def _pick_cube_arm_joint_names():
+    return [f"pos_arm_joint{i}" for i in range(1, 8)]
+
+
+def _pick_cube_arm_conf(state, robot):
+    return np.array([state.get(robot, name) for name in _pick_cube_arm_joint_names()])
+
+
+def _ground_pick_cube_on_seed_125():
+    """A reset pick_cube controller on the canonical seed, plus its env and
+    state."""
+    env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    controller = controllers["pick_cube"].ground((robot, cube, barrier))
+    params = controller.sample_parameters(state, np.random.default_rng(0))
+    controller.reset(state, params)
+    return env, state, robot, controller
+
+
+def test_pick_cube_hands_each_arm_plan_off_where_the_previous_one_ended():
+    """Consecutive arm plans must be chained by the previous plan's own
+    endpoint.
+
+    Joints 1/3/5/7 are continuous, so a motion plan routes them the
+    short way and lands on whichever 2*pi representative that reaches --
+    not necessarily the one inverse kinematics returned. Starting the
+    next plan from the raw IK solution therefore puts its waypoints a
+    full turn from where the arm physically is, and the arm unwinds to
+    get there.
+    """
+    env, _, _, controller = _ground_pick_cube_on_seed_125()
+    Phase = PickCubeController.PickCubeControllerPhase
+    ordered = [
+        Phase.MOVE_ARM_TO_HOVER_OVER_CUBE,
+        Phase.MOVE_ARM_DOWN_AROUND_CUBE,
+        Phase.LIFT_CUBE_TO_HOME,
+    ]
+    for earlier, later in zip(ordered[:-1], ordered[1:], strict=True):
+        earlier_plan = controller.plans[earlier]
+        later_plan = controller.plans[later]
+        assert earlier_plan is not None and later_plan is not None
+        handoff = np.abs(
+            np.asarray(earlier_plan[-1])[:7] - np.asarray(later_plan[0])[:7]
+        )
+        assert np.max(handoff) < 1e-6, (
+            f"{later.name} starts {np.max(handoff):.4f} rad from where "
+            f"{earlier.name} ends"
+        )
+    env.close()
+
+
+def test_pick_cube_never_unwinds_a_joint_by_a_whole_turn():
+    """Executed travel must stay near planned travel, joint by joint.
+
+    Tracking a waypoint costs a little more than the plan says -- the
+    command is proportional, so the arm settles into each waypoint
+    rather than arriving on it -- but a joint that travels a further
+    2*pi is not settling, it is taking the long way round to a pose it
+    is already standing in. Bounding the excess by pi separates the two.
+    """
+    env, state, robot, controller = _ground_pick_cube_on_seed_125()
+    Phase = PickCubeController.PickCubeControllerPhase
+    planned = np.zeros(7)
+    for phase in (
+        Phase.MOVE_ARM_TO_HOVER_OVER_CUBE,
+        Phase.MOVE_ARM_DOWN_AROUND_CUBE,
+        Phase.LIFT_CUBE_TO_HOME,
+    ):
+        plan = controller.plans[phase]
+        assert plan is not None
+        waypoints = np.array([np.asarray(w)[:7] for w in plan])
+        planned += np.abs(np.diff(waypoints, axis=0)).sum(axis=0)
+
+    confs = [_pick_cube_arm_conf(state, robot)]
+    for _ in range(400):
+        obs, _, _, _, _ = env.step(controller.step())
+        state = env.observation_space.devectorize(obs)
+        controller.observe(state)
+        confs.append(_pick_cube_arm_conf(state, robot))
+        if controller.terminated():
+            break
+    else:
+        assert False, "pick_cube did not terminate"
+
+    executed = np.abs(np.diff(np.array(confs), axis=0)).sum(axis=0)
+    excess = executed - planned
+    worst = int(np.argmax(excess))
+    assert np.max(excess) < np.pi, (
+        f"joint {worst + 1} travelled {executed[worst]:.4f} rad against "
+        f"{planned[worst]:.4f} rad planned"
+    )
+    env.close()
+
+
 def test_move_to_toss_location_and_toss_samples_four_parameters():
     """Standoff, rotation, release speed and release millisecond, all in bounds."""
     num_cubes = 1

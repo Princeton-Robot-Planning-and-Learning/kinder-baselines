@@ -13,7 +13,11 @@ from kinder.envs.dynamic3d.mujoco_utils import CONTROL_SCHEDULE_TIMESTEP
 from pybullet_helpers.inverse_kinematics import JointPositions
 from relational_structs import Array
 
-from kinder_models.dynamic3d.utils import _CONTROL_TIMESTEP, _trapezoidal_motion_profile
+from kinder_models.dynamic3d.utils import (
+    _CONTROL_TIMESTEP,
+    _trapezoidal_motion_profile,
+    wrap_arm_joint_difference,
+)
 
 # Wind up and back, then swing forward and release.
 TOSS_WINDUP_ARM_CONFIGURATION = np.deg2rad(
@@ -96,7 +100,9 @@ def plan_toss_swing(
     gripper_release_ms is deliberately NOT clamped to the swing's duration: a value at
     or past the end means the gripper never opens and the cube is never thrown.
     """
-    dq = np.subtract(joint_plan[-1], current_joint_angles)[:7]
+    dq = wrap_arm_joint_difference(
+        np.subtract(joint_plan[-1], current_joint_angles)[:7]
+    )
     s_total = float(np.linalg.norm(dq))
     # Do not align this with the _compute_per_joint_profile siblings.
     direction = dq / s_total if s_total > 1e-4 else np.zeros(7)
