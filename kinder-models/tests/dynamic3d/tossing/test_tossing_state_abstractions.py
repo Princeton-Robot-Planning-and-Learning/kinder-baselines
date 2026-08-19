@@ -121,23 +121,12 @@ def test_movable_in_goal_region_is_absent_before_any_throw():
 
 
 def test_movable_in_goal_region_uses_the_inflated_region():
-    """bin_x + 0.055 is outside the task JSON's literal bin-local x range (up to 0.05)
-    but inside the inflated bin_x + 0.06.
+    """bin_x + 0.055 is outside the literal bin-local range but inside the inflated one.
 
     That gap is the point: the environment inflates a region's "ranges" by a placement
-    threshold, and the predicate has to inflate with it. The region is bin-relative now
-    (Tossing3D-o1.json's `blocks_goal_region.target` is `bin_0`), so its inflation comes
-    from `MujocoObject._create_regions`'s object-level threshold (1cm), not the ground
-    fixture's (5cm) -- the literal-vs-inflated gap this test exercises is 1cm here, where
-    it used to be 5cm.
-
-    The bin-local range itself is asymmetric and offset from the bin's own centre
-    ([0.00, -0.07, 0.0, 0.05, 0.07, 0.10], not centred at 0): it is upstream's own
-    270fdb6 tightening (`e3c5c98`'s absolute [2.00, -0.07, 0.0, 2.05, 0.07, 0.10],
-    re-expressed relative to the bin), carried over unchanged in re-deriving it against
-    the bin's local frame. This is also read off the bin's own *live* position rather
-    than a literal x/y: bin_init_region now samples a real range, so the bin is not at a
-    fixed (2.0, 0.0) at every seed, including this test's seed=125.
+    threshold -- 1cm here, since the region is now bin-attached rather than ground-fixed
+    -- and the predicate has to inflate with it. Read off the bin's own live position
+    since bin_init_region now samples a real range, not a fixed point.
     """
     env, abstractor, state = _make_env_and_abstractor()
     cube = state.get_object_from_name("cube_0")
