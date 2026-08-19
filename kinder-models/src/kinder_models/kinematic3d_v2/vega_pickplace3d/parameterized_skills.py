@@ -12,6 +12,13 @@ grasp command to grasp, release, or take the cube.
 The handover skill moves both arms in sequence: the holding arm carries the cube into a
 region in front of the robot that both arms can reach, and the receiving arm then
 reaches to the cube and takes it.
+
+An optional grasp-approach tilt constraint (``grasp_approach_max_tilt``) restricts pick
+and place configurations to top-down approaches: the end effector points at most that
+angle off straight down, with the yaw free. When it is set, those two skills sample
+constraint-aware, drawing a yaw and solving full-pose IK for a down-facing target,
+because rejection over uniform draws essentially never produces a near-vertical end
+effector that also reaches the cube.
 """
 
 from __future__ import annotations
@@ -85,6 +92,22 @@ REFINE_MAX_ITERS = 50
 # fraction of the environment's grasp radius, so the grasp cannot sit on the boundary.
 GRASP_RADIUS_MARGIN = 0.9
 
+# Constraint-aware sampling under a grasp-approach tilt constraint: each candidate is a
+# full-pose IK solve from a uniformly drawn seed (~0.2 s), not a forward-kinematics
+# call (~0.3 ms), so the budget is far smaller than DEFAULT_NUM_GOAL_CANDIDATES.
+# Measured per-candidate acceptance for reachable cubes is 20-55% depending on the
+# cube's position, so 50 candidates make a spurious exhaustion vanishingly rare
+# (under 1e-5 at the low end) while a genuine exhaustion (an unreachable cube) still
+# resolves in about ten seconds. A spurious exhaustion is the costlier mistake, since
+# it discards a feasible abstract plan, so the budget favors reliability over a
+# faster failure path.
+DOWN_FACING_NUM_GOAL_CANDIDATES = 50
+
+# Full-pose IK from a random seed needs more iterations than the position-only
+# refinement: capping at 50 iterations drops the hard-case acceptance rate from 20%
+# to 16%, and beyond 100 the failure path gets slower without a matching gain.
+DOWN_FACING_IK_MAX_ITERS = 100
+
 # Sampled place configurations put the cube center within this fraction of the target
 # patch half extents, so the drop cannot land on the patch boundary.
 PLACE_EXTENT_MARGIN = 0.7
@@ -131,6 +154,16 @@ def _side_of(arm: Object) -> str:
     return side
 
 
+def _down_facing_rotation(yaw: float) -> np.ndarray:
+    """The end-effector rotation whose approach axis points straight down.
+
+    The Vega tool frames carry the fingertip offset along their z axis, so a
+    down-facing grasp is one whose frame z axis points along world -z; ``yaw`` spins
+    the frame about the vertical.
+    """
+    return np.asarray((SE3.Rz(yaw) * SE3.Rx(np.pi)).R)
+
+
 class _VegaPickPlaceControllerBase(
     GroundParameterizedController[ObjectCentricState, np.ndarray]
 ):
@@ -148,12 +181,17 @@ class _VegaPickPlaceControllerBase(
         planners: dict[str, MotionPlanner],
         collision_fn: Callable[[Configuration], bool],
         num_goal_candidates: int = DEFAULT_NUM_GOAL_CANDIDATES,
+        grasp_approach_max_tilt: float | None = None,
     ) -> None:
         super().__init__(objects)
         self._sim = sim
         self._planners = planners
         self._collision_fn = collision_fn
         self._num_goal_candidates = num_goal_candidates
+        # The tilt bound doubles as the IK orientation tolerance, so zero is
+        # unsatisfiable rather than "exactly vertical".
+        assert grasp_approach_max_tilt is None or grasp_approach_max_tilt > 0
+        self._grasp_approach_max_tilt = grasp_approach_max_tilt
         self._ik_refiners = {
             side: NumericalIK(
                 sim.tree,
@@ -165,6 +203,25 @@ class _VegaPickPlaceControllerBase(
             )
             for side in ARM_SIDES
         }
+        # Full-pose solvers for constraint-aware sampling. The orientation tolerance
+        # is the tilt bound: a converged solve is within that angle of the down-facing
+        # target rotation, and the achieved approach axis deviates from vertical by at
+        # most the full rotation error, so the tilt constraint holds by construction.
+        self._down_facing_iks = (
+            {
+                side: NumericalIK(
+                    sim.tree,
+                    self._joint_space(side),
+                    sim.robot.manipulators[side].ee_frame,
+                    position_tolerance=REFINE_POSITION_TOLERANCE,
+                    orientation_tolerance=grasp_approach_max_tilt,
+                    max_iters=DOWN_FACING_IK_MAX_ITERS,
+                )
+                for side in ARM_SIDES
+            }
+            if grasp_approach_max_tilt is not None
+            else {}
+        )
         self._current_state: ObjectCentricState | None = None
         self._current_params: np.ndarray | None = None
         # (side, goal joints) for each arm motion, in execution order.
@@ -251,6 +308,39 @@ class _VegaPickPlaceControllerBase(
             if self._collision_fn(refined):
                 continue
             return space.to_vector(refined)
+        return None
+
+    def _sample_down_facing_configuration(
+        self,
+        side: str,
+        make_target: Callable[[np.ndarray], SE3],
+        accept: Callable[[Configuration], bool],
+        rng: np.random.Generator,
+    ) -> np.ndarray | None:
+        """A collision-free configuration whose end effector points down.
+
+        Each candidate draws a yaw and a seed configuration uniformly, solves
+        full-pose IK for the target that ``make_target`` builds from the down-facing
+        rotation at that yaw, and keeps solutions that ``accept`` admits. A converged
+        solve satisfies the tilt constraint by construction (see the solver setup in
+        ``__init__``). The sim must already be at the state to sample around. Returns
+        None when the budget is exhausted.
+        """
+        space = self._arm_space(side)
+        lower, upper = space.bounds()
+        base = dict(self._sim.configuration)
+        solver = self._down_facing_iks[side]
+        for _ in range(DOWN_FACING_NUM_GOAL_CANDIDATES):
+            target = make_target(_down_facing_rotation(rng.uniform(-np.pi, np.pi)))
+            seed = base | space.to_configuration(rng.uniform(lower, upper))
+            solved = solver.solve(target, seed)
+            if solved is None:
+                continue
+            if not accept(solved):
+                continue
+            if self._collision_fn(solved):
+                continue
+            return space.to_vector(solved)
         return None
 
     def reset(self, x: ObjectCentricState, params: np.ndarray) -> None:
@@ -367,17 +457,37 @@ class GroundPickController(_VegaPickPlaceControllerBase):
         self._sim.set_state(x)
         side = _side_of(self.objects[0])
         cube = np.asarray(x.cube_position)
-        joints = self._sample_ee_reach_configuration(
-            side,
-            cube,
-            GRASP_RADIUS_MARGIN * self._sim.config.grasp_radius,
-            rng,
-            self._num_goal_candidates,
-        )
+        distance = GRASP_RADIUS_MARGIN * self._sim.config.grasp_radius
+        if self._grasp_approach_max_tilt is None:
+            joints = self._sample_ee_reach_configuration(
+                side, cube, distance, rng, self._num_goal_candidates
+            )
+        else:
+            # Aim above the cube for the same reason the refinement does: a
+            # down-facing gripper at the cube center would collide with the table.
+            target_position = cube + np.array([0.0, 0.0, REFINE_TARGET_Z_OFFSET])
+            assert distance > REFINE_POSITION_TOLERANCE + REFINE_TARGET_Z_OFFSET
+            ee_frame = self._sim.robot.manipulators[side].ee_frame
+
+            def in_grasp_range(config: Configuration) -> bool:
+                ee = self._sim.tree.forward_kinematics(ee_frame, config).t
+                return bool(np.linalg.norm(ee - cube) < distance)
+
+            joints = self._sample_down_facing_configuration(
+                side,
+                lambda rotation: SE3.Rt(rotation, target_position),
+                in_grasp_range,
+                rng,
+            )
         if joints is None:
+            num_samples = (
+                self._num_goal_candidates
+                if self._grasp_approach_max_tilt is None
+                else DOWN_FACING_NUM_GOAL_CANDIDATES
+            )
             raise TrajectorySamplingFailure(
                 f"No grasp configuration found for the {side} arm at cube "
-                f"{tuple(cube)} after {self._num_goal_candidates} samples"
+                f"{tuple(cube)} after {num_samples} samples"
             )
         return joints
 
@@ -420,6 +530,36 @@ class GroundPlaceController(_VegaPickPlaceControllerBase):
         place_point = np.array(
             [target[0], target[1], resting_z + PLACE_MAX_RELEASE_HEIGHT / 2]
         )
+
+        if self._grasp_approach_max_tilt is not None:
+            ee_frame = self._sim.robot.manipulators[side].ee_frame
+            base = dict(self._sim.configuration)
+            ee_pose = self._sim.tree.forward_kinematics(ee_frame, base)
+            held_cube = self._sim.tree.forward_kinematics(CUBE_NODE, base).t
+            # The cube rides rigidly on the end effector, so its offset in the
+            # end-effector frame is fixed; under a candidate rotation the end
+            # effector must sit at the place point minus the rotated offset for the
+            # cube to land there.
+            offset = np.asarray(ee_pose.R).T @ (held_cube - ee_pose.t)
+
+            def cube_in_slab(config: Configuration) -> bool:
+                cube = self._sim.tree.forward_kinematics(CUBE_NODE, config).t
+                return cube_accepted(cube)
+
+            joints = self._sample_down_facing_configuration(
+                side,
+                lambda rotation: SE3.Rt(rotation, place_point - rotation @ offset),
+                cube_in_slab,
+                rng,
+            )
+            if joints is not None:
+                return joints
+            raise TrajectorySamplingFailure(
+                f"No place configuration found for the {side} arm over target "
+                f"{tuple(target)} after {DOWN_FACING_NUM_GOAL_CANDIDATES} "
+                "down-facing samples"
+            )
+
         space = self._arm_space(side)
         lower, upper = space.bounds()
         base = dict(self._sim.configuration)
@@ -545,8 +685,16 @@ def create_lifted_controllers(
     sim: ObjectCentricVegaPickPlace3DEnv,
     rng: np.random.Generator | None = None,
     prefer_ompl: bool = True,
+    grasp_approach_max_tilt: float | None = None,
 ) -> dict[str, LiftedParameterizedController]:
-    """Create lifted parameterized controllers for VegaPickPlace3D."""
+    """Create lifted parameterized controllers for VegaPickPlace3D.
+
+    ``grasp_approach_max_tilt`` bounds how far (in radians) the end effector may point
+    off straight down in sampled pick and place configurations, with the yaw free;
+    None (the default) leaves grasp orientations unconstrained. Handover sampling is
+    never constrained: the take-over happens in mid-air, where approach direction
+    does not matter.
+    """
     del action_space  # the action space is implied by the environment
 
     if rng is None:
@@ -566,13 +714,25 @@ def create_lifted_controllers(
         """Pick up the cube with one arm."""
 
         def __init__(self, objects):
-            super().__init__(objects, sim, planners, collision_fn)
+            super().__init__(
+                objects,
+                sim,
+                planners,
+                collision_fn,
+                grasp_approach_max_tilt=grasp_approach_max_tilt,
+            )
 
     class PlaceController(GroundPlaceController):
         """Place the held cube onto the target patch."""
 
         def __init__(self, objects):
-            super().__init__(objects, sim, planners, collision_fn)
+            super().__init__(
+                objects,
+                sim,
+                planners,
+                collision_fn,
+                grasp_approach_max_tilt=grasp_approach_max_tilt,
+            )
 
     class HandoverController(GroundHandoverController):
         """Pass the cube from one arm to the other."""
