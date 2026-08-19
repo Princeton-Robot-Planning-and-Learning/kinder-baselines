@@ -174,10 +174,15 @@ def test_top_down_pick_and_place_controllers():
     )
     rng = np.random.default_rng(123)
 
+    space = sim.robot.groups[sim.robot.manipulators["right"].group]
+    lower, upper = space.bounds()
+    margin = skills.DOWN_FACING_JOINT_LIMIT_MARGIN - 1e-9
+
     pick = controllers["pick"].ground((arms["right"], cube))
     params = pick.sample_parameters(state, rng)
     sim.set_state(state)
     assert _ee_tilt(sim, "right", params) <= GRASP_APPROACH_MAX_TILT
+    assert np.all(params >= lower + margin) and np.all(params <= upper - margin)
     distance = np.linalg.norm(
         sim.end_effector_pose("right").t - np.array(state.cube_position)
     )
@@ -190,6 +195,13 @@ def test_top_down_pick_and_place_controllers():
     params = place.sample_parameters(state, rng)
     sim.set_state(state)
     assert _ee_tilt(sim, "right", params) <= GRASP_APPROACH_MAX_TILT
+    assert np.all(params >= lower + margin) and np.all(params <= upper - margin)
+    # The place sampler prefers the posture the arm is already in, so the goal
+    # stays near the pick posture instead of flipping to an independently sampled
+    # one (posture-preserved transfers measure under 1 rad of max joint change;
+    # flips measure around 5 rad).
+    pick_posture = np.asarray(state.arm_joint_positions("right"))
+    assert np.max(np.abs(params - pick_posture)) < 1.5
     place.reset(state, params)
     state = _run_controller(env, place, state)
     assert state.holder is None
