@@ -121,16 +121,26 @@ def test_movable_in_goal_region_is_absent_before_any_throw():
 
 
 def test_movable_in_goal_region_uses_the_inflated_region():
-    """x = 2.14 is outside the task JSON's literal 2.10 but inside the inflated 2.15.
+    """bin_x + 0.105 is outside the task JSON's literal bin-local range (up to 0.10) but
+    inside the inflated bin_x + 0.11.
 
-    That gap is the point: the environment inflates "ranges" by the ground placement
-    threshold, and the predicate has to inflate with it.
+    That gap is the point: the environment inflates a region's "ranges" by a placement
+    threshold, and the predicate has to inflate with it. The region is bin-relative now
+    (Tossing3D-o1.json's `blocks_goal_region.target` is `bin_0`), so its inflation comes
+    from `MujocoObject._create_regions`'s object-level threshold (1cm), not the ground
+    fixture's (5cm) -- the literal-vs-inflated gap this test exercises is 1cm here, where
+    it used to be 5cm. It is also read off the bin's own *live* position rather than a
+    literal x/y: bin_init_region now samples a real range, so the bin is not at a fixed
+    (2.0, 0.0) at every seed, including this test's seed=125.
     """
     env, abstractor, state = _make_env_and_abstractor()
     cube = state.get_object_from_name("cube_0")
+    bin_obj = state.get_object_from_name("bin_0")
+    bin_x = state.get(bin_obj, "x")
+    bin_y = state.get(bin_obj, "y")
     landed = state.copy()
-    landed.set(cube, "x", 2.14)
-    landed.set(cube, "y", 0.0)
+    landed.set(cube, "x", bin_x + 0.105)
+    landed.set(cube, "y", bin_y)
     landed.set(cube, "z", 0.025)
     atoms = abstractor.state_abstractor(landed).atoms
     assert GroundAtom(MovableInGoalRegion, [cube]) in atoms

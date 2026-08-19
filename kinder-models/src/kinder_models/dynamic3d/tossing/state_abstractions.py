@@ -47,6 +47,10 @@ MovableIsDownX = Predicate(
 )
 # The environment's inflated region, not the task JSON's "ranges".
 GOAL_REGION_NAME = "blocks_goal_region"
+# The region is attached to the bin's own body (Tossing3D-o1.json's
+# blocks_goal_region.target), so it moves with the bin rather than sitting at a
+# scene-fixed point regardless of where the bin actually is.
+BIN_NAME = "bin_0"
 
 CUBE_NAME_PREFIX = "cube"
 BARRIER_NAME = "cuboid_barrier"
@@ -69,7 +73,10 @@ class Tossing3DStateAbstractor:
 
     def state_abstractor(self, state: ObjectCentricState) -> RelationalAbstractState:
         """Get the abstract state for the current state."""
-        # Not pure: poses come from `state`, the goal region from the live simulator.
+        # Not pure: poses come from `state`, the goal region from the live simulator --
+        # and, now that the region is attached to the bin's own body rather than to a
+        # fixed point on the ground, its world position also depends on the *bin's* live
+        # pose in that simulator, not just on whether a scene fixture exists.
         atoms: set[GroundAtom] = set()
 
         self._pybullet_sim.set_state(state)
@@ -178,9 +185,14 @@ class Tossing3DStateAbstractor:
         return [o for o in movables if o.name.startswith(CUBE_NAME_PREFIX)]
 
     def _check_in_goal_region(self, state: ObjectCentricState, cube: Object) -> bool:
-        """Check whether a cube's centre lies in the goal region."""
-        ground_fixture = self._sim._ground_fixture  # pylint: disable=protected-access
-        assert ground_fixture is not None, "Ground fixture not initialized"
+        """Check whether a cube's centre lies in the goal region.
+
+        The region is looked up on `bin_0`, not the ground fixture: it is attached to the
+        bin's own body (Tossing3D-o1.json's `blocks_goal_region.target`), so its live
+        world position tracks wherever the bin currently is rather than a scene-fixed
+        point that happens to coincide with the bin's *initial* placement.
+        """
+        bin_object = self._sim._objects_dict[BIN_NAME]  # pylint: disable=protected-access
         position = np.array(
             [
                 state.get(cube, "x"),
@@ -189,7 +201,7 @@ class Tossing3DStateAbstractor:
             ],
             dtype=np.float32,
         )
-        return ground_fixture.check_in_region(
+        return bin_object.check_in_region(
             position,
             GOAL_REGION_NAME,
             self._sim._robot_env,  # pylint: disable=protected-access
