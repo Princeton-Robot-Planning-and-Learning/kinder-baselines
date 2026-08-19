@@ -29,6 +29,8 @@ from relational_structs import (
     ObjectCentricState,
 )
 
+from kinder_models.kinematic3d.utils import step_toward_se2_waypoint
+
 # constants
 GRIPPER_OPEN_THRESHOLD = 0.01
 HOME_JOINT_POSITIONS = np.deg2rad([0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0])
@@ -90,17 +92,16 @@ class BasePlaceController(
 
     def navigate(self) -> np.ndarray:
         """Navigate to the next target base pose."""
-        # Pop the next target base pose from the plan.
+        # Step toward the next waypoint within action limits.
         assert self._current_plan is not None
-        target_base_pose = self._current_plan.pop(0)
-        if len(self._current_plan) == 0:
-            self._navigated = True
-
-        # Compute delta base pose.
         assert isinstance(self._current_state, Kinematic3DObjectCentricState)
-        current_base_pose = self._current_state.base_pose
-        delta = target_base_pose - current_base_pose
-        delta_lst = [delta.x, delta.y, delta.rot]
+        delta_lst, exhausted = step_toward_se2_waypoint(
+            self._current_state.base_pose,
+            self._current_plan,
+            self._sim.config.max_action_mag,
+        )
+        if exhausted:
+            self._navigated = True
 
         # Create action: [base_x, base_y, base_rot, joint1, ..., joint7, gripper].
         action_lst = delta_lst + [0.0] * 7 + [0.0]
