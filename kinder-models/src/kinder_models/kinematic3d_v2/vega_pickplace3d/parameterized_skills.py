@@ -12,6 +12,13 @@ grasp command to grasp, release, or take the cube.
 The handover skill moves both arms in sequence: the holding arm carries the cube into a
 region in front of the robot that both arms can reach, and the receiving arm then
 reaches to the cube and takes it.
+
+An optional grasp-approach tilt constraint (``grasp_approach_max_tilt``) restricts pick
+and place configurations to top-down approaches: the end effector points at most that
+angle off straight down, with the yaw free. When it is set, those two skills sample
+constraint-aware, drawing a yaw and solving full-pose IK for a down-facing target,
+because rejection over uniform draws essentially never produces a near-vertical end
+effector that also reaches the cube.
 """
 
 from __future__ import annotations
@@ -45,7 +52,7 @@ from prpl_kinematics.ik import NumericalIK
 from prpl_kinematics.planning.configuration_space import ConfigurationSpace
 from prpl_kinematics.planning.joint_space import JointSpace
 from prpl_kinematics.planning.motion_planner import MotionPlanner
-from prpl_kinematics.tree.kinematic_tree import Configuration
+from prpl_kinematics.tree.kinematic_tree import Configuration, KinematicTree
 from relational_structs import Object, ObjectCentricState, Variable
 from spatialmath import SE3
 
@@ -84,6 +91,59 @@ REFINE_MAX_ITERS = 50
 # Sampled grasp (and take-over) configurations put the end effector within this
 # fraction of the environment's grasp radius, so the grasp cannot sit on the boundary.
 GRASP_RADIUS_MARGIN = 0.9
+
+# Constraint-aware sampling under a grasp-approach tilt constraint: each candidate is a
+# full-pose IK solve from a uniformly drawn seed (~0.2 s), not a forward-kinematics
+# call (~0.3 ms), so the budget is far smaller than DEFAULT_NUM_GOAL_CANDIDATES.
+# Measured per-candidate acceptance for reachable cubes is 10-46% depending on the
+# cube's position (the soft limit margin costs several points, most at the hard
+# end), so 100 candidates make a spurious exhaustion vanishingly rare (under 3e-5
+# at the low end) while a genuine exhaustion (an unreachable cube) resolves in under
+# half a minute. A spurious exhaustion is the costlier mistake, since it discards a
+# feasible abstract plan, so the budget favors reliability over a faster failure
+# path.
+DOWN_FACING_NUM_GOAL_CANDIDATES = 100
+
+# Full-pose IK from a random seed needs more iterations than the position-only
+# refinement: capping at 50 iterations drops the hard-case acceptance rate from 20%
+# to 16%, and beyond 100 the failure path gets slower without a matching gain.
+DOWN_FACING_IK_MAX_ITERS = 100
+
+# The physical Vega's firmware zero-torques any axis whose position passes its soft
+# limit (dynamically, not only at boot), so a goal configuration on the boundary
+# risks a limp joint on tracking overshoot. Constrained samples keep every arm joint
+# at least this far inside its limits; the IK solver clamps to the limits each
+# iteration, so without a margin accepted solutions can sit exactly on them.
+DOWN_FACING_JOINT_LIMIT_MARGIN = 0.1
+
+# First-valid-wins sampling tends to return contorted postures: over half of the
+# valid down-facing solutions rest a joint exactly on the margin boundary (the
+# solver clamps there), and a boundary-pinned posture stalls the posture-preserving
+# place solve just like a limit-pinned one stalls the servos. The sampler therefore
+# scores each valid solution by its max joint change from the current configuration
+# plus a penalty per pinned joint, accepts an unpinned solution within the
+# threshold immediately, and otherwise returns the best of this many valid
+# solutions. The threshold is calibrated to well-conditioned pick postures, which
+# measure about 2 rad from home.
+DOWN_FACING_SELECT_CANDIDATES = 5
+DOWN_FACING_ACCEPT_DELTA = 2.5
+# Dwarfs any possible joint delta, so an unpinned solution always outranks a pinned
+# one and pinned solutions rank by how many joints they pin.
+DOWN_FACING_PINNED_PENALTY = 10.0
+
+# Constrained placing prefers the posture the arm is already in. It tries this many
+# yaws fanning out from the current yaw (plus the current yaw itself), each seeded
+# from the current configuration, and keeps the solution closest to that
+# configuration in max joint change; full posture resampling is the last resort. A
+# nearby yaw does not imply a nearby posture (unwinding a wrist pinned against the
+# margin boundary can spin the roll joint by radians while the yaw barely moves),
+# hence closest-solution selection rather than first-success.
+PLACE_POSTURE_SEED_ATTEMPTS = 12
+
+# A posture-preserving solution whose max joint change is below this is accepted
+# immediately, skipping the rest of the fan; tier-one successes (a short transfer at
+# the current yaw) measure 0.7-0.9 rad, so the common case stays a single solve.
+PLACE_POSTURE_ACCEPT_DELTA = 1.2
 
 # Sampled place configurations put the cube center within this fraction of the target
 # patch half extents, so the drop cannot land on the patch boundary.
@@ -131,6 +191,34 @@ def _side_of(arm: Object) -> str:
     return side
 
 
+def _down_facing_rotation(yaw: float) -> np.ndarray:
+    """The end-effector rotation whose approach axis points straight down.
+
+    The Vega tool frames carry the fingertip offset along their z axis, so a
+    down-facing grasp is one whose frame z axis points along world -z; ``yaw`` spins
+    the frame about the vertical.
+    """
+    return np.asarray((SE3.Rz(yaw) * SE3.Rx(np.pi)).R)
+
+
+class _MarginJointSpace(JointSpace):
+    """A JointSpace with every joint's bounds pulled in by a fixed margin.
+
+    The constrained IK solvers use this so their solutions stay clear of the soft
+    limits during the solve (the solver clamps to the space's bounds each
+    iteration), rather than rejecting boundary solutions after the fact; a seeded
+    solve then converges to a nearby margin-respecting solution when one exists.
+    """
+
+    def __init__(
+        self, tree: KinematicTree, joint_names: Sequence[str], margin: float
+    ) -> None:
+        super().__init__(tree, joint_names)
+        assert np.all(self._upper - self._lower > 2 * margin)
+        self._lower = self._lower + margin
+        self._upper = self._upper - margin
+
+
 class _VegaPickPlaceControllerBase(
     GroundParameterizedController[ObjectCentricState, np.ndarray]
 ):
@@ -148,12 +236,17 @@ class _VegaPickPlaceControllerBase(
         planners: dict[str, MotionPlanner],
         collision_fn: Callable[[Configuration], bool],
         num_goal_candidates: int = DEFAULT_NUM_GOAL_CANDIDATES,
+        grasp_approach_max_tilt: float | None = None,
     ) -> None:
         super().__init__(objects)
         self._sim = sim
         self._planners = planners
         self._collision_fn = collision_fn
         self._num_goal_candidates = num_goal_candidates
+        # The tilt bound doubles as the IK orientation tolerance, so zero is
+        # unsatisfiable rather than "exactly vertical".
+        assert grasp_approach_max_tilt is None or grasp_approach_max_tilt > 0
+        self._grasp_approach_max_tilt = grasp_approach_max_tilt
         self._ik_refiners = {
             side: NumericalIK(
                 sim.tree,
@@ -165,6 +258,31 @@ class _VegaPickPlaceControllerBase(
             )
             for side in ARM_SIDES
         }
+        # Full-pose solvers for constraint-aware sampling. The orientation tolerance
+        # is the tilt bound: a converged solve is within that angle of the down-facing
+        # target rotation, and the achieved approach axis deviates from vertical by at
+        # most the full rotation error, so the tilt constraint holds by construction.
+        # The solvers run in a margin-shrunken joint space, so their solutions also
+        # stay clear of the soft limits by construction.
+        self._down_facing_iks = (
+            {
+                side: NumericalIK(
+                    sim.tree,
+                    _MarginJointSpace(
+                        sim.tree,
+                        self._joint_space(side).joint_names,
+                        DOWN_FACING_JOINT_LIMIT_MARGIN,
+                    ),
+                    sim.robot.manipulators[side].ee_frame,
+                    position_tolerance=REFINE_POSITION_TOLERANCE,
+                    orientation_tolerance=grasp_approach_max_tilt,
+                    max_iters=DOWN_FACING_IK_MAX_ITERS,
+                )
+                for side in ARM_SIDES
+            }
+            if grasp_approach_max_tilt is not None
+            else {}
+        )
         self._current_state: ObjectCentricState | None = None
         self._current_params: np.ndarray | None = None
         # (side, goal joints) for each arm motion, in execution order.
@@ -252,6 +370,71 @@ class _VegaPickPlaceControllerBase(
                 continue
             return space.to_vector(refined)
         return None
+
+    def _solve_down_facing_candidate(
+        self,
+        side: str,
+        target: SE3,
+        seed: Configuration,
+        accept: Callable[[Configuration], bool],
+    ) -> np.ndarray | None:
+        """One constrained candidate: solve, then check ``accept`` and collision.
+
+        A converged solve satisfies the tilt constraint and the soft limit margin
+        by construction (see the solver setup in ``__init__``). Returns the arm
+        joint vector, or None if the solve failed or a check rejected it.
+        """
+        solved = self._down_facing_iks[side].solve(target, seed)
+        if solved is None:
+            return None
+        if not accept(solved):
+            return None
+        if self._collision_fn(solved):
+            return None
+        return self._arm_space(side).to_vector(solved)
+
+    def _sample_down_facing_configuration(
+        self,
+        side: str,
+        make_target: Callable[[np.ndarray], SE3],
+        accept: Callable[[Configuration], bool],
+        rng: np.random.Generator,
+    ) -> np.ndarray | None:
+        """A collision-free configuration whose end effector points down.
+
+        Each candidate draws a yaw and a seed configuration uniformly and solves
+        full-pose IK for the target that ``make_target`` builds from the down-facing
+        rotation at that yaw. Among solutions that pass the candidate checks, the
+        sampler prefers postures near the current configuration and away from the
+        margin boundary (see the selection constants). The sim must already be at
+        the state to sample around. Returns None when the budget is exhausted.
+        """
+        space = self._arm_space(side)
+        lower, upper = space.bounds()
+        base = dict(self._sim.configuration)
+        arm_joints_now = space.to_vector(base)
+        pin_lower = lower + DOWN_FACING_JOINT_LIMIT_MARGIN + 1e-6
+        pin_upper = upper - DOWN_FACING_JOINT_LIMIT_MARGIN - 1e-6
+        best: np.ndarray | None = None
+        best_score = np.inf
+        num_valid = 0
+        for _ in range(DOWN_FACING_NUM_GOAL_CANDIDATES):
+            target = make_target(_down_facing_rotation(rng.uniform(-np.pi, np.pi)))
+            seed = base | space.to_configuration(rng.uniform(lower, upper))
+            joints = self._solve_down_facing_candidate(side, target, seed, accept)
+            if joints is None:
+                continue
+            delta = float(np.max(np.abs(joints - arm_joints_now)))
+            pinned = int(np.count_nonzero((joints < pin_lower) | (joints > pin_upper)))
+            if pinned == 0 and delta < DOWN_FACING_ACCEPT_DELTA:
+                return joints
+            score = delta + DOWN_FACING_PINNED_PENALTY * pinned
+            if score < best_score:
+                best, best_score = joints, score
+            num_valid += 1
+            if num_valid >= DOWN_FACING_SELECT_CANDIDATES:
+                break
+        return best
 
     def reset(self, x: ObjectCentricState, params: np.ndarray) -> None:
         self._current_state = x
@@ -367,17 +550,37 @@ class GroundPickController(_VegaPickPlaceControllerBase):
         self._sim.set_state(x)
         side = _side_of(self.objects[0])
         cube = np.asarray(x.cube_position)
-        joints = self._sample_ee_reach_configuration(
-            side,
-            cube,
-            GRASP_RADIUS_MARGIN * self._sim.config.grasp_radius,
-            rng,
-            self._num_goal_candidates,
-        )
+        distance = GRASP_RADIUS_MARGIN * self._sim.config.grasp_radius
+        if self._grasp_approach_max_tilt is None:
+            joints = self._sample_ee_reach_configuration(
+                side, cube, distance, rng, self._num_goal_candidates
+            )
+        else:
+            # Aim above the cube for the same reason the refinement does: a
+            # down-facing gripper at the cube center would collide with the table.
+            target_position = cube + np.array([0.0, 0.0, REFINE_TARGET_Z_OFFSET])
+            assert distance > REFINE_POSITION_TOLERANCE + REFINE_TARGET_Z_OFFSET
+            ee_frame = self._sim.robot.manipulators[side].ee_frame
+
+            def in_grasp_range(config: Configuration) -> bool:
+                ee = self._sim.tree.forward_kinematics(ee_frame, config).t
+                return bool(np.linalg.norm(ee - cube) < distance)
+
+            joints = self._sample_down_facing_configuration(
+                side,
+                lambda rotation: SE3.Rt(rotation, target_position),
+                in_grasp_range,
+                rng,
+            )
         if joints is None:
+            num_samples = (
+                self._num_goal_candidates
+                if self._grasp_approach_max_tilt is None
+                else DOWN_FACING_NUM_GOAL_CANDIDATES
+            )
             raise TrajectorySamplingFailure(
                 f"No grasp configuration found for the {side} arm at cube "
-                f"{tuple(cube)} after {self._num_goal_candidates} samples"
+                f"{tuple(cube)} after {num_samples} samples"
             )
         return joints
 
@@ -420,6 +623,72 @@ class GroundPlaceController(_VegaPickPlaceControllerBase):
         place_point = np.array(
             [target[0], target[1], resting_z + PLACE_MAX_RELEASE_HEIGHT / 2]
         )
+
+        if self._grasp_approach_max_tilt is not None:
+            ee_frame = self._sim.robot.manipulators[side].ee_frame
+            base = dict(self._sim.configuration)
+            ee_pose = self._sim.tree.forward_kinematics(ee_frame, base)
+            held_cube = self._sim.tree.forward_kinematics(CUBE_NODE, base).t
+            # The cube rides rigidly on the end effector, so its offset in the
+            # end-effector frame is fixed; under a candidate rotation the end
+            # effector must sit at the place point minus the rotated offset for the
+            # cube to land there.
+            offset = np.asarray(ee_pose.R).T @ (held_cube - ee_pose.t)
+
+            def cube_in_slab(config: Configuration) -> bool:
+                cube = self._sim.tree.forward_kinematics(CUBE_NODE, config).t
+                return cube_accepted(cube)
+
+            # Prefer the posture the arm already has (see the fan constants above),
+            # so the transfer stays near the current configuration rather than
+            # flipping to an independently sampled posture. Yaw is free for a cube,
+            # so reusing or fanning out from the current yaw loses nothing. Targets
+            # use the exactly-vertical rotation at each candidate yaw, not the
+            # current rotation, so the converged tilt stays within the bound even
+            # though the held grasp may itself be tilted. When the held grasp is
+            # not down-facing at all (an unconstrained pick or a handover), the
+            # seeded fan usually fails and the resampling fallback takes over.
+            rotation_now = np.asarray(ee_pose.R)
+            yaw_now = float(np.arctan2(rotation_now[1, 0], rotation_now[0, 0]))
+            yaw_offsets = [0.0]
+            for k in range(1, PLACE_POSTURE_SEED_ATTEMPTS // 2 + 1):
+                step = 2 * np.pi * k / (PLACE_POSTURE_SEED_ATTEMPTS + 1)
+                yaw_offsets.extend([step, -step])
+            arm_joints_now = self._arm_space(side).to_vector(base)
+            best: np.ndarray | None = None
+            best_delta = np.inf
+            for yaw_offset in yaw_offsets:
+                rotation = _down_facing_rotation(yaw_now + yaw_offset)
+                joints = self._solve_down_facing_candidate(
+                    side,
+                    SE3.Rt(rotation, place_point - rotation @ offset),
+                    base,
+                    cube_in_slab,
+                )
+                if joints is None:
+                    continue
+                delta = float(np.max(np.abs(joints - arm_joints_now)))
+                if delta < PLACE_POSTURE_ACCEPT_DELTA:
+                    return joints
+                if delta < best_delta:
+                    best, best_delta = joints, delta
+            if best is not None:
+                return best
+
+            joints = self._sample_down_facing_configuration(
+                side,
+                lambda rotation: SE3.Rt(rotation, place_point - rotation @ offset),
+                cube_in_slab,
+                rng,
+            )
+            if joints is not None:
+                return joints
+            raise TrajectorySamplingFailure(
+                f"No place configuration found for the {side} arm over target "
+                f"{tuple(target)} after {DOWN_FACING_NUM_GOAL_CANDIDATES} "
+                "down-facing samples"
+            )
+
         space = self._arm_space(side)
         lower, upper = space.bounds()
         base = dict(self._sim.configuration)
@@ -545,8 +814,16 @@ def create_lifted_controllers(
     sim: ObjectCentricVegaPickPlace3DEnv,
     rng: np.random.Generator | None = None,
     prefer_ompl: bool = True,
+    grasp_approach_max_tilt: float | None = None,
 ) -> dict[str, LiftedParameterizedController]:
-    """Create lifted parameterized controllers for VegaPickPlace3D."""
+    """Create lifted parameterized controllers for VegaPickPlace3D.
+
+    ``grasp_approach_max_tilt`` bounds how far (in radians) the end effector may point
+    off straight down in sampled pick and place configurations, with the yaw free;
+    None (the default) leaves grasp orientations unconstrained. Handover sampling is
+    never constrained: the take-over happens in mid-air, where approach direction
+    does not matter.
+    """
     del action_space  # the action space is implied by the environment
 
     if rng is None:
@@ -566,13 +843,25 @@ def create_lifted_controllers(
         """Pick up the cube with one arm."""
 
         def __init__(self, objects):
-            super().__init__(objects, sim, planners, collision_fn)
+            super().__init__(
+                objects,
+                sim,
+                planners,
+                collision_fn,
+                grasp_approach_max_tilt=grasp_approach_max_tilt,
+            )
 
     class PlaceController(GroundPlaceController):
         """Place the held cube onto the target patch."""
 
         def __init__(self, objects):
-            super().__init__(objects, sim, planners, collision_fn)
+            super().__init__(
+                objects,
+                sim,
+                planners,
+                collision_fn,
+                grasp_approach_max_tilt=grasp_approach_max_tilt,
+            )
 
     class HandoverController(GroundHandoverController):
         """Pass the cube from one arm to the other."""

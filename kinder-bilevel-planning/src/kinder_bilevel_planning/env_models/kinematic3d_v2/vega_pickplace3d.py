@@ -43,13 +43,16 @@ def create_bilevel_planning_models(
     action_space: Space,
     config: VegaPickPlace3DEnvConfig | None = None,
     prefer_ompl: bool = True,
+    grasp_approach_max_tilt: float | None = None,
 ) -> SesameModels:
     """Create the env models for VegaPickPlace3D.
 
     ``config`` overrides the env config of the internal sim. Defaults to
     ``VegaPickPlace3DEnvConfig()`` if not provided. ``prefer_ompl`` selects the OMPL
     motion planner when ompl is installed; set it to False to force the BiRRT
-    fallback.
+    fallback. ``grasp_approach_max_tilt`` bounds how far (in radians) the end
+    effector may point off straight down in sampled pick and place configurations,
+    with the yaw free; None (the default) leaves grasp orientations unconstrained.
     """
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, BimanualArmJointDeltaGraspActionSpace)
@@ -139,7 +142,12 @@ def create_bilevel_planning_models(
     )
 
     # Controllers.
-    controllers = create_lifted_controllers(action_space, sim, prefer_ompl=prefer_ompl)
+    controllers = create_lifted_controllers(
+        action_space,
+        sim,
+        prefer_ompl=prefer_ompl,
+        grasp_approach_max_tilt=grasp_approach_max_tilt,
+    )
 
     # Finalize the skills.
     skills = {

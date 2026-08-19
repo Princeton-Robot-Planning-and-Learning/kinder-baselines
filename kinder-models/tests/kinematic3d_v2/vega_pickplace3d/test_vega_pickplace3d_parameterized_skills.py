@@ -151,6 +151,98 @@ def test_sampled_pick_parameters_reach_the_cube():
     env.close()
 
 
+GRASP_APPROACH_MAX_TILT = 0.1
+
+
+def _ee_tilt(sim, side, joints):
+    """The angle (radians) between the arm's approach axis and straight down."""
+    sim.set_arm_joint_positions(side, joints)
+    rotation = sim.end_effector_pose(side).R
+    return float(np.arccos(np.clip(-rotation[2, 2], -1.0, 1.0)))
+
+
+def test_top_down_pick_and_place_controllers():
+    """Constrained pick and place sample near-vertical grasps and reach the goal."""
+    env, state = _make_env_and_state(0, name_prefix="VegaPickPlace3D-topdown")
+    arms, cube, target = _scene_objects(state)
+    sim = ObjectCentricVegaPickPlace3DEnv(allow_state_access=True)
+    controllers = create_lifted_controllers(
+        env.action_space,
+        sim,
+        prefer_ompl=False,
+        grasp_approach_max_tilt=GRASP_APPROACH_MAX_TILT,
+    )
+    rng = np.random.default_rng(123)
+
+    space = sim.robot.groups[sim.robot.manipulators["right"].group]
+    lower, upper = space.bounds()
+    margin = skills.DOWN_FACING_JOINT_LIMIT_MARGIN - 1e-9
+
+    pick = controllers["pick"].ground((arms["right"], cube))
+    params = pick.sample_parameters(state, rng)
+    sim.set_state(state)
+    assert _ee_tilt(sim, "right", params) <= GRASP_APPROACH_MAX_TILT
+    assert np.all(params >= lower + margin) and np.all(params <= upper - margin)
+    # Candidate selection prefers postures strictly inside the margin boundary; a
+    # joint resting exactly on it stalls the posture-preserving place solve.
+    assert np.all(params > lower + margin + 1e-6)
+    assert np.all(params < upper - margin - 1e-6)
+    distance = np.linalg.norm(
+        sim.end_effector_pose("right").t - np.array(state.cube_position)
+    )
+    assert distance < sim.config.grasp_radius
+    pick.reset(state, params)
+    state = _run_controller(env, pick, state)
+    assert state.holder == "right"
+
+    place = controllers["place"].ground((arms["right"], cube, target))
+    params = place.sample_parameters(state, rng)
+    sim.set_state(state)
+    assert _ee_tilt(sim, "right", params) <= GRASP_APPROACH_MAX_TILT
+    assert np.all(params >= lower + margin) and np.all(params <= upper - margin)
+    # The place sampler prefers the posture the arm is already in, so the goal
+    # stays near the pick posture instead of flipping to an independently sampled
+    # one (posture-preserved transfers measure under 1 rad of max joint change;
+    # flips measure around 5 rad).
+    pick_posture = np.asarray(state.arm_joint_positions("right"))
+    assert np.max(np.abs(params - pick_posture)) < 1.5
+    place.reset(state, params)
+    state = _run_controller(env, place, state)
+    assert state.holder is None
+
+    sim.set_state(state)
+    assert sim.goal_reached()
+
+    sim.close()
+    env.close()
+
+
+def test_top_down_pick_sampling_fails_for_out_of_reach_arm():
+    """Constrained sampling with an arm that cannot reach the cube should fail.
+
+    The constrained sampler has its own (much smaller) candidate budget, so the
+    exhaustion path is separate from the unconstrained sampler's.
+    """
+    # For seed 19 the cube is far on the left side, out of the right arm's reach.
+    env, state = _make_env_and_state(19)
+    arms, cube, _ = _scene_objects(state)
+    sim = ObjectCentricVegaPickPlace3DEnv(allow_state_access=True)
+    controllers = create_lifted_controllers(
+        env.action_space,
+        sim,
+        prefer_ompl=False,
+        grasp_approach_max_tilt=GRASP_APPROACH_MAX_TILT,
+    )
+    rng = np.random.default_rng(0)
+
+    pick = controllers["pick"].ground((arms["right"], cube))
+    with pytest.raises(TrajectorySamplingFailure):
+        pick.sample_parameters(state, rng)
+
+    sim.close()
+    env.close()
+
+
 def test_pick_sampling_fails_for_out_of_reach_arm():
     """Sampling a grasp with an arm that cannot reach the cube should fail.
 
