@@ -183,6 +183,10 @@ def test_top_down_pick_and_place_controllers():
     sim.set_state(state)
     assert _ee_tilt(sim, "right", params) <= GRASP_APPROACH_MAX_TILT
     assert np.all(params >= lower + margin) and np.all(params <= upper - margin)
+    # Candidate selection prefers postures strictly inside the margin boundary; a
+    # joint resting exactly on it stalls the posture-preserving place solve.
+    assert np.all(params > lower + margin + 1e-6)
+    assert np.all(params < upper - margin - 1e-6)
     distance = np.linalg.norm(
         sim.end_effector_pose("right").t - np.array(state.cube_position)
     )

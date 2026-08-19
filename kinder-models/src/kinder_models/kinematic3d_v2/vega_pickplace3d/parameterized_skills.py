@@ -116,6 +116,21 @@ DOWN_FACING_IK_MAX_ITERS = 100
 # iteration, so without a margin accepted solutions can sit exactly on them.
 DOWN_FACING_JOINT_LIMIT_MARGIN = 0.1
 
+# First-valid-wins sampling tends to return contorted postures: over half of the
+# valid down-facing solutions rest a joint exactly on the margin boundary (the
+# solver clamps there), and a boundary-pinned posture stalls the posture-preserving
+# place solve just like a limit-pinned one stalls the servos. The sampler therefore
+# scores each valid solution by its max joint change from the current configuration
+# plus a penalty per pinned joint, accepts an unpinned solution within the
+# threshold immediately, and otherwise returns the best of this many valid
+# solutions. The threshold is calibrated to well-conditioned pick postures, which
+# measure about 2 rad from home.
+DOWN_FACING_SELECT_CANDIDATES = 5
+DOWN_FACING_ACCEPT_DELTA = 2.5
+# Dwarfs any possible joint delta, so an unpinned solution always outranks a pinned
+# one and pinned solutions rank by how many joints they pin.
+DOWN_FACING_PINNED_PENALTY = 10.0
+
 # Constrained placing prefers the posture the arm is already in. It tries this many
 # yaws fanning out from the current yaw (plus the current yaw itself), each seeded
 # from the current configuration, and keeps the solution closest to that
@@ -387,22 +402,39 @@ class _VegaPickPlaceControllerBase(
     ) -> np.ndarray | None:
         """A collision-free configuration whose end effector points down.
 
-        Each candidate draws a yaw and a seed configuration uniformly, solves
+        Each candidate draws a yaw and a seed configuration uniformly and solves
         full-pose IK for the target that ``make_target`` builds from the down-facing
-        rotation at that yaw, and keeps solutions that pass the candidate checks.
-        The sim must already be at the state to sample around. Returns None when the
-        budget is exhausted.
+        rotation at that yaw. Among solutions that pass the candidate checks, the
+        sampler prefers postures near the current configuration and away from the
+        margin boundary (see the selection constants). The sim must already be at
+        the state to sample around. Returns None when the budget is exhausted.
         """
         space = self._arm_space(side)
         lower, upper = space.bounds()
         base = dict(self._sim.configuration)
+        arm_joints_now = space.to_vector(base)
+        pin_lower = lower + DOWN_FACING_JOINT_LIMIT_MARGIN + 1e-6
+        pin_upper = upper - DOWN_FACING_JOINT_LIMIT_MARGIN - 1e-6
+        best: np.ndarray | None = None
+        best_score = np.inf
+        num_valid = 0
         for _ in range(DOWN_FACING_NUM_GOAL_CANDIDATES):
             target = make_target(_down_facing_rotation(rng.uniform(-np.pi, np.pi)))
             seed = base | space.to_configuration(rng.uniform(lower, upper))
             joints = self._solve_down_facing_candidate(side, target, seed, accept)
-            if joints is not None:
+            if joints is None:
+                continue
+            delta = float(np.max(np.abs(joints - arm_joints_now)))
+            pinned = int(np.count_nonzero((joints < pin_lower) | (joints > pin_upper)))
+            if pinned == 0 and delta < DOWN_FACING_ACCEPT_DELTA:
                 return joints
-        return None
+            score = delta + DOWN_FACING_PINNED_PENALTY * pinned
+            if score < best_score:
+                best, best_score = joints, score
+            num_valid += 1
+            if num_valid >= DOWN_FACING_SELECT_CANDIDATES:
+                break
+        return best
 
     def reset(self, x: ObjectCentricState, params: np.ndarray) -> None:
         self._current_state = x
