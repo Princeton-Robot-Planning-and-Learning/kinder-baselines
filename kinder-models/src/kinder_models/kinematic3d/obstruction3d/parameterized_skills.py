@@ -29,6 +29,7 @@ from pybullet_helpers.inverse_kinematics import (
 )
 from pybullet_helpers.joint import JointPositions, get_jointwise_difference
 from pybullet_helpers.motion_planning import (
+    MotionPlanningHyperparameters,
     create_joint_distance_fn,
     remap_joint_position_plan_to_constant_distance,
     run_motion_planning,
@@ -46,6 +47,17 @@ from kinder_models.kinematic3d.constants import (
     GRIPPER_OPEN_THRESHOLD,
     HOME_JOINT_POSITIONS,
 )
+
+# Obstruction3D validates every step's swept path at max_collision_check_step=0.005
+# (kindergarden#137). BiRRT's default birrt_extend_num_interp=10 checks each extension
+# and each smoothing shortcut at a coarser resolution than that, so a shortcut can pass
+# BiRRT's own check while still sweeping within kindergarden's 0.005 margin of the
+# target object -- the environment then (correctly) rejects that step and reverts it,
+# but this controller's step() already popped the corresponding plan waypoint, so it
+# desyncs from the true robot pose. Raising the interpolation count makes BiRRT check
+# each extension/shortcut at least as finely as the environment does, so any plan handed
+# back here is one the environment will actually accept.
+_BIRRT_EXTEND_NUM_INTERP = 50
 
 
 # Controllers.
@@ -128,6 +140,9 @@ class GroundPickController(
                 collision_bodies=self._sim._get_collision_object_ids(),  # pylint: disable=protected-access
                 seed=0,  # for determinism
                 physics_client_id=self._sim.physics_client_id,
+                hyperparameters=MotionPlanningHyperparameters(
+                    birrt_extend_num_interp=_BIRRT_EXTEND_NUM_INTERP
+                ),
             )
 
             if joint_plan is None:
@@ -252,6 +267,9 @@ class GroundPickController(
                     physics_client_id=self._sim.physics_client_id,
                     held_object=grasped_object_id,
                     base_link_to_held_obj=grasped_object_transform,
+                    hyperparameters=MotionPlanningHyperparameters(
+                        birrt_extend_num_interp=_BIRRT_EXTEND_NUM_INTERP
+                    ),
                 )
 
                 if joint_plan is None:
@@ -394,6 +412,9 @@ class GroundPlaceController(
                 physics_client_id=self._sim.physics_client_id,
                 held_object=grasped_object_id,
                 base_link_to_held_obj=grasped_object_transform,
+                hyperparameters=MotionPlanningHyperparameters(
+                    birrt_extend_num_interp=_BIRRT_EXTEND_NUM_INTERP
+                ),
             )
 
             if joint_plan is None:
@@ -446,6 +467,9 @@ class GroundPlaceController(
                     collision_bodies=self._sim._get_collision_object_ids(),  # pylint: disable=protected-access
                     seed=0,  # for determinism
                     physics_client_id=self._sim.physics_client_id,
+                    hyperparameters=MotionPlanningHyperparameters(
+                        birrt_extend_num_interp=_BIRRT_EXTEND_NUM_INTERP
+                    ),
                 )
 
                 if joint_plan is None:
