@@ -1,6 +1,6 @@
 """Parameterized skills for the Obstruction3D environment."""
 
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import numpy as np
 from bilevel_planning.structs import (
@@ -59,6 +59,16 @@ from kinder_models.kinematic3d.constants import (
 # back here is one the environment will actually accept.
 _BIRRT_EXTEND_NUM_INTERP = 50
 
+# Even with _BIRRT_EXTEND_NUM_INTERP raised, some other rejected step (different object
+# geometry, seed, or a physics edge case the planning resolution doesn't happen to avoid)
+# can still occur. When it does, the environment reverts the robot to its pre-step joints
+# but step() has already popped the corresponding waypoint from its plan, desyncing the
+# controller from the true robot pose. observe() detects this by checking whether the
+# joint positions the environment reports actually match what was just commanded; the
+# tolerance matches the existing atol=0.02 convention used for gripper-state comparisons
+# in this file (see _get_current_robot_gripper_pose() call sites below).
+_JOINT_REJECTION_TOLERANCE = 0.02
+
 
 # Controllers.
 class GroundPickController(
@@ -85,6 +95,12 @@ class GroundPickController(
         self._pre_lifted: bool = False
         self._lifted: bool = False
         self._last_gripper_state: float = 0.0
+        # Tracks the waypoint most recently popped off a plan and handed to the
+        # environment as an action, so observe() can tell whether the environment
+        # actually accepted it. See _JOINT_REJECTION_TOLERANCE above.
+        self._last_commanded_target: JointPositions | None = None
+        self._last_commanded_plan: list[JointPositions] | None = None
+        self._last_commanded_undo: Callable[[], None] | None = None
 
     def sample_parameters(
         self, x: ObjectCentricState, rng: np.random.Generator
@@ -119,6 +135,9 @@ class GroundPickController(
         self._current_params = params
         self._current_plan = None
         self._current_state = x
+        self._last_commanded_target = None
+        self._last_commanded_plan = None
+        self._last_commanded_undo = None
 
     def terminated(self) -> bool:
         return self._pre_grasp and self._closed_gripper and self._lifted
@@ -162,8 +181,14 @@ class GroundPickController(
             # Pop the next target joint positions from the plan.
             assert self._current_plan is not None
             target_joints = self._current_plan.pop(0)
-            if len(self._current_plan) == 0:
+            plan_emptied = len(self._current_plan) == 0
+            if plan_emptied:
                 self._pre_grasp = True
+            self._last_commanded_target = target_joints
+            self._last_commanded_plan = self._current_plan
+            self._last_commanded_undo = (
+                (lambda: setattr(self, "_pre_grasp", False)) if plan_emptied else None
+            )
             # Compute delta joint positions.
             delta_lst = get_jointwise_difference(
                 self._joint_infos,
@@ -229,8 +254,14 @@ class GroundPickController(
             # Pop the next target joint positions from the plan.
             assert self._pre_retract_plan is not None
             target_joints = self._pre_retract_plan.pop(0)
-            if len(self._pre_retract_plan) == 0:
+            plan_emptied = len(self._pre_retract_plan) == 0
+            if plan_emptied:
                 self._pre_lifted = True
+            self._last_commanded_target = target_joints
+            self._last_commanded_plan = self._pre_retract_plan
+            self._last_commanded_undo = (
+                (lambda: setattr(self, "_pre_lifted", False)) if plan_emptied else None
+            )
             # Compute delta joint positions.
             delta_lst = get_jointwise_difference(
                 self._joint_infos,
@@ -287,8 +318,14 @@ class GroundPickController(
             # Pop the next target joint positions from the plan.
             assert self._current_retract_plan is not None
             target_joints = self._current_retract_plan.pop(0)
-            if len(self._current_retract_plan) == 0:
+            plan_emptied = len(self._current_retract_plan) == 0
+            if plan_emptied:
                 self._lifted = True
+            self._last_commanded_target = target_joints
+            self._last_commanded_plan = self._current_retract_plan
+            self._last_commanded_undo = (
+                (lambda: setattr(self, "_lifted", False)) if plan_emptied else None
+            )
             # Compute delta joint positions.
             delta_lst = get_jointwise_difference(
                 self._joint_infos,
@@ -304,6 +341,34 @@ class GroundPickController(
         raise ValueError("Invalid state")
 
     def observe(self, x: ObjectCentricState) -> None:
+        if self._last_commanded_target is not None:
+            assert isinstance(x, Obstruction3DObjectCentricState)
+            # Joints may be circular, so compare via the same circular-aware
+            # difference used to compute action deltas rather than a raw np.allclose
+            # (a joint that wrapped through +-pi would otherwise look rejected).
+            joint_diff = get_jointwise_difference(
+                self._joint_infos,
+                self._last_commanded_target[:7],
+                x.joint_positions,
+            )
+            if not np.allclose(
+                joint_diff,
+                0.0,
+                atol=_JOINT_REJECTION_TOLERANCE,
+            ):
+                # The environment rejected/reverted the step we just commanded (e.g. a
+                # swept-path collision check reverted it). Push the waypoint back onto
+                # the plan it came from so the next step() call retries it instead of
+                # silently advancing to the next waypoint and desyncing from the true
+                # robot pose. Undo any phase-advance flag that got set on the same call
+                # the (now-rejected) pop emptied its plan.
+                assert self._last_commanded_plan is not None
+                self._last_commanded_plan.insert(0, self._last_commanded_target)
+                if self._last_commanded_undo is not None:
+                    self._last_commanded_undo()
+            self._last_commanded_target = None
+            self._last_commanded_plan = None
+            self._last_commanded_undo = None
         self._current_state = x
 
     def _get_current_robot_gripper_pose(self) -> float:
@@ -335,6 +400,12 @@ class GroundPlaceController(
         self._open_gripper: bool = False
         self._returned: bool = False
         self._last_gripper_state: float = 0.0
+        # Tracks the waypoint most recently popped off a plan and handed to the
+        # environment as an action, so observe() can tell whether the environment
+        # actually accepted it. See _JOINT_REJECTION_TOLERANCE above.
+        self._last_commanded_target: JointPositions | None = None
+        self._last_commanded_plan: list[JointPositions] | None = None
+        self._last_commanded_undo: Callable[[], None] | None = None
 
     def sample_parameters(
         self, x: ObjectCentricState, rng: np.random.Generator
@@ -380,6 +451,9 @@ class GroundPlaceController(
         self._current_params = params
         self._current_plan = None
         self._current_state = x
+        self._last_commanded_target = None
+        self._last_commanded_plan = None
+        self._last_commanded_undo = None
 
     def terminated(self) -> bool:
         return self._pre_place and self._open_gripper and self._returned
@@ -434,8 +508,14 @@ class GroundPlaceController(
             # Pop the next target joint positions from the plan.
             assert self._current_plan is not None
             target_joints = self._current_plan.pop(0)
-            if len(self._current_plan) == 0:
+            plan_emptied = len(self._current_plan) == 0
+            if plan_emptied:
                 self._pre_place = True
+            self._last_commanded_target = target_joints
+            self._last_commanded_plan = self._current_plan
+            self._last_commanded_undo = (
+                (lambda: setattr(self, "_pre_place", False)) if plan_emptied else None
+            )
             # Compute delta joint positions.
             delta_lst = get_jointwise_difference(
                 self._joint_infos,
@@ -487,8 +567,14 @@ class GroundPlaceController(
             # Pop the next target joint positions from the plan.
             assert self._current_retract_plan is not None
             target_joints = self._current_retract_plan.pop(0)
-            if len(self._current_retract_plan) == 0:
+            plan_emptied = len(self._current_retract_plan) == 0
+            if plan_emptied:
                 self._returned = True
+            self._last_commanded_target = target_joints
+            self._last_commanded_plan = self._current_retract_plan
+            self._last_commanded_undo = (
+                (lambda: setattr(self, "_returned", False)) if plan_emptied else None
+            )
             # Compute delta joint positions.
             delta_lst = get_jointwise_difference(
                 self._joint_infos,
@@ -504,6 +590,34 @@ class GroundPlaceController(
         raise ValueError("Invalid state")
 
     def observe(self, x: ObjectCentricState) -> None:
+        if self._last_commanded_target is not None:
+            assert isinstance(x, Obstruction3DObjectCentricState)
+            # Joints may be circular, so compare via the same circular-aware
+            # difference used to compute action deltas rather than a raw np.allclose
+            # (a joint that wrapped through +-pi would otherwise look rejected).
+            joint_diff = get_jointwise_difference(
+                self._joint_infos,
+                self._last_commanded_target[:7],
+                x.joint_positions,
+            )
+            if not np.allclose(
+                joint_diff,
+                0.0,
+                atol=_JOINT_REJECTION_TOLERANCE,
+            ):
+                # The environment rejected/reverted the step we just commanded (e.g. a
+                # swept-path collision check reverted it). Push the waypoint back onto
+                # the plan it came from so the next step() call retries it instead of
+                # silently advancing to the next waypoint and desyncing from the true
+                # robot pose. Undo any phase-advance flag that got set on the same call
+                # the (now-rejected) pop emptied its plan.
+                assert self._last_commanded_plan is not None
+                self._last_commanded_plan.insert(0, self._last_commanded_target)
+                if self._last_commanded_undo is not None:
+                    self._last_commanded_undo()
+            self._last_commanded_target = None
+            self._last_commanded_plan = None
+            self._last_commanded_undo = None
         self._current_state = x
 
     def _get_current_robot_gripper_pose(self) -> float:
