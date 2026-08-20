@@ -425,3 +425,52 @@ class ReplayBuffer(BaseBuffer):
         if dtype == np.float64:
             return np.float32
         return dtype
+
+
+def get_env_normalization_stats(envs: gym.vector.VectorEnv) -> list[dict]:
+    """Collect the NormalizeObservation/NormalizeReward running statistics.
+
+    Returns one entry per sub-environment. Works for both Sync and Async vector
+    envs (Async returns copies, which is sufficient for checkpointing).
+    """
+    obs_rms = envs.get_attr("obs_rms")
+    return_rms = envs.get_attr("return_rms")
+    # Plain lists/floats keep checkpoints loadable under torch.load's
+    # weights_only=True default (torch >= 2.6 rejects pickled numpy arrays).
+    return [
+        {
+            "obs_mean": np.asarray(o.mean).tolist(),
+            "obs_var": np.asarray(o.var).tolist(),
+            "obs_count": float(o.count),
+            "return_mean": np.asarray(r.mean).tolist(),
+            "return_var": np.asarray(r.var).tolist(),
+            "return_count": float(r.count),
+        }
+        for o, r in zip(obs_rms, return_rms)
+    ]
+
+
+def set_env_normalization_stats(
+    envs: gym.vector.VectorEnv, stats: list[dict]
+) -> None:
+    """Restore statistics collected by get_env_normalization_stats.
+
+    Only synchronous vector envs are supported (Async get_attr returns copies,
+    so mutation would be silently lost). If fewer stat entries than
+    sub-environments are provided, the first entry is broadcast.
+    """
+    if isinstance(envs, gym.vector.AsyncVectorEnv):
+        raise NotImplementedError(
+            "Restoring normalization statistics into AsyncVectorEnv is not "
+            "supported; build a SyncVectorEnv for evaluation."
+        )
+    obs_rms = envs.get_attr("obs_rms")
+    return_rms = envs.get_attr("return_rms")
+    for i, (o, r) in enumerate(zip(obs_rms, return_rms)):
+        s = stats[i] if i < len(stats) else stats[0]
+        o.mean = np.asarray(s["obs_mean"]).copy()
+        o.var = np.asarray(s["obs_var"]).copy()
+        o.count = s["obs_count"]
+        r.mean = np.asarray(s["return_mean"]).copy()
+        r.var = np.asarray(s["return_var"]).copy()
+        r.count = s["return_count"]
