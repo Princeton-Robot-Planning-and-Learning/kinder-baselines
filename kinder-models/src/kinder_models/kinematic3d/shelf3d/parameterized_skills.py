@@ -31,6 +31,7 @@ from pybullet_helpers.inverse_kinematics import (
 from pybullet_helpers.joint import JointPositions, get_jointwise_difference
 from pybullet_helpers.motion_planning import (
     remap_joint_position_plan_to_constant_distance,
+    remap_se2_pose_plan_to_constant_distance,
     run_motion_planning,
     run_single_arm_mobile_base_motion_planning,
 )
@@ -46,7 +47,10 @@ from kinder_models.kinematic3d.constants import (
     GRIPPER_CLOSE_THRESHOLD,
     HOME_JOINT_POSITIONS,
 )
-from kinder_models.kinematic3d.utils import get_target_robot_pose_from_parameters
+from kinder_models.kinematic3d.utils import (
+    get_target_robot_pose_from_parameters,
+    step_toward_se2_waypoint,
+)
 
 # constants
 MOVE_TO_TARGET_DISTANCE_BOUNDS = (0.45, 0.6)
@@ -123,20 +127,25 @@ class GroundPickController(
             if base_plan is None:
                 raise TrajectorySamplingFailure("Base motion planning failed")
 
+            # Remap the plan to ensure we stay within action limits.
+            base_plan = remap_se2_pose_plan_to_constant_distance(
+                base_plan,
+                max_distance=self._sim.config.max_action_mag,
+            )
+
             # Store the plan (excluding the first state which is the current state).
             self._current_plan = base_plan[1:]
 
         if not self._navigated:
-            # Pop the next target base pose from the plan.
+            # Step toward the next waypoint within action limits.
             assert self._current_plan is not None
-            target_base_pose = self._current_plan.pop(0)
-            if len(self._current_plan) == 0:
+            delta_lst, exhausted = step_toward_se2_waypoint(
+                self._current_state.base_pose,
+                self._current_plan,
+                self._sim.config.max_action_mag,
+            )
+            if exhausted:
                 self._navigated = True
-
-            # Compute delta base pose.
-            current_base_pose = self._current_state.base_pose
-            delta = target_base_pose - current_base_pose
-            delta_lst = [delta.x, delta.y, delta.rot]
 
             # Create action: [base_x, base_y, base_rot, joint1, ..., joint7, gripper].
             action_lst = delta_lst + [0.0] * 7 + [0.0]
@@ -398,6 +407,12 @@ class GroundPlaceController(BasePlaceController):
 
             if base_plan is None:
                 raise TrajectorySamplingFailure("Base motion planning failed")
+
+            # Remap the plan to ensure we stay within action limits.
+            base_plan = remap_se2_pose_plan_to_constant_distance(
+                base_plan,
+                max_distance=self._sim.config.max_action_mag,
+            )
 
             # Store the plan (excluding the first state which is the current state).
             self._current_plan = base_plan[1:]

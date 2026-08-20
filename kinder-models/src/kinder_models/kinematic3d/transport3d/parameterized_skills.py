@@ -44,7 +44,10 @@ from kinder_models.kinematic3d.constants import (
     GRIPPER_CLOSE_THRESHOLD,
     HOME_JOINT_POSITIONS,
 )
-from kinder_models.kinematic3d.utils import get_target_robot_pose_from_parameters
+from kinder_models.kinematic3d.utils import (
+    get_target_robot_pose_from_parameters,
+    step_toward_se2_waypoint,
+)
 
 # constants
 GRASP_TRANSFORM_TO_OBJECT_BOX = Pose(
@@ -156,16 +159,15 @@ class GroundPickController(
             self._current_plan = base_plan[1:]
 
         if not self._navigated:
-            # Pop the next target base pose from the plan.
+            # Step toward the next waypoint within action limits.
             assert self._current_plan is not None
-            target_base_pose = self._current_plan.pop(0)
-            if len(self._current_plan) == 0:
+            delta_lst, exhausted = step_toward_se2_waypoint(
+                self._current_state.base_pose,
+                self._current_plan,
+                self._sim.config.max_action_mag,
+            )
+            if exhausted:
                 self._navigated = True
-
-            # Compute delta base pose.
-            current_base_pose = self._current_state.base_pose
-            delta = target_base_pose - current_base_pose
-            delta_lst = [delta.x, delta.y, delta.rot]
 
             # Create action: [base_x, base_y, base_rot, joint1, ..., joint7, gripper].
             action_lst = delta_lst + [0.0] * 7 + [0.0]
