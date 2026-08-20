@@ -30,7 +30,11 @@ except ImportError:
     TENSORBOARD_AVAILABLE = False
 
 from kinder_rl.agent import BaseRLAgent
-from kinder_rl.gym_utils import ReplayBuffer, make_env_sac
+from kinder_rl.gym_utils import (
+    ReplayBuffer,
+    get_env_normalization_stats,
+    make_env_sac,
+)
 
 _O = TypeVar("_O")
 _U = TypeVar("_U")
@@ -227,6 +231,9 @@ class SACAgent(BaseRLAgent[_O, _U]):
 
         # Device setup
         cuda_enabled = cfg.get("cuda", False)
+        # Env-side normalization statistics captured at the end of train()
+        # and persisted in checkpoints.
+        self.env_normalization_stats: list[dict] | None = None
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() and cuda_enabled else "cpu"
         )
@@ -656,6 +663,15 @@ class SACAgent(BaseRLAgent[_O, _U]):
                 )
 
         # Close environments and writer
+        # Preserve the env-side normalization statistics the policy depends on.
+        self.env_normalization_stats = get_env_normalization_stats(envs)
+        _s0 = self.env_normalization_stats[0]
+        logging.info(
+            f"Captured normalization statistics for "
+            f"{len(self.env_normalization_stats)} envs "
+            f"(obs_count={_s0['obs_count']:.0f}); they will be included in "
+            f"saved checkpoints."
+        )
         envs.close()  # type: ignore
         if self.writer is not None:
             self.writer.close()  # type: ignore
@@ -668,6 +684,7 @@ class SACAgent(BaseRLAgent[_O, _U]):
     def save(self, filepath: str) -> None:
         """Save agent parameters."""
         save_dict: dict[str, Any] = {
+            "env_normalization_stats": self.env_normalization_stats,
             "actor_state_dict": self.actor.state_dict(),
             "qf1_state_dict": self.qf1.state_dict(),
             "qf2_state_dict": self.qf2.state_dict(),
@@ -684,6 +701,7 @@ class SACAgent(BaseRLAgent[_O, _U]):
     def load(self, filepath: str) -> None:
         """Load agent parameters."""
         checkpoint = torch.load(filepath, map_location=self.device)
+        self.env_normalization_stats = checkpoint.get("env_normalization_stats")
         self.actor.load_state_dict(checkpoint["actor_state_dict"])
         self.qf1.load_state_dict(checkpoint["qf1_state_dict"])
         self.qf2.load_state_dict(checkpoint["qf2_state_dict"])
