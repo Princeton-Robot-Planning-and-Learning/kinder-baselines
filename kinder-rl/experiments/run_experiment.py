@@ -107,6 +107,11 @@ def _main(cfg: DictConfig) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     runs_dir.mkdir(parents=True, exist_ok=True)
 
+    # Per-agent-config episode caps (as used by the released training runs)
+    # take priority over the global default.
+    with read_write(cfg):
+        cfg.max_episode_steps = cfg.agent.get("max_episode_steps", cfg.max_episode_steps)
+
     logging.info(
         f"Running agent={cfg.agent.name}, env={cfg.env_id},"
         f" max_episode_steps={cfg.max_episode_steps},"

@@ -5,7 +5,7 @@ name: sac
 args:
   total_timesteps: 1000000
   num_eval_envs: 1
-  num_envs: 8
+  num_envs: 16
   hidden_size: 128
   buffer_size: 100000
   learning_starts: 5000
@@ -20,3 +20,6 @@ cuda: false
 # Logging settings
 exp_name: "sac_basemotion3d_train"
 tb_log_dir: "runs"
+
+# Episode cap used by the released training runs (overrides the global default).
+max_episode_steps: 100
