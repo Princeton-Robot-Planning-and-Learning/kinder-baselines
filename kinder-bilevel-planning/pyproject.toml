@@ -16,7 +16,7 @@ dependencies = [
    "hydra-core",
    "hydra-joblib-launcher",
    "omegaconf",
-   "kindergarden>=0.2.3",
+   "kindergarden>=0.2.4",
    "prpl_utils>=0.0.7",
    "relational_structs>=0.0.1",
    "tomsgeoms2d>=0.0.1",
