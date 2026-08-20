@@ -49,10 +49,13 @@ from kinder_models.dynamic3d.utils import (
     _ARM_MAX_ACCELERATION,
     _ARM_MAX_VELOCITY,
     _CONTROL_TIMESTEP,
+    END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE,
     GRASP_CLOSE_THRESHOLD,
     GRASP_TRANSFORM_TO_OBJECT,
     GRIPPER_CLOSED_THRESHOLD,
+    GRIPPER_GRASPING_THRESHOLD,
     GRIPPER_OPEN_COMMAND_TOLERANCE,
+    MINIMUM_HOLDING_HEIGHT,
     WAYPOINT_TOLERANCE,
     WORLD_X_BOUNDS,
     WORLD_Y_BOUNDS,
@@ -232,6 +235,38 @@ class MoveArmToConfController(GroundParameterizedController[ObjectCentricState, 
         # want to specify the target arm conf themselves.
         raise NotImplementedError
 
+    def _get_held_cube_id(self, x: ObjectCentricState) -> int | None:
+        """The PyBullet id of the cube currently grasped in the gripper, if any.
+
+        Mirrors state_abstractions.Tossing3DBackend._check_holding's signal (gripper
+        closed, held above the ground, and resting at the end effector) rather than
+        importing it, since that class carries its own KinderBackend-specific state.
+        A held cube must not be reported to run_motion_planning as a static obstacle
+        at its start-of-motion pose -- it moves rigidly with the gripper, so a target
+        the arm can actually reach would otherwise read as "in collision" with cargo
+        the arm is carrying there itself.
+        """
+        assert self._pybullet_sim is not None
+        robot = self.objects[0]
+        if x.get(robot, "pos_gripper") <= GRIPPER_GRASPING_THRESHOLD:
+            return None
+        ee_pose = self._pybullet_sim.get_ee_pose()
+        # pylint: disable=protected-access
+        for cube_name, cube_id in self._pybullet_sim._cubes.items():
+            cube = x.get_object_from_name(cube_name)
+            z = x.get(cube, "z")
+            if (
+                z > MINIMUM_HOLDING_HEIGHT
+                and abs(ee_pose.position[0] - x.get(cube, "x"))
+                < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
+                and abs(ee_pose.position[1] - x.get(cube, "y"))
+                < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
+                and abs(ee_pose.position[2] - z)
+                < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
+            ):
+                return cube_id
+        return None
+
     def reset(self, x: ObjectCentricState, params: Any) -> None:
         # Initialize the PyBullet interface if this is the first time ever.
         if self._pybullet_sim is None:
@@ -243,12 +278,21 @@ class MoveArmToConfController(GroundParameterizedController[ObjectCentricState, 
         target_joints = self._current_params.tolist() + ([0.0] * 6)
         # Reset PyBullet given the current state.
         self._pybullet_sim.set_state(x)
+        held_object = self._get_held_cube_id(x)
+        base_link_to_held_obj = (
+            GRASP_TRANSFORM_TO_OBJECT.invert() if held_object is not None else None
+        )
+        self._pybullet_sim.base_link_to_held_obj = base_link_to_held_obj
         # Run motion planning.
         plan = run_motion_planning(
             self._pybullet_sim.robot,
             self._pybullet_sim.get_robot_joints(),
             target_joints,
-            collision_bodies=self._pybullet_sim.get_collision_bodies(),
+            collision_bodies=self._pybullet_sim.get_collision_bodies(
+                held_object=held_object
+            ),
+            held_object=held_object,
+            base_link_to_held_obj=base_link_to_held_obj,
             seed=0,  # use a constant seed to make this effectively deterministic
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
