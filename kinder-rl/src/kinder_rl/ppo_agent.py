@@ -29,7 +29,7 @@ except ImportError:
     TENSORBOARD_AVAILABLE = False
 
 from kinder_rl.agent import BaseRLAgent
-from kinder_rl.gym_utils import make_env_ppo
+from kinder_rl.gym_utils import get_env_normalization_stats, make_env_ppo
 
 _O = TypeVar("_O")
 _U = TypeVar("_U")
@@ -227,6 +227,9 @@ class PPOAgent(BaseRLAgent[_O, _U]):
 
         # Device setup
         cuda_enabled = cfg.get("cuda", False)
+        # Env-side normalization statistics captured at the end of train()
+        # and persisted in checkpoints.
+        self.env_normalization_stats: list[dict] | None = None
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() and cuda_enabled else "cpu"
         )
@@ -681,6 +684,15 @@ class PPOAgent(BaseRLAgent[_O, _U]):
                 )
 
         # Close environments and writer
+        # Preserve the env-side normalization statistics the policy depends on.
+        self.env_normalization_stats = get_env_normalization_stats(envs)
+        _s0 = self.env_normalization_stats[0]
+        logging.info(
+            f"Captured normalization statistics for "
+            f"{len(self.env_normalization_stats)} envs "
+            f"(obs_count={_s0['obs_count']:.0f}); they will be included in "
+            f"saved checkpoints."
+        )
         envs.close()  # type: ignore[no-untyped-call]
         if self.writer is not None:
             self.writer.close()  # type: ignore[no-untyped-call]
@@ -696,6 +708,7 @@ class PPOAgent(BaseRLAgent[_O, _U]):
             {
                 "network_state_dict": self.agent.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
+                "env_normalization_stats": self.env_normalization_stats,
             },
             filepath,
         )
@@ -705,3 +718,4 @@ class PPOAgent(BaseRLAgent[_O, _U]):
         checkpoint = torch.load(filepath, map_location=self.device)
         self.agent.load_state_dict(checkpoint["network_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        self.env_normalization_stats = checkpoint.get("env_normalization_stats")
