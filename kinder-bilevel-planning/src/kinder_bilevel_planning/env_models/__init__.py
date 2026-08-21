@@ -21,6 +21,7 @@ def create_bilevel_planning_models(
         current_file.parent / "kinematic2d" / f"{env_name}.py",
         current_file.parent / "dynamic2d" / f"{env_name}.py",
         current_file.parent / "kinematic3d" / f"{env_name}.py",
+        current_file.parent / "kinematic3d_v2" / f"{env_name}.py",
         current_file.parent / "dynamic3d" / f"{env_name}.py",
     ]
 

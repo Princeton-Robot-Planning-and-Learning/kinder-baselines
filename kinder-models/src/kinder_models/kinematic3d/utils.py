@@ -23,3 +23,25 @@ def get_target_robot_pose_from_parameters(
 
     # Robot faces the target: heading points along +ang (toward the target).
     return SE2Pose(rx, ry, ang)
+
+
+def step_toward_se2_waypoint(
+    current_base_pose: SE2Pose,
+    plan: list[SE2Pose],
+    max_action_mag: float,
+) -> tuple[list[float], bool]:
+    """Compute a bounded base delta toward the next waypoint in the plan.
+
+    The waypoint is popped only once it is reachable within max_action_mag on
+    every coordinate, so a clipped or otherwise short step is retried instead of
+    silently skipping ahead. Returns the [dx, dy, drot] delta and whether the
+    plan is exhausted after this step.
+    """
+    target_base_pose = plan[0]
+    delta = target_base_pose - current_base_pose
+    coords = [delta.x, delta.y, delta.rot]
+    if all(abs(c) <= max_action_mag for c in coords):
+        plan.pop(0)
+    else:
+        coords = [float(np.clip(c, -max_action_mag, max_action_mag)) for c in coords]
+    return coords, not plan

@@ -13,7 +13,7 @@ Examples:
     python experiments/collect_demos_bilevel.py env=base_motion3d \
         seed=0 num_demos=5
 
-    python experiments/collect_demos_bilevel.py -m env=motion3d \
+    python experiments/collect_demos_bilevel.py -m env=base_motion3d \
         seed='range(0,10)'
 """
 

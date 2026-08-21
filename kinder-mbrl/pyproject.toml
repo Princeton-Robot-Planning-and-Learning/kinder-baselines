@@ -14,7 +14,7 @@ dependencies = [
     "h5py",
     "gymnasium",
     "pillow",
-    "kindergarden>=0.1.0",
+    "kindergarden>=0.2.1",
 ]
 
 [project.optional-dependencies]

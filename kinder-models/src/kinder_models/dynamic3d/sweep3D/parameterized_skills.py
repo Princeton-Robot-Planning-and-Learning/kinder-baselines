@@ -7,6 +7,9 @@ from bilevel_planning.structs import (
     GroundParameterizedController,
     LiftedParameterizedController,
 )
+from bilevel_planning.trajectory_samplers.trajectory_sampler import (
+    TrajectorySamplingFailure,
+)
 from gymnasium.spaces import Box
 from kinder.envs.dynamic3d.object_types import (
     MujocoDrawerObjectType,
@@ -19,6 +22,7 @@ from kinder.envs.dynamic3d.robots.tidybot_robot_env import (
 from prpl_utils.utils import get_signed_angle_distance
 from pybullet_helpers.geometry import Pose, multiply_poses
 from pybullet_helpers.inverse_kinematics import (
+    InverseKinematicsError,
     inverse_kinematics,
 )
 from pybullet_helpers.joint import JointPositions
@@ -36,19 +40,19 @@ from relational_structs import (
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.utils import (
-    _ARM_MAX_ACCEL,
-    _ARM_MAX_VEL,
+    _ARM_MAX_ACCELERATION,
+    _ARM_MAX_VELOCITY,
     DRAWER_TRANSFORM_TO_OBJECT,
     DRAWER_TRANSFORM_TO_OBJECT_END,
     GRASP_CLOSE_THRESHOLD,
-    GRIPPER_OPEN_THRESHOLD,
+    GRIPPER_OPEN_COMMAND_TOLERANCE,
     OPEN_DRAWER_DISTANCE_BOUNDS,
     OPEN_DRAWER_ROT_BOUNDS,
     PICK_WIPER_DISTANCE_BOUNDS,
     PICK_WIPER_ROT_BOUNDS,
     SWEEP_DISTANCE_BOUNDS,
     SWEEP_ROT_BOUNDS,
-    WAYPOINT_TOL,
+    WAYPOINT_TOLERANCE,
     WIPER_SWEEP_TRANSFORM,
     WIPER_SWEEP_TRANSFORM_END,
     WIPER_SWEEP_TRANSFORM_END_2,
@@ -61,6 +65,19 @@ from kinder_models.dynamic3d.utils import (
     get_target_robot_pose_from_parameters,
     run_base_motion_planning,
 )
+
+
+def _ik_or_resample(*args: Any, **kwargs: Any) -> Any:
+    """Solve inverse kinematics, turning an unreachable pose into a resample.
+
+    The backtracking refiner retries a skill with freshly sampled parameters whenever a
+    TrajectorySamplingFailure is raised, so an infeasible target is rejected and
+    resampled instead of aborting the whole episode.
+    """
+    try:
+        return inverse_kinematics(*args, **kwargs)
+    except InverseKinematicsError as e:
+        raise TrajectorySamplingFailure() from e
 
 
 class OpenDrawerSweepController(
@@ -152,7 +169,8 @@ class OpenDrawerSweepController(
             extend_xy_magnitude=extend_xy_magnitude,
             extend_rot_magnitude=extend_rot_magnitude,
         )
-        assert base_motion_plan is not None
+        if base_motion_plan is None:
+            raise TrajectorySamplingFailure()
         self._current_base_motion_plan = base_motion_plan
 
         plan_x = x.copy()
@@ -197,13 +215,13 @@ class OpenDrawerSweepController(
             target_grasp_pose_world,
         )
 
-        target_joints = inverse_kinematics(
+        target_joints = _ik_or_resample(
             self._pybullet_sim.robot,
             target_end_effector_pose,
             set_joints=False,
         )
 
-        target_joints_end = inverse_kinematics(
+        target_joints_end = _ik_or_resample(
             self._pybullet_sim.robot,
             target_end_effector_pose_end,
             set_joints=False,
@@ -237,9 +255,8 @@ class OpenDrawerSweepController(
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
 
-        assert plan is not None, "Motion planning failed"
-        assert open_plan is not None, "Motion planning failed"
-        assert retract_plan is not None, "Motion planning failed"
+        if plan is None or open_plan is None or retract_plan is None:
+            raise TrajectorySamplingFailure()
 
         # Remap the plan to ensure we stay within action limits.
         plan = remap_joint_position_plan_to_constant_distance(
@@ -270,19 +287,19 @@ class OpenDrawerSweepController(
         grasp_conf = np.array(plan[-1][:7])
         open_conf = np.array(open_plan[-1][:7])
         self._approach_trajectory, self._approach_traj_dir = _compute_per_joint_profile(
-            curr, grasp_conf, _ARM_MAX_VEL, _ARM_MAX_ACCEL
+            curr, grasp_conf, _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
         )
         self._approach_start_joints = curr.copy()
         self._approach_step_idx = 0
         # Compute trapezoidal velocity profile for open-drawer (grasp conf -> open conf).
         self._open_trajectory, self._open_traj_dir = _compute_per_joint_profile(
-            grasp_conf, open_conf, _ARM_MAX_VEL, _ARM_MAX_ACCEL
+            grasp_conf, open_conf, _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
         )
         self._open_start_joints = grasp_conf.copy()
         self._open_step_idx = 0
         # Compute trapezoidal velocity profile for retract (open conf -> home).
         self._retract_trajectory, self._retract_traj_dir = _compute_per_joint_profile(
-            open_conf, self.home_joints[:7], _ARM_MAX_VEL, _ARM_MAX_ACCEL
+            open_conf, self.home_joints[:7], _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
         )
         self._retract_start_joints = open_conf.copy()
         self._retract_step_idx = 0
@@ -358,7 +375,7 @@ class OpenDrawerSweepController(
             self._open_step_idx += 1
             return action
         if self._lifted and not self._open_gripper:
-            if self._get_current_robot_gripper_pose() < GRIPPER_OPEN_THRESHOLD:
+            if self._get_current_robot_gripper_pose() < GRIPPER_OPEN_COMMAND_TOLERANCE:
                 self._open_gripper = True
             action = np.zeros(11, dtype=np.float32)
             action[-1] = 0
@@ -421,14 +438,16 @@ class OpenDrawerSweepController(
         return 0.0
 
     def _robot_is_close_to_conf(
-        self, conf: JointPositions, atol: float = WAYPOINT_TOL
+        self, conf: JointPositions, atol: float = WAYPOINT_TOLERANCE
     ) -> bool:
         current_conf = self._get_current_robot_arm_conf()
         assert self._pybullet_sim is not None
         dist = self._pybullet_sim.get_joint_distance(current_conf, conf)
         return dist < atol
 
-    def _robot_is_close_to_pose(self, pose: SE2, atol: float = WAYPOINT_TOL) -> bool:
+    def _robot_is_close_to_pose(
+        self, pose: SE2, atol: float = WAYPOINT_TOLERANCE
+    ) -> bool:
         robot_pose = self._get_current_robot_pose()
         return bool(
             np.isclose(robot_pose.x, pose.x, atol=atol)
@@ -515,7 +534,8 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
             extend_xy_magnitude=extend_xy_magnitude,
             extend_rot_magnitude=extend_rot_magnitude,
         )
-        assert base_motion_plan is not None
+        if base_motion_plan is None:
+            raise TrajectorySamplingFailure()
         self._current_base_motion_plan = base_motion_plan
 
         plan_x = x.copy()
@@ -555,7 +575,7 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
             target_grasp_pose_world,
         )
 
-        target_joints = inverse_kinematics(
+        target_joints = _ik_or_resample(
             self._pybullet_sim.robot,
             target_end_effector_pose,
             set_joints=False,
@@ -581,8 +601,8 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
 
-        assert plan is not None, "Motion planning failed"
-        assert retract_plan is not None, "Motion planning failed"
+        if plan is None or retract_plan is None:
+            raise TrajectorySamplingFailure()
 
         # Remap the plan to ensure we stay within action limits.
         plan = remap_joint_position_plan_to_constant_distance(
@@ -604,13 +624,13 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
         curr = np.array(self._get_current_robot_arm_conf()[:7])
         grasp_conf = np.array(plan[-1][:7])
         self._approach_trajectory, self._approach_traj_dir = _compute_per_joint_profile(
-            curr, grasp_conf, _ARM_MAX_VEL, _ARM_MAX_ACCEL
+            curr, grasp_conf, _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
         )
         self._approach_start_joints = curr.copy()
         self._approach_step_idx = 0
         # Compute trapezoidal velocity profile for retract (grasp conf -> home).
         self._retract_trajectory, self._retract_traj_dir = _compute_per_joint_profile(
-            grasp_conf, self.home_joints[:7], _ARM_MAX_VEL, _ARM_MAX_ACCEL
+            grasp_conf, self.home_joints[:7], _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
         )
         self._retract_start_joints = grasp_conf.copy()
         self._retract_step_idx = 0
@@ -728,14 +748,16 @@ class PickWiperOriController(GroundParameterizedController[ObjectCentricState, A
         return 0.0
 
     def _robot_is_close_to_conf(
-        self, conf: JointPositions, atol: float = WAYPOINT_TOL
+        self, conf: JointPositions, atol: float = WAYPOINT_TOLERANCE
     ) -> bool:
         current_conf = self._get_current_robot_arm_conf()
         assert self._pybullet_sim is not None
         dist = self._pybullet_sim.get_joint_distance(current_conf, conf)
         return dist < atol
 
-    def _robot_is_close_to_pose(self, pose: SE2, atol: float = WAYPOINT_TOL) -> bool:
+    def _robot_is_close_to_pose(
+        self, pose: SE2, atol: float = WAYPOINT_TOLERANCE
+    ) -> bool:
         robot_pose = self._get_current_robot_pose()
         return bool(
             np.isclose(robot_pose.x, pose.x, atol=atol)
@@ -821,7 +843,10 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         target_base_pose = get_target_robot_pose_from_parameters(
             target_object_pose, target_distance, target_rot
         )
-        # Run motion planning.
+        # Run motion planning. At this point the wiper's own geometry sits
+        # within the robot's footprint (it is being carried), so treating it
+        # as a static obstacle would make every plan here collide with it.
+        wiper = self.objects[1]
         base_motion_plan = run_base_motion_planning(
             state=x,
             target_base_pose=target_base_pose,
@@ -830,8 +855,10 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             seed=0,  # use a constant seed to effectively make this "deterministic"
             extend_xy_magnitude=extend_xy_magnitude,
             extend_rot_magnitude=extend_rot_magnitude,
+            disable_collision_objects=[wiper.name],
         )
-        assert base_motion_plan is not None
+        if base_motion_plan is None:
+            raise TrajectorySamplingFailure()
         self._current_base_motion_plan = base_motion_plan
 
         plan_x = x.copy()
@@ -875,7 +902,7 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
             target_place_pose_world,
         )
 
-        target_joints = inverse_kinematics(
+        target_joints = _ik_or_resample(
             self._pybullet_sim.robot,
             target_end_effector_pose,
             set_joints=False,
@@ -892,19 +919,23 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         )
 
         joint_distance_fn = create_joint_distance_fn(self._pybullet_sim.robot)
-        # Run motion planning to the target joint positions.
-        retract_plan = smoothly_follow_end_effector_path(
-            self._pybullet_sim.robot,
-            [target_end_effector_pose_end, target_end_effector_pose_end_2],
-            initial_joints=target_joints,
-            collision_ids={},  # type: ignore
-            seed=0,  # for determinism
-            joint_distance_fn=joint_distance_fn,
-            max_smoothing_iters_per_step=1,
-        )
+        # Run motion planning to the target joint positions. An unreachable sweep
+        # end-effector path signals a resample rather than aborting the episode.
+        try:
+            retract_plan = smoothly_follow_end_effector_path(
+                self._pybullet_sim.robot,
+                [target_end_effector_pose_end, target_end_effector_pose_end_2],
+                initial_joints=target_joints,
+                collision_ids={},  # type: ignore
+                seed=0,  # for determinism
+                joint_distance_fn=joint_distance_fn,
+                max_smoothing_iters_per_step=1,
+            )
+        except InverseKinematicsError as e:
+            raise TrajectorySamplingFailure() from e
 
-        assert plan is not None, "Motion planning failed"
-        assert retract_plan is not None, "Motion planning failed"
+        if plan is None or retract_plan is None:
+            raise TrajectorySamplingFailure()
 
         # Remap the plan to ensure we stay within action limits.
         plan = remap_joint_position_plan_to_constant_distance(
@@ -927,13 +958,13 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         sweep_start_conf = np.array(plan[-1][:7])
         sweep_end_conf = np.array(retract_plan[-1][:7])
         self._approach_trajectory, self._approach_traj_dir = _compute_per_joint_profile(
-            curr, sweep_start_conf, _ARM_MAX_VEL, _ARM_MAX_ACCEL
+            curr, sweep_start_conf, _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
         )
         self._approach_start_joints = curr.copy()
         self._approach_step_idx = 0
         # Compute trapezoidal velocity profile for sweep (sweep start -> sweep end conf).
         self._sweep_trajectory, self._sweep_traj_dir = _compute_per_joint_profile(
-            sweep_start_conf, sweep_end_conf, _ARM_MAX_VEL, _ARM_MAX_ACCEL
+            sweep_start_conf, sweep_end_conf, _ARM_MAX_VELOCITY, _ARM_MAX_ACCELERATION
         )
         self._sweep_start_joints = sweep_start_conf.copy()
         self._sweep_step_idx = 0
@@ -1041,14 +1072,16 @@ class SweepOriController(GroundParameterizedController[ObjectCentricState, Array
         return 0.0
 
     def _robot_is_close_to_conf(
-        self, conf: JointPositions, atol: float = WAYPOINT_TOL
+        self, conf: JointPositions, atol: float = WAYPOINT_TOLERANCE
     ) -> bool:
         current_conf = self._get_current_robot_arm_conf()
         assert self._pybullet_sim is not None
         dist = self._pybullet_sim.get_joint_distance(current_conf, conf)
         return dist < atol
 
-    def _robot_is_close_to_pose(self, pose: SE2, atol: float = WAYPOINT_TOL) -> bool:
+    def _robot_is_close_to_pose(
+        self, pose: SE2, atol: float = WAYPOINT_TOLERANCE
+    ) -> bool:
         robot_pose = self._get_current_robot_pose()
         return bool(
             np.isclose(robot_pose.x, pose.x, atol=atol)

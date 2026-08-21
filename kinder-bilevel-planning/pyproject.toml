@@ -16,7 +16,7 @@ dependencies = [
    "hydra-core",
    "hydra-joblib-launcher",
    "omegaconf",
-   "kindergarden>=0.1.0",
+   "kindergarden>=0.2.4",
    "prpl_utils>=0.0.7",
    "relational_structs>=0.0.1",
    "tomsgeoms2d>=0.0.1",
@@ -25,7 +25,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Backs the kinematic3d_v2 env models. See the same extra in kinder-models.
+prpl-kinematics = ["prpl_kinematics[planning]>=0.0.1"]
 develop = [
+    # Installed for development and CI so the kinematic3d_v2 models are linted, type
+    # checked, and tested.
+    "prpl_kinematics[planning]>=0.0.1",
     "black",
     "docformatter",
     "ipykernel",
@@ -71,6 +76,10 @@ exclude = ["venv/*", ".venv/*", "third-party/*"]
 [[tool.mypy.overrides]]
 module = [
     "matplotlib.*",
+    # Optional; see the prpl-kinematics extra.
+    "prpl_kinematics.*",
+    "spatialmath.*",
+    "pybullet.*",
     "mujoco",
     "mujoco.*",
     "ruckig",

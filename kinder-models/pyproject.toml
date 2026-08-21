@@ -11,24 +11,36 @@ requires-python = ">=3.10"
 dependencies = [
    "matplotlib",
    "numpy",
+   "scipy",
    "spatialmath-python",
    "h5py",
    "flask-socketio",
    "opencv-python>=4.9.0",
-   "kindergarden>=0.1.0",
+   "kindergarden>=0.2.4",
    "relational_structs>=0.0.1",
    "bilevel_planning>=0.1.2",
 ]
 
 [project.optional-dependencies]
+# Backs the kinematic3d_v2 skills. Optional for the same reason it is optional in
+# kindergarden: it overlaps heavily with pybullet_helpers and both are large. The
+# `planning` extra of prpl_kinematics adds OMPL, which the skills prefer when present
+# and fall back from to BiRRT when absent.
+prpl-kinematics = ["prpl_kinematics[planning]>=0.0.1"]
 develop = [
+    # Installed for development and CI so the kinematic3d_v2 skills are linted, type
+    # checked, and tested.
+    "prpl_kinematics[planning]>=0.0.1",
     "black",
     "docformatter",
     "isort",
     "mypy",
     "pylint>=2.14.5",
     "pytest-pylint>=0.18.0",
-    "pytest>=7.2.2",
+    # pytest 9.1 dropped the `path` arg from the pytest_collect_file hookspec,
+    # which pytest-pylint 0.21.0 still uses -- it crashes the lint job. Temporary
+    # cap; see https://github.com/Princeton-Robot-Planning-and-Learning/kindergarden/issues/111
+    "pytest>=7.2.2,<9.1",
     "ruckig>=0.12.2",
 ]
 
@@ -63,6 +75,10 @@ exclude = ["venv/*", ".venv/*", "third-party/*"]
 [[tool.mypy.overrides]]
 module = [
     "matplotlib.*",
+    # Optional; see the prpl-kinematics extra.
+    "prpl_kinematics.*",
+    "spatialmath.*",
+    "pybullet.*",
     "pygame.*",
     "dill.*",
     "mujoco.*",

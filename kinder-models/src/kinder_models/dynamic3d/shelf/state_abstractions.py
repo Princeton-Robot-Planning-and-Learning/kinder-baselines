@@ -19,6 +19,13 @@ from relational_structs import (
 )
 
 from kinder_models.dynamic3d.shelf.parameterized_skills import PyBulletSim
+from kinder_models.dynamic3d.utils import (
+    END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE,
+    GRIPPER_GRASPING_THRESHOLD,
+    GRIPPER_OPEN_COMMAND_TOLERANCE,
+    MINIMUM_HOLDING_HEIGHT,
+    ON_GROUND_TOLERANCE,
+)
 
 # Predicates.
 OnFixture = Predicate("OnFixture", [MujocoObjectType, MujocoFixtureObjectType])
@@ -65,38 +72,36 @@ class CupboardRealStateAbstractor:
         all_mujoco_objects = set(fixtures) | set(movables)
 
         # OnGround.
-        on_ground_tol = 0.05
         for target in movables:
             z = state.get(target, "z")
             bb_z = state.get(target, "bb_z")
             # Handle flipped cases later.
             if (
-                np.isclose(z - bb_z / 2, 0.0, atol=on_ground_tol)
-                and np.isclose(state.get(target, "qx"), 0.0, atol=on_ground_tol)
-                and np.isclose(state.get(target, "qy"), 0.0, atol=on_ground_tol)
+                np.isclose(z - bb_z / 2, 0.0, atol=ON_GROUND_TOLERANCE)
+                and np.isclose(state.get(target, "qx"), 0.0, atol=ON_GROUND_TOLERANCE)
+                and np.isclose(state.get(target, "qy"), 0.0, atol=ON_GROUND_TOLERANCE)
             ):
                 atoms.add(GroundAtom(OnGround, [target]))
 
         # HandEmpty.
-        handempty_tol = 1e-3
         gripper_val = state.get(robot, "pos_gripper")
-        if np.isclose(gripper_val, 0.0, atol=handempty_tol):
+        if np.isclose(gripper_val, 0.0, atol=GRIPPER_OPEN_COMMAND_TOLERANCE):
             atoms.add(GroundAtom(HandEmpty, [robot]))
 
         # Holding.
         # checking the ee pose and target pose.
-        GraspThreshold = 0.1
         gripper_val = state.get(robot, "pos_gripper")
-        if gripper_val > GraspThreshold:
+        if gripper_val > GRIPPER_GRASPING_THRESHOLD:
             for target in movables:
                 target_ee_pose = self._pybullet_sim.get_ee_pose()
-                if state.get(target, "z") > 0.1:
+                if state.get(target, "z") > MINIMUM_HOLDING_HEIGHT:
                     if (
-                        abs(target_ee_pose.position[0] - state.get(target, "x")) < 0.05
+                        abs(target_ee_pose.position[0] - state.get(target, "x"))
+                        < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
                         and abs(target_ee_pose.position[1] - state.get(target, "y"))
-                        < 0.05
+                        < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
                         and abs(target_ee_pose.position[2] - state.get(target, "z"))
-                        < 0.05
+                        < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
                     ):
                         atoms.add(GroundAtom(Holding, [robot, target]))
 

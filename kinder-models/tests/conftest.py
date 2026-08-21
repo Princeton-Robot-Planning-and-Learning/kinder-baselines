@@ -1,5 +1,14 @@
 """Configure pytest."""
 
+import os
+
+# Must be set before anything imports mujoco or OpenGL: under osmesa the dynamic3d
+# environments fail to register, and the failure is silent until make() raises
+# NameNotFound. Hence the imports below sit after module-level code.
+os.environ["PYOPENGL_PLATFORM"] = "egl"
+os.environ["MUJOCO_GL"] = "egl"
+
+# pylint: disable=wrong-import-position
 from _pytest.config import Config
 from _pytest.config.argparsing import Parser
 
