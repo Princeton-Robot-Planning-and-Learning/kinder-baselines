@@ -43,10 +43,27 @@
                     (LimbMotion ?s1 ?qL2 ?tt ?s2))
   )
 
-  (:stream check-torque-limits
+  ; Checks the person's range of motion at every configuration ?tt passes through.
+  (:stream check-human-joint-limits
     :inputs (?s1 ?qL2 ?tt ?s2)
     :domain (LimbMotion ?s1 ?qL2 ?tt ?s2)
     :outputs ()
-    :certified (SafeTorques ?tt)
+    :certified (SafeHumanJoints ?tt)
+  )
+
+  ; Checks the torque ?tt puts on the person's own joints, measured by inverse dynamics.
+  (:stream check-human-torque-limits
+    :inputs (?s1 ?qL2 ?tt ?s2)
+    :domain (LimbMotion ?s1 ?qL2 ?tt ?s2)
+    :outputs ()
+    :certified (SafeHumanTorques ?tt)
+  )
+
+  ; Checks whether the limb manipulation trajectory satisfies the robot's torque limits.
+  (:stream check-robot-torque-limits
+    :inputs (?s1 ?qL2 ?tt ?s2)
+    :domain (LimbMotion ?s1 ?qL2 ?tt ?s2)
+    :outputs ()
+    :certified (SafeRobotTorques ?tt)
   )
 )

@@ -9,6 +9,7 @@ description = "PDDLStream task and motion planning baselines for KinDER."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+   "matplotlib",
    "numpy",
    "pillow",
    "kindergarden>=0.1.0",

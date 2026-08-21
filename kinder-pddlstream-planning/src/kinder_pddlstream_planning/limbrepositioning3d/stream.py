@@ -13,11 +13,20 @@ from typing import Iterator
 
 import numpy as np
 import pybullet as p
-from kinder.envs.kinematic3d.limbrepositioning3d import (
+from kinder.envs.dynamic3d.limb_utils import (
+    NUM_LIMB_JOINTS,
+    NUM_ROBOT_JOINTS,
+    joint_position_distance,
+)
+from kinder.envs.dynamic3d.limbrepositioning3d import (
     ObjectCentricLimbRepositioning3DEnv,
 )
-from kinder.envs.kinematic3d.utils import NUM_LIMB_JOINTS, NUM_ROBOT_JOINTS
-from pybullet_helpers.geometry import Pose, SE2Pose, multiply_poses
+from pybullet_helpers.geometry import (
+    Pose,
+    SE2Pose,
+    matrix_from_quat,
+    multiply_poses,
+)
 from pybullet_helpers.inverse_kinematics import (
     InverseKinematicsError,
     check_body_collisions,
@@ -39,9 +48,42 @@ BASE_SEARCH_ROTATIONS: tuple[float, ...] = (0.0, -0.2, 0.2, -0.4, 0.4)
 
 NUM_REACH_CHECKS = 5
 
+
+# Rolls of the nominal grasp about the tool axis, tried when it does not reach.
+GRASP_ROLLS: tuple[float, ...] = (0.4, -0.4, 0.8, -0.8)
+
 CLEARANCE_PROBE_DISTANCE = 0.1
 
 COLLISION_MARGIN = 0.01
+
+# Bound on the total torque a joint of the person may bear, in N*m, per limb. Half of
+# peak isometric strength: ~77 N*m shoulder flexion for arms, ~200 N*m knee extension.
+HUMAN_TORQUE_LIMITS = {"arm": 40.0, "leg": 100.0}
+
+# What the robot itself may add on top of gravity and tone, in N*m.
+DEFAULT_ROBOT_INDUCED_TORQUE_LIMIT = 5.0
+
+# Kinova Gen3 joint effort limits, from the URDF the environment loads. Its shipped
+# +-1 N*m action space cannot hold the arm up under gravity.
+ROBOT_TORQUE_LIMITS = (39.0, 39.0, 39.0, 39.0, 9.0, 9.0, 9.0)
+
+# Damping for the limb Jacobian inverse, applied only once its smallest singular value
+# falls below the threshold, so well-conditioned configurations stay exact.
+JACOBIAN_DAMPING = 0.1
+SINGULARITY_THRESHOLD = 0.02
+
+# Torque headroom, in N*m, a base pose must leave for the motion itself.
+TORQUE_FEASIBILITY_MARGIN = 1.0
+
+# Gravity, in m/s^2. The environment ships with this off, leaving the limb weightless.
+DEFAULT_GRAVITY = (0.0, 0.0, -9.81)
+
+# Viscous damping at each of the limb's own joints, in N*m*s/rad. The environment zeros
+# every joint's damping and friction so that torques act directly, which leaves the
+# distal joints - a hand or a foot, a fraction of a kilogram at the end of the chain the
+# robot grasps - free to whip. A limp limb is not frictionless, and without this the
+# robot cannot steer the limb at all: see the README.
+DEFAULT_LIMB_JOINT_DAMPING = 0.5
 
 
 @dataclass(eq=False)
@@ -85,14 +127,64 @@ class ArmTrajectory:
         return f"at{id(self) % 10000}(waypoints={len(self.joint_plan)})"
 
 
+@dataclass(frozen=True)
+class HumanTorques:
+    """The torque on the human's joints, and the two references it is read against."""
+
+    total: np.ndarray
+    tone: np.ndarray
+    gravity: np.ndarray
+
+    @property
+    def robot(self) -> np.ndarray:
+        """What the motion adds on top of the person's own static load.
+
+        Zero while the robot merely holds the limb still, which is what makes it a
+        bound on the motion rather than on the posture. Muscle tone is not subtracted
+        again: inverse dynamics already counts it inside `total`, so subtracting it
+        leaves `-tone` on a limb the robot is only holding.
+        """
+        return self.total - self.gravity
+
+
 @dataclass(eq=False)
 class TorqueTrajectory:
-    """An open-loop torque trajectory, one torque per environment step."""
+    """An open-loop torque trajectory, one torque per environment step.
 
-    torques: list[JointTorques]
+    `robot_torques` are the corrections execution replays, each commanded on top of
+    whatever it takes to hold the system still at that moment. The remaining fields
+    record what the open-loop replay did, so the constraint streams can check it without
+    re-simulating. `human_torques` is the total t_h; `robot_induced_torques` is the t_r
+    share; `commanded_torques` is the correction plus that hold, which is what the robot
+    is actually asked for and the only one of the two the torque limits bind.
+    """
+
+    robot_torques: list[JointTorques]
+    human_torques: list[JointTorques] = field(default_factory=list)
+    robot_induced_torques: list[JointTorques] = field(default_factory=list)
+    limb_path: list[JointPositions] = field(default_factory=list)
+    commanded_torques: list[JointTorques] = field(default_factory=list)
 
     def __repr__(self) -> str:
-        return f"tt{id(self) % 10000}(steps={len(self.torques)})"
+        return f"tt{id(self) % 10000}(steps={len(self.robot_torques)})"
+
+
+@dataclass
+class RolloutLog:
+    """Per-step measurements of an executed `move_limb`, for plots and analysis.
+
+    `advance_logged` fills one of these; nothing in planning reads it back.
+    """
+
+    correction_torques: list[JointTorques] = field(default_factory=list)
+    commanded_torques: list[JointTorques] = field(default_factory=list)
+    limb_positions: list[JointPositions] = field(default_factory=list)
+    limb_velocities: list[JointVelocities] = field(default_factory=list)
+    human_total: list[JointTorques] = field(default_factory=list)
+    human_gravity: list[JointTorques] = field(default_factory=list)
+    human_tone: list[JointTorques] = field(default_factory=list)
+    human_robot_induced: list[JointTorques] = field(default_factory=list)
+    grasp_wrenches: list[list[float]] = field(default_factory=list)
 
 
 @dataclass
@@ -103,7 +195,7 @@ class BestAttempt:
     """
 
     state: CoupledState
-    torques: list[JointTorques]
+    robot_torques: list[JointTorques]
     error: float
     reason: str
 
@@ -122,22 +214,30 @@ class MPCConfig:
     action_repeat: int = 12
     num_control_points: int = 4
     noise_scale: float = 0.05
-    noise_reference_error: float = 0.5
+    noise_reference_error: float = 1.2
     min_noise_ratio: float = 0.1
     goal_reaching_weight: float = 100.0
     velocity_penalty_weight: float = 0.5
-    velocity_penalty_threshold: float = 0.05
+    velocity_penalty_threshold: float = 0.3
     max_velocity: float = 2.0
     max_velocity_penalty: float = 300.0
     joint_limit_violation_weight: float = 1e6
+    human_torque_violation_weight: float = 1e6
     collision_penalty: float = 1e4
     terminal_goal_weight: float = 100.0
     velocity_regularization_weight: float = 1.0
-    replay_slack: float = 1e-2
+    # Headroom the closed-loop run stops with so the open-loop replay lands in tolerance.
+    # The replay is re-checked explicitly and reproduces planning to ~1e-12 rad.
+    replay_slack: float = 1e-3
     max_control_steps: int = 300
     divergence_factor: float = 2.0
     stall_patience: int = 60
     stall_tolerance: float = 1e-3
+
+
+def default_human_torque_limit(limb_name: str) -> float:
+    """The total-torque bound for this limb: legs bear far more than arms."""
+    return HUMAN_TORQUE_LIMITS["leg" if "leg" in limb_name else "arm"]
 
 
 @dataclass
@@ -154,13 +254,21 @@ class LimbStreamContext:
     mpc: MPCConfig = field(default_factory=MPCConfig)
     check_base_collisions: bool = True
     check_robot_collisions: bool = True
+    human_torque_limit: float | None = None
+    robot_induced_torque_limit: float = DEFAULT_ROBOT_INDUCED_TORQUE_LIMIT
     num_ik_attempts: int = 12
     best_attempt: BestAttempt | None = None
     resting_penetration: dict[int, float] = field(default_factory=dict, repr=False)
+    limb_joint_infos: list = field(init=False, repr=False)
     _ik_rng: np.random.Generator = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._ik_rng = np.random.default_rng(self.motion_seed)
+        if self.human_torque_limit is None:
+            self.human_torque_limit = default_human_torque_limit(
+                self.sim.limb.get_name()
+            )
+        self.limb_joint_infos = self.sim.limb.get_arm_joint_infos()
         self.refresh_collision_baseline()
 
     def refresh_collision_baseline(self) -> None:
@@ -223,13 +331,18 @@ class LimbStreamContext:
         return self.sim.config.goal_atol
 
     @property
-    def torque_limits(self) -> tuple[np.ndarray, np.ndarray]:
-        """The robot's (lower, upper) torque limits."""
+    def robot_torque_limits(self) -> tuple[np.ndarray, np.ndarray]:
+        """The robot's (lower, upper) torque limits, from its action space."""
         config = self.sim.config
         return (
             np.asarray(config.torque_lower_limits, dtype=np.float64),
             np.asarray(config.torque_upper_limits, dtype=np.float64),
         )
+
+    @property
+    def human_torque_limits(self) -> tuple[float, float]:
+        """The bounds on the total torque and on the robot's share of it."""
+        return (abs(self.human_torque_limit), abs(self.robot_induced_torque_limit))
 
 
 # ------------------------------------------------------------------- simulator helpers
@@ -322,22 +435,282 @@ def _saved_sim_state(sim: ObjectCentricLimbRepositioning3DEnv) -> Iterator[None]
             restore_state(sim, saved, regrasp=was_grasping)
 
 
-def _limb_error(positions: JointPositions, goal: np.ndarray) -> float:
-    """The environment's own success metric: Euclidean joint-space distance."""
-    return float(np.linalg.norm(np.subtract(positions, goal)))
+def _limb_error(
+    ctx: LimbStreamContext, positions: JointPositions, goal: np.ndarray
+) -> float:
+    """The environment's own success metric, which `goal_reached` thresholds.
+
+    It is a wrapped per-joint sum, not a Euclidean norm: for six joints the two differ
+    by up to a factor of sqrt(6), so certifying against the norm accepts trajectories
+    the environment then calls failures.
+    """
+    return joint_position_distance(ctx.limb_joint_infos, list(positions), list(goal))
 
 
 def advance(
     sim: ObjectCentricLimbRepositioning3DEnv, torque: JointTorques | np.ndarray
-) -> None:
-    """Advance the simulation by one environment step under `torque`.
+) -> HumanTorques:
+    """Advance the simulation by one environment step under `torque`, as given.
 
-    This is `sim.step()` without its observation construction or spasm sampling.
+    This is `sim.step()` without its observation construction or spasm sampling. It
+    applies exactly what it is handed; `hold_torque` is what adds the feedforward.
+    Returns the torque the step put on each of the limb's own joints.
     """
     action_space = sim.torque_action_space
     clipped = np.clip(torque, action_space.low, action_space.high)
-    sim._apply_torques(  # pylint: disable=protected-access
-        list(clipped), sim.limb.get_muscle_tone_torque()
+    positions, velocities = _limb_state(sim)
+    tone = np.asarray(sim.limb.get_muscle_tone_torque())
+    gravity = _gravity_torque(sim, sim.limb)
+    # `_apply_torques` adds the limb's muscle tone itself; its second argument is for
+    # extra torque like a spasm, which planning deliberately does not model.
+    sim._apply_torques(list(clipped))  # pylint: disable=protected-access
+    return measure_human_torques(sim, positions, velocities, tone, gravity)
+
+
+def hold_torque(sim: ObjectCentricLimbRepositioning3DEnv) -> np.ndarray:
+    """The torque that holds the coupled system where it stands.
+
+    The arm carrying its own weight, plus what the grasp needs to carry
+    the limb.
+
+    Only the arm's own term is skipped when gravity is off. The limb's
+    is not: muscle tone drives the limb whether or not it has weight,
+    and leaving it uncompensated is what makes a weightless limb wander
+    away from a zero command.
+    """
+    arm = np.zeros(NUM_ROBOT_JOINTS)
+    if any(sim.config.gravity):
+        arm = _gravity_torque(sim, sim.robot.arm)[:NUM_ROBOT_JOINTS]
+    return arm + limb_hold_torque(sim)
+
+
+def advance_corrected(
+    sim: ObjectCentricLimbRepositioning3DEnv, correction: JointTorques | np.ndarray
+) -> HumanTorques:
+    """Step under `correction`, commanded on top of holding the system still.
+
+    This is what the planner and execution use; a zero correction means hold.
+    """
+    return advance(sim, commanded_robot_torque(sim, correction))
+
+
+def commanded_robot_torque(
+    sim: ObjectCentricLimbRepositioning3DEnv, correction: JointTorques | np.ndarray
+) -> np.ndarray:
+    """What `advance_corrected` asks of the robot, before the action space clips it.
+
+    The correction shares the robot's torque budget with the hold it acts on top of, so
+    this, not the correction alone, is what the robot's limits bind. `advance` clips it,
+    which silently truncates the hold and breaks the premise that a zero correction
+    holds the system still - hence `exceeds_robot_torque_limits` rejecting it instead.
+    """
+    return np.asarray(correction, dtype=np.float64) + hold_torque(sim)
+
+
+def exceeds_robot_torque_limits(
+    ctx: LimbStreamContext, commanded: JointTorques | np.ndarray
+) -> bool:
+    """Whether the robot was asked for a torque outside its action space."""
+    lower, upper = ctx.robot_torque_limits
+    tolerance = 1e-9
+    commanded_arr = np.asarray(commanded, dtype=np.float64)
+    return bool(
+        (commanded_arr < lower - tolerance).any()
+        or (commanded_arr > upper + tolerance).any()
+    )
+
+
+def grasp_wrench(sim: ObjectCentricLimbRepositioning3DEnv) -> list[float]:
+    """The force and moment the grasp weld transmits, as (fx, fy, fz, mx, my, mz).
+
+    This is the interaction wrench a force-torque sensor at the gripper would read.
+    """
+    if not is_grasping(sim):
+        return [0.0] * 6
+    return list(
+        p.getConstraintState(
+            sim._grasp_constraint_id,  # pylint: disable=protected-access
+            physicsClientId=sim.physics_client_id,
+        )
+    )
+
+
+def advance_logged(
+    sim: ObjectCentricLimbRepositioning3DEnv,
+    correction: JointTorques | np.ndarray,
+    log: RolloutLog,
+) -> HumanTorques:
+    """`advance_corrected`, recording what the step did into `log`."""
+    correction = np.asarray(correction, dtype=np.float64)
+    hold = hold_torque(sim)
+    human = advance(sim, correction + hold)
+    positions, velocities = _limb_state(sim)
+    log.correction_torques.append(list(correction))
+    log.commanded_torques.append(list(correction + hold))
+    log.limb_positions.append(list(positions))
+    log.limb_velocities.append(list(velocities))
+    log.human_total.append(list(human.total))
+    log.human_gravity.append(list(human.gravity))
+    log.human_tone.append(list(human.tone))
+    log.human_robot_induced.append(list(human.robot))
+    log.grasp_wrenches.append(grasp_wrench(sim))
+    return human
+
+
+def apply_limb_joint_damping(
+    sim: ObjectCentricLimbRepositioning3DEnv,
+    damping: float = DEFAULT_LIMB_JOINT_DAMPING,
+) -> None:
+    """Give the limb's joints viscous damping, which the environment zeroes out.
+
+    `_prepare_torque_control` sets every joint's damping and friction to zero so that
+    the commanded torque is the only thing acting. The muscle tone model is then the
+    limb's only passive resistance, and it supplies none at its rest point, so the
+    joints nearest the grasp are undamped and the robot cannot hold them still.
+    """
+    for joint in sim.limb.arm_joints:
+        p.changeDynamics(
+            sim.limb.robot_id,
+            joint,
+            jointDamping=damping,
+            physicsClientId=sim.physics_client_id,
+        )
+
+
+def _gravity_torque(sim: ObjectCentricLimbRepositioning3DEnv, body) -> np.ndarray:
+    """The torque gravity puts on `body`'s joints where it stands.
+
+    Inverse dynamics with zero velocity and acceleration leaves only the gravity term.
+    """
+    joints = sorted(body.arm_joints)
+    states = p.getJointStates(
+        body.robot_id, joints, physicsClientId=sim.physics_client_id
+    )
+    rest = [0.0] * len(joints)
+    return np.asarray(
+        p.calculateInverseDynamics(
+            body.robot_id,
+            [state[0] for state in states],
+            rest,
+            rest,
+            physicsClientId=sim.physics_client_id,
+        )
+    )
+
+
+def _tool_jacobian(sim: ObjectCentricLimbRepositioning3DEnv, body) -> np.ndarray:
+    """The 6xN Jacobian at `body`'s tool link, as limb-manipulation computes it."""
+    joints = sorted(body.arm_joints)
+    states = p.getJointStates(
+        body.robot_id, joints, physicsClientId=sim.physics_client_id
+    )
+    positions = [state[0] for state in states]
+    rest = [0.0] * len(positions)
+    translational, rotational = p.calculateJacobian(
+        body.robot_id,
+        body.tool_link_id,
+        [0.0, 0.0, 0.0],
+        positions,
+        rest,
+        rest,
+        physicsClientId=sim.physics_client_id,
+    )
+    return np.vstack([np.asarray(translational), np.asarray(rotational)])
+
+
+def _base_twist_transform(sim: ObjectCentricLimbRepositioning3DEnv) -> np.ndarray:
+    """R, mapping robot base-frame twists into the limb's base frame."""
+    rotation = matrix_from_quat(
+        sim.limb.get_base_pose().orientation
+    ).T @ matrix_from_quat(sim.robot.arm.get_base_pose().orientation)
+    transform = np.eye(6)
+    transform[:3, :3] = rotation
+    transform[3:, 3:] = rotation
+    return transform
+
+
+def limb_hold_torque(sim: ObjectCentricLimbRepositioning3DEnv) -> np.ndarray:
+    """Robot joint torque that carries the limb's weight through the grasp.
+
+    From limb-manipulation's coupled model with the robot acceleration set to zero at
+    rest. The limb's own joints already carry its muscle tone, so the grasp carries only
+    what gravity leaves: the coupling term is tau = Jr^T R^T pinv(Jh^T) (g_h - t_t).
+
+    pinv(Jh^T) g_h is a wrench in the limb's base frame, so it is R^T, not R, that
+    carries it into the robot's base frame. PyBullet's Jacobians are base-frame.
+
+    Gravity and tone are both loads on the limb, so this is skipped only when there is
+    neither: with gravity off the limb still has tone, and it still has to be carried.
+    """
+    load = _gravity_torque(sim, sim.limb) - np.asarray(
+        sim.limb.get_muscle_tone_torque()
+    )
+    if not load.any():
+        return np.zeros(NUM_ROBOT_JOINTS)
+    arm_jacobian = _tool_jacobian(sim, sim.robot.arm)
+    limb_jacobian = _tool_jacobian(sim, sim.limb)
+    # Damped least squares, damping only near singularities: the limb passes through
+    # them (a straight leg is one), where a plain pinv returns an unbounded wrench.
+    smallest = float(np.linalg.svd(limb_jacobian, compute_uv=False)[-1])
+    damping = 0.0
+    if smallest < SINGULARITY_THRESHOLD:
+        damping = JACOBIAN_DAMPING**2 * (1.0 - (smallest / SINGULARITY_THRESHOLD) ** 2)
+    gram = limb_jacobian @ limb_jacobian.T
+    damped = np.linalg.solve(
+        gram + damping * np.eye(gram.shape[0]), limb_jacobian @ load
+    )
+    coupling = arm_jacobian.T @ _base_twist_transform(sim).T @ damped
+    action_space = sim.torque_action_space
+    return np.clip(coupling[:NUM_ROBOT_JOINTS], action_space.low, action_space.high)
+
+
+def _limb_state(
+    sim: ObjectCentricLimbRepositioning3DEnv,
+) -> tuple[JointPositions, JointVelocities]:
+    """The limb's joint positions and velocities, in one round trip."""
+    states = p.getJointStates(
+        sim.limb.robot_id, sim.limb.arm_joints, physicsClientId=sim.physics_client_id
+    )
+    return [state[0] for state in states], [state[1] for state in states]
+
+
+def measure_human_torques(
+    sim: ObjectCentricLimbRepositioning3DEnv,
+    positions: JointPositions,
+    velocities: JointVelocities,
+    tone: np.ndarray,
+    gravity: np.ndarray,
+) -> HumanTorques:
+    """The torque on each limb joint over the step that just ran, decomposed.
+
+    Inverse dynamics on the observed acceleration gives the total generalized torque at
+    each joint. PyBullet reports no reaction moment about a revolute joint's own axis,
+    so this is the only way to see what the person's joints are made to bear.
+    """
+    _, new_velocities = _limb_state(sim)
+    accelerations = np.subtract(new_velocities, velocities) / sim.config.dt
+    total = np.asarray(
+        p.calculateInverseDynamics(
+            sim.limb.robot_id,
+            list(positions),
+            list(velocities),
+            list(accelerations),
+            physicsClientId=sim.physics_client_id,
+        )
+    )
+    return HumanTorques(total=total, tone=tone, gravity=gravity)
+
+
+def exceeds_human_torque_limits(ctx: LimbStreamContext, human: HumanTorques) -> bool:
+    """Whether a step loads the person past either bound.
+
+    The total is what their joints must bear; the robot's share is what the trajectory
+    is responsible for, and carries the tighter comfort bound.
+    """
+    total_limit, robot_limit = ctx.human_torque_limits
+    return bool(
+        np.abs(human.total).max() > total_limit
+        or np.abs(human.robot).max() > robot_limit
     )
 
 
@@ -345,14 +718,18 @@ def advance(
 
 
 def sample_grasp(ctx: LimbStreamContext, limb: str) -> Iterator[tuple[Pose]]:
-    """Yield the fixed grasp transform for this limb.
+    """Yield the scene's grasp transform, then rolls of it about the tool axis.
 
-    The scene config carries one transform per limb family, so this is single-shot.
-
-    It stays a stream so sampled grasps can be added without touching the domain.
+    The roll leaves the contact point alone but changes the wrist orientation, which
+    gives `sample_base_pose` other IK branches to try when the nominal one fails.
     """
     del limb  # there is a single limb per environment
-    yield (ctx.sim.scene.grasp_transform,)
+    nominal = ctx.sim.scene.grasp_transform
+    yield (nominal,)
+    for roll in GRASP_ROLLS:
+        yield (
+            multiply_poses(nominal, Pose.from_rpy((0.0, 0.0, 0.0), (0.0, 0.0, roll))),
+        )
 
 
 def _wrap_angle(angle: float) -> float:
@@ -414,6 +791,33 @@ def arm_in_collision(
         )
         for obstacle_id in obstacles
     )
+
+
+def limb_is_controllable(ctx: LimbStreamContext) -> bool:
+    """Whether the robot can hold the limb where it stands.
+
+    Two ways to fail: a limb singularity, such as a fully straight leg, where some of
+    its weight can only be borne by the person's own joints; or a hold torque the arm
+    cannot supply, which for a heavy limb lands on the small wrist actuators.
+    """
+    sim = ctx.sim
+    smallest = np.linalg.svd(_tool_jacobian(sim, sim.limb), compute_uv=False)[-1]
+    if smallest < SINGULARITY_THRESHOLD:
+        return False
+    action_space = sim.torque_action_space
+    hold = limb_hold_torque(sim)
+    if not hold.any():
+        return True
+    return bool(
+        np.all(hold > action_space.low + TORQUE_FEASIBILITY_MARGIN)
+        and np.all(hold < action_space.high - TORQUE_FEASIBILITY_MARGIN)
+    )
+
+
+def limb_out_of_limits(ctx: LimbStreamContext) -> bool:
+    """Whether the limb, as it stands, is outside the person's range of motion."""
+    limb = ctx.sim.limb
+    return not limb.check_joint_limits(limb.get_joint_positions())
 
 
 def human_in_collision(ctx: LimbStreamContext) -> bool:
@@ -506,7 +910,7 @@ def sample_base_pose(
             reachable = True
             for waypoint in waypoints:
                 solution = _grasp_ik(ctx, grasp, tuple(waypoint), seed)
-                if solution is None:
+                if solution is None or not limb_is_controllable(ctx):
                     reachable = False
                     break
                 seed = solution
@@ -604,6 +1008,9 @@ def plan_limb_motion(
     It stops with enough headroom that an open-loop replay also lands in tolerance.
     """
     sim = ctx.sim
+    if not sim.limb.check_joint_limits(list(q2.positions)):
+        print("plan-limb-motion: the target is outside the limb's joint limits.")
+        return
     goal = np.asarray(q2.positions, dtype=np.float64)
     mpc = PredictiveSamplingMPC(ctx, goal)
 
@@ -611,10 +1018,10 @@ def plan_limb_motion(
     threshold = max(ctx.goal_atol - cfg.replay_slack, ctx.goal_atol / 2)
     with _saved_sim_state(sim):
         restore_state(sim, s1)
-        torques: list[JointTorques] = []
+        robot_torques: list[JointTorques] = []
         reached = False
         giveup = ""
-        error = _limb_error(sim.limb.get_joint_positions(), goal)
+        error = _limb_error(ctx, sim.limb.get_joint_positions(), goal)
         initial_error = error
         best_error = error
         steps_since_improvement = 0
@@ -629,13 +1036,25 @@ def plan_limb_motion(
                 giveup = f"stalled at an error of {best_error:.3f}"
                 break
             torque = mpc.step()
+            overloaded = False
             for _ in range(cfg.action_repeat):
-                advance(sim, torque)
-                torques.append(list(torque))
-                error = _limb_error(sim.limb.get_joint_positions(), goal)
+                human_torque = advance_corrected(sim, torque)
+                robot_torques.append(list(torque))
+                if exceeds_human_torque_limits(ctx, human_torque):
+                    overloaded = True
+                    break
+                error = _limb_error(ctx, sim.limb.get_joint_positions(), goal)
                 if error < threshold:
                     reached = True
                     break
+            if overloaded:
+                reached = False
+                giveup = "loaded a limb joint past the person's torque limit"
+                break
+            if limb_out_of_limits(ctx):
+                reached = False
+                giveup = "bent a joint of the limb past its anatomical limit"
+                break
             if ctx.resting_penetration and human_in_collision(ctx):
                 reached = False
                 giveup = "drove the limb into the person or the furniture"
@@ -653,68 +1072,143 @@ def plan_limb_motion(
         # The MPC ran closed-loop, but execution replays the torques open-loop, so
         # certify the state that replay produces rather than the closed-loop one.
         s2: CoupledState | None = None
+        human_torques: list[JointTorques] = []
+        robot_induced: list[JointTorques] = []
+        limb_path: list[JointPositions] = []
+        commanded: list[JointTorques] = []
         if reached:
             restore_state(sim, s1)
-            for torque in torques:
-                advance(sim, torque)
+            limb_path.append(list(sim.limb.get_joint_positions()))
+            for torque in robot_torques:
+                # Read before the step: `advance` clips this, so afterwards there is
+                # nothing left to see of a saturated command.
+                step_command = commanded_robot_torque(sim, torque)
+                commanded.append(list(step_command))
+                human_torque = advance_corrected(sim, torque)
+                human_torques.append(list(human_torque.total))
+                robot_induced.append(list(human_torque.robot))
+                limb_path.append(list(sim.limb.get_joint_positions()))
+                # The replay drifts from the closed-loop run, so it is checked
+                # separately, and here at every step rather than every control step.
+                if limb_out_of_limits(ctx):
+                    reached = False
+                    giveup = "replayed open-loop past the limb's anatomical limits"
+                    break
+                if exceeds_human_torque_limits(ctx, human_torque):
+                    reached = False
+                    giveup = "replayed open-loop past the person's torque limits"
+                    break
+                if exceeds_robot_torque_limits(ctx, step_command):
+                    reached = False
+                    giveup = "asked the robot for more torque than it has"
+                    break
+        if reached:
             s2 = capture_state(sim)
-            replay_error = _limb_error(s2.limb_positions, goal)
+            replay_error = _limb_error(ctx, s2.limb_positions, goal)
             if replay_error >= ctx.goal_atol:
                 reached = False
                 giveup = (
                     f"replayed open-loop to {replay_error:.3f}, outside the tolerance"
                 )
             elif ctx.resting_penetration and human_in_collision(ctx):
-                # The replay drifts from the closed-loop run, so check it separately.
                 reached = False
                 giveup = "replayed open-loop into the person or the furniture"
 
     if not reached:
-        _record_attempt(ctx, s1, torques, best_error, giveup)
+        _record_attempt(ctx, s1, robot_torques, best_error, giveup)
         print(f"plan-limb-motion: MPC rollout {giveup}.")
         return
     assert s2 is not None
-    if not torques:
+    if not robot_torques:
         print("plan-limb-motion: already at the target configuration.")
     else:
-        print(f"plan-limb-motion: generated a trajectory with {len(torques)} steps.")
-    yield (TorqueTrajectory(torques), s2)
+        print(
+            f"plan-limb-motion: generated a trajectory with "
+            f"{len(robot_torques)} steps."
+        )
+    yield (
+        TorqueTrajectory(
+            robot_torques, human_torques, robot_induced, limb_path, commanded
+        ),
+        s2,
+    )
 
 
 def _record_attempt(
     ctx: LimbStreamContext,
     s1: CoupledState,
-    torques: list[JointTorques],
+    robot_torques: list[JointTorques],
     error: float,
     reason: str,
 ) -> None:
     """Keep this rejected rollout if it is the closest one seen so far."""
-    if not torques:
+    if not robot_torques:
         return
     if ctx.best_attempt is not None and ctx.best_attempt.error <= error:
         return
     ctx.best_attempt = BestAttempt(
-        state=s1, torques=list(torques), error=error, reason=reason
+        state=s1, robot_torques=list(robot_torques), error=error, reason=reason
     )
 
 
-def check_torque_limits(
+def check_human_joint_limits(
     ctx: LimbStreamContext,
     s1: CoupledState,
     q2: LimbConf,
     trajectory: TorqueTrajectory,
     s2: CoupledState,
 ) -> bool:
-    """Constraint: every torque in the trajectory respects the robot's torque limits."""
+    """Constraint: the limb stays in the person's range of motion for the whole motion.
+
+    Every configuration of the open-loop replay is checked, not only the goal.
+    """
     del s1, q2, s2  # the constraint is on the trajectory alone
-    lower, upper = ctx.torque_limits
-    tolerance = 1e-9
-    for torque in trajectory.torques:
-        torque_arr = np.asarray(torque, dtype=np.float64)
-        if (torque_arr < lower - tolerance).any() or (
-            torque_arr > upper + tolerance
-        ).any():
-            print("check-torque-limits: torque limit violated.")
+    for positions in trajectory.limb_path:
+        if not ctx.sim.limb.check_joint_limits(list(positions)):
+            print("check-human-joint-limits: the limb leaves its joint limits.")
+            return False
+    return True
+
+
+def check_human_torque_limits(
+    ctx: LimbStreamContext,
+    s1: CoupledState,
+    q2: LimbConf,
+    trajectory: TorqueTrajectory,
+    s2: CoupledState,
+) -> bool:
+    """Constraint: no step of the trajectory overloads a joint of the person."""
+    del s1, q2, s2  # the constraint is on the trajectory alone
+    total_limit, robot_limit = ctx.human_torque_limits
+    for total, robot in zip(
+        trajectory.human_torques, trajectory.robot_induced_torques, strict=True
+    ):
+        if np.abs(total).max() > total_limit or np.abs(robot).max() > robot_limit:
+            print("check-human-torque-limits: human torque limit violated.")
+            return False
+    return True
+
+
+def check_robot_torque_limits(
+    ctx: LimbStreamContext,
+    s1: CoupledState,
+    q2: LimbConf,
+    trajectory: TorqueTrajectory,
+    s2: CoupledState,
+) -> bool:
+    """Constraint: the robot is never asked for a torque outside its action space.
+
+    Checked against `commanded_torques`, not `robot_torques`: the correction shares the
+    budget with the hold it rides on, so a correction that is individually in bounds can
+    still saturate the robot once the two are summed.
+    """
+    del s1, q2, s2  # the constraint is on the trajectory alone
+    # A trajectory assembled without a replay, as a failed attempt is, has only the
+    # corrections to offer; they are a lower bound on what was asked for.
+    torques = trajectory.commanded_torques or trajectory.robot_torques
+    for torque in torques:
+        if exceeds_robot_torque_limits(ctx, torque):
+            print("check-robot-torque-limits: robot torque limit violated.")
             return False
     return True
 
@@ -737,7 +1231,7 @@ class PredictiveSamplingMPC:
         self._obstacles = ctx.obstacle_ids
         self._goal = goal
         self._rng = np.random.default_rng(ctx.motion_seed)
-        self._lower, self._upper = ctx.torque_limits
+        self._lower, self._upper = ctx.robot_torque_limits
         self._nominal = np.zeros((self._cfg.num_control_points, NUM_ROBOT_JOINTS))
         self._control_indices = np.round(
             np.linspace(0, self._cfg.horizon - 1, self._cfg.num_control_points)
@@ -745,7 +1239,7 @@ class PredictiveSamplingMPC:
 
     def step(self) -> JointTorques:
         """Choose the torque to apply in the simulator's current state."""
-        error = _limb_error(self._sim.limb.get_joint_positions(), self._goal)
+        error = _limb_error(self._ctx, self._sim.limb.get_joint_positions(), self._goal)
         candidates = self._sample_candidates(error)
         start = capture_state(self._sim)
         scores = [self._score(start, self._expand(cp)) for cp in candidates]
@@ -789,11 +1283,11 @@ class PredictiveSamplingMPC:
         candidates.extend(self._clip(nominal + sample) for sample in noise)
         return candidates
 
-    def _clip(self, torques: np.ndarray) -> np.ndarray:
-        return np.clip(torques, self._lower, self._upper)
+    def _clip(self, robot_torques: np.ndarray) -> np.ndarray:
+        return np.clip(robot_torques, self._lower, self._upper)
 
-    def _score(self, start: CoupledState, torques: np.ndarray) -> float:
-        """Roll `torques` out from `start` in the simulator and score the result."""
+    def _score(self, start: CoupledState, robot_torques: np.ndarray) -> float:
+        """Roll `robot_torques` out from `start` and score the result."""
         restore_state(self._sim, start)
         cfg = self._cfg
         goal_cost = 0.0
@@ -801,19 +1295,21 @@ class PredictiveSamplingMPC:
         regularization_cost = 0.0
         limit_cost = 0.0
         squared_distance = 0.0
-        for torque in torques:
+        for torque in robot_torques:
+            overloaded = False
             for _ in range(cfg.action_repeat):
-                advance(self._sim, torque)
+                human_torque = advance_corrected(self._sim, torque)
+                overloaded |= exceeds_human_torque_limits(self._ctx, human_torque)
             positions = self._sim.limb.get_joint_positions()
             velocities = self._sim.limb.get_joint_velocities()
-            squared_distance = float(
-                np.sum(np.square(np.subtract(positions, self._goal)))
-            )
+            squared_distance = _limb_error(self._ctx, positions, self._goal) ** 2
             goal_cost += squared_distance
             velocity_cost += self._velocity_penalty(velocities, squared_distance)
             regularization_cost += float(np.sum(np.square(velocities)))
             if not self._sim.limb.check_joint_limits(positions):
                 limit_cost += cfg.joint_limit_violation_weight
+            if overloaded:
+                limit_cost += cfg.human_torque_violation_weight
             if self._obstacles and arm_in_collision(self._ctx):
                 limit_cost += cfg.collision_penalty
             if self._ctx.resting_penetration and human_in_collision(self._ctx):

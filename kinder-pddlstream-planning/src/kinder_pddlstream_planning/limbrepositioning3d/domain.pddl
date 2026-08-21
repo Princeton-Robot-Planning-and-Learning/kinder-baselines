@@ -14,7 +14,9 @@
     (BaseMotion ?q1 ?bt ?q2)     ; base path ?bt drives the base from ?q1 to ?q2
     (GraspKin ?l ?g ?q ?at ?s)   ; arm path ?at from base ?q reaches ?g, leaving ?s
     (LimbMotion ?s1 ?qL2 ?tt ?s2) ; torques ?tt drive ?s1 to ?s2, with limb conf ?qL2
-    (SafeTorques ?tt)            ; every torque in ?tt is within the robot's limits
+    (SafeRobotTorques ?tt)       ; every torque in ?tt is within the robot's limits
+    (SafeHumanTorques ?tt)       ; ?tt never overloads a joint of the person
+    (SafeHumanJoints ?tt)        ; ?tt keeps the limb in the person's range of motion
 
     ; Fluents.
     (AtBConf ?q)
@@ -55,7 +57,9 @@
                        (Grasp ?l ?g)
                        (Reachable ?l ?g ?q ?qL2)
                        (LimbMotion ?s1 ?qL2 ?tt ?s2)
-                       (SafeTorques ?tt))
+                       (SafeRobotTorques ?tt)
+                       (SafeHumanTorques ?tt)
+                       (SafeHumanJoints ?tt))
     :effect (and (AtState ?s2)
                  (not (AtState ?s1)))
   )
