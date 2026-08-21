@@ -7,18 +7,23 @@ import numpy as np
 from kinder.envs.dynamic3d.envs import TidyBot3DEnv
 from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
 from matplotlib import pyplot as plt
+from pybullet_helpers.joint import get_joint_infos
 from relational_structs import ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
 from spatialmath import SE2
 from tomsgeoms2d.structs import Rectangle
+from tomsgeoms2d.utils import geom2ds_intersect
 
 from kinder_models.dynamic3d.utils import (
+    CIRCULAR_ARM_JOINT_INDICES,
+    PyBulletSim,
     get_bounding_box,
     get_overhead_kinematic2ds,
     get_overhead_object_se2_pose,
     get_overhead_robot_se2_pose,
     plot_overhead_scene,
     run_base_motion_planning,
+    wrap_arm_joint_difference,
 )
 
 kinder.register_all_environments()
@@ -35,7 +40,6 @@ def _get_robot_from_state(state: ObjectCentricState):
 
 def test_get_overhead_object_se2_pose():
     """Tests for get_overhead_object_se2_pose()."""
-
     # Get a real object-centric state.
     env = TidyBot3DEnv(task_config_path=str(_TEST_TASKS / "tidybot-ground-o1.json"))
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
@@ -63,7 +67,6 @@ def test_get_overhead_object_se2_pose():
 
 def test_get_overhead_robot_se2_pose():
     """Tests for get_overhead_robot_se2_pose()."""
-
     # Get a real object-centric state.
     env = TidyBot3DEnv(task_config_path=str(_TEST_TASKS / "tidybot-ground-o1.json"))
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
@@ -100,7 +103,6 @@ def test_get_overhead_kinematic2ds():
 
 def test_plot_overhead_scene():
     """Tests for plot_overhead_scene()."""
-
     env = TidyBot3DEnv(
         task_config_path=str(_TEST_TASKS / "tidybot-ground-o3.json"),
         render_mode="rgb_array",
@@ -129,7 +131,6 @@ def test_plot_overhead_scene():
 
 def test_run_base_motion_planning():
     """Tests for run_base_motion_planning()."""
-
     env = kinder.make("kinder/Shelf3D-o1-v0", render_mode="rgb_array")
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     obs, _ = env.reset(seed=123)
@@ -234,3 +235,101 @@ def test_run_base_motion_planning():
     # outfile = "base_motion_planning.mp4"
     # iio.mimsave(outfile, imgs)
     # print(f"Wrote out to {outfile}")
+
+
+def test_run_base_motion_planning_avoids_obstacles():
+    """Tests that run_base_motion_planning() avoids scene obstacles."""
+    env = kinder.make("kinder/Shelf3D-o1-v0", render_mode="rgb_array")
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    obs, _ = env.reset(seed=123)
+    state = env.observation_space.devectorize(obs)
+    robot = _get_robot_from_state(state)
+
+    # cube1 sits directly between the robot's start pose and this target, so a
+    # straight-line path would drive right through it.
+    target_base_pose = SE2(1.0, 0.17, 0.0)
+    x_bounds = (-1.5, 1.5)
+    y_bounds = (-1.5, 1.5)
+    seed = 123
+    base_motion_plan = run_base_motion_planning(
+        state,
+        target_base_pose,
+        x_bounds,
+        y_bounds,
+        seed,
+        extend_xy_magnitude=0.05,
+        extend_rot_magnitude=np.pi / 2,
+    )
+
+    assert base_motion_plan is not None
+
+    geoms = get_overhead_kinematic2ds(state)
+    cube_geom = geoms["cube1"]
+    robot_width, robot_height, _ = get_bounding_box(state, robot)
+    for pose in base_motion_plan:
+        robot_geom = Rectangle.from_center(
+            pose.x,
+            pose.y,
+            robot_width,
+            robot_height,
+            rotation_about_center=pose.theta(),
+        )
+        assert not geom2ds_intersect(robot_geom, cube_geom)
+
+
+def test_wrap_arm_joint_difference_leaves_an_unambiguous_difference_alone():
+    """Anything inside a half turn comes back bit-identical, limited joints included.
+
+    The guard exists to correct a wrong 2*pi representative, not to re-derive a
+    difference that was already fine, so an ordinary difference must survive it
+    untouched -- otherwise every motion already measured would shift in its last bits.
+    """
+    difference = np.array([0.3, -3.0, 0.05, 2.6, -1.4, 2.2, 3.1])
+    wrapped = wrap_arm_joint_difference(difference)
+    assert np.array_equal(wrapped, difference)
+
+
+def test_wrap_arm_joint_difference_routes_a_continuous_joint_the_short_way():
+    """A whole turn on a continuous joint is no motion at all."""
+    difference = np.zeros(7)
+    for index in CIRCULAR_ARM_JOINT_INDICES:
+        difference[index] = 2 * np.pi
+    wrapped = wrap_arm_joint_difference(difference)
+    assert np.allclose(wrapped, 0.0, atol=1e-9)
+
+
+def test_wrap_arm_joint_difference_leaves_a_limited_joint_a_whole_turn_alone():
+    """Only the continuous joints are ambiguous.
+
+    A limited joint cannot reach the same pose two ways, so a large difference there is
+    real travel and wrapping it would silently ask for a different pose.
+    """
+    difference = np.zeros(7)
+    limited = [i for i in range(7) if i not in CIRCULAR_ARM_JOINT_INDICES]
+    for index in limited:
+        difference[index] = 2 * np.pi
+    wrapped = wrap_arm_joint_difference(difference)
+    assert np.array_equal(wrapped, difference)
+
+
+def test_the_circular_arm_joints_are_the_ones_the_robot_reports():
+    """CIRCULAR_ARM_JOINT_INDICES is a constant because two callers have no robot to
+    ask.
+
+    This is what stops it going quietly wrong: PyBullet's own joint info is the
+    authority, and a different arm fails here rather than inside a rollout.
+    """
+    env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    sim = PyBulletSim(state)
+    joint_infos = get_joint_infos(
+        sim.robot.robot_id, sim.robot.arm_joints, sim.robot.physics_client_id
+    )
+    reported = tuple(
+        index for index, info in enumerate(joint_infos[:7]) if info.is_circular
+    )
+    assert reported == CIRCULAR_ARM_JOINT_INDICES
+    sim.close()
+    env.close()

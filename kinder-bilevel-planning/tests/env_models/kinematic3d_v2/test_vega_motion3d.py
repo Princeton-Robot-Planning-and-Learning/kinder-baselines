@@ -1,27 +1,40 @@
-"""Tests for motion3d.py."""
+"""Tests for vega_motion3d.py."""
 
 import kinder
+import pytest
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 
 from kinder_bilevel_planning.agent import BilevelPlanningAgent
 from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
+# VegaMotion3D needs prpl_kinematics, which is an optional extra of both kindergarden and
+# this package. Skip the module rather than fail collection when it is not installed.
+pytest.importorskip("kinder.envs.kinematic3d_v2.vega_motion3d")
+pytest.importorskip("kinder_models.kinematic3d_v2.vega_motion3d.parameterized_skills")
+
 kinder.register_all_environments()
 
 
-def test_motion3d_bilevel_planning():
-    """Tests for bilevel planning in the Motion3D environment."""
+@pytest.mark.parametrize("prefer_ompl", [True, False])
+def test_vega_motion3d_bilevel_planning(prefer_ompl):
+    """Tests for bilevel planning in the VegaMotion3D environment.
 
-    env = kinder.make("kinder/Motion3D-v0", render_mode="rgb_array")
+    Parameterized over both planners so the BiRRT fallback is covered even when ompl is
+    installed.
+    """
+    env = kinder.make("kinder/VegaMotion3D-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
-        env = RecordVideo(env, "unit_test_videos", name_prefix="Motion3D-bilevel")
+        env = RecordVideo(
+            env, "unit_test_videos", name_prefix=f"VegaMotion3D-bilevel-{prefer_ompl}"
+        )
 
     env_models = create_bilevel_planning_models(
-        "motion3d",
+        "vega_motion3d",
         env.observation_space,
         env.action_space,
+        prefer_ompl=prefer_ompl,
     )
     agent = BilevelPlanningAgent(
         env_models,
@@ -45,5 +58,7 @@ def test_motion3d_bilevel_planning():
 
     else:
         assert False, "Did not terminate successfully"
+
+    assert terminated, "Episode truncated rather than reaching the goal"
 
     env.close()
