@@ -412,9 +412,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--gif-dir",
-        type=str,
-        default=None,
-        help=f"Directory to write the GIF into (default: {DEFAULT_GIF_DIR}).",
+        type=Path,
+        default=DEFAULT_GIF_DIR,
+        help="Directory to write the GIF into (default: %(default)s).",
     )
     args = parser.parse_args()
     gif_path = (
