@@ -37,7 +37,7 @@ python -m kinder_pddlstream_planning.motion2d.run --num-passages 3 --seed 0
 python -m kinder_pddlstream_planning.packing3d.run --num-parts 2 --seed 0
 ```
 
-All run scripts take `--gif-path` to record the rollout, which is written even when planning or execution fails.
+All run scripts take `--save-gif` to record the rollout, which is written even when planning or execution fails. It goes to `--gif-dir`, which defaults to this package's `outputs/`, as `<environment>_<variant>.gif`.
 
 ## Running CI Checks
 
