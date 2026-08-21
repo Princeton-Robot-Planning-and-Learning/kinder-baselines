@@ -38,7 +38,12 @@ from kinder_pddlstream_planning.motion2d.stream import (
     sample_region,
     test_connected,
 )
-from kinder_pddlstream_planning.rendering import render_frame, save_gif
+from kinder_pddlstream_planning.rendering import (
+    DEFAULT_GIF_DIR,
+    gif_output_path,
+    render_frame,
+    save_gif,
+)
 
 _HERE = Path(__file__).parent
 DOMAIN_PDDL = read(str(_HERE / "domain.pddl"))
@@ -200,19 +205,29 @@ def main() -> None:
     parser.add_argument("--num-attempts", type=int, default=10)
     parser.add_argument("--num-iters", type=int, default=200)
     parser.add_argument(
-        "--gif-path",
+        "--save-gif",
+        action="store_true",
+        help="Save a GIF of the rollout (default: off).",
+    )
+    parser.add_argument(
+        "--gif-dir",
         type=str,
         default=None,
-        help="If set, save a GIF of the rollout to this path.",
+        help=f"Directory to write the GIF into (default: {DEFAULT_GIF_DIR}).",
     )
     args = parser.parse_args()
+    gif_path = (
+        gif_output_path("motion2d", f"p{args.num_passages}", args.gif_dir)
+        if args.save_gif
+        else None
+    )
     success = solve_and_execute(
         num_passages=args.num_passages,
         seed=args.seed,
         max_time=args.max_time,
         num_attempts=args.num_attempts,
         num_iters=args.num_iters,
-        gif_path=args.gif_path,
+        gif_path=gif_path,
         verbose=True,
     )
     print(f"Reached target: {success}")
