@@ -46,7 +46,12 @@ from kinder_pddlstream_planning.packing3d.stream import (
     test_cfree_pose_pose,
     test_cfree_traj_pose,
 )
-from kinder_pddlstream_planning.rendering import render_frame, save_gif
+from kinder_pddlstream_planning.rendering import (
+    DEFAULT_GIF_DIR,
+    gif_output_path,
+    render_frame,
+    save_gif,
+)
 
 _HERE = Path(__file__).parent
 DOMAIN_PDDL = read(str(_HERE / "domain.pddl"))
@@ -356,7 +361,7 @@ def solve_and_execute(
     num_parts: int = 2,
     seed: int = 0,
     max_time: float = 60.0,
-    use_gui: bool = True,
+    use_gui: bool = False,
     verbose: bool = False,
     gif_path: str | Path | None = None,
     **problem_kwargs,
@@ -397,23 +402,32 @@ def main() -> None:
     parser.add_argument("--max-time", type=float, default=200.0)
     parser.add_argument(
         "--use-gui",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Show the PyBullet GUI (default: on).",
+        action="store_true",
+        help="Show the PyBullet GUI (default: off).",
     )
     parser.add_argument(
-        "--gif-path",
-        type=str,
-        default=None,
-        help="If set, save a GIF of the rollout to this path.",
+        "--save-gif",
+        action="store_true",
+        help="Save a GIF of the rollout (default: off).",
+    )
+    parser.add_argument(
+        "--gif-dir",
+        type=Path,
+        default=DEFAULT_GIF_DIR,
+        help="Directory to write the GIF into (default: %(default)s).",
     )
     args = parser.parse_args()
+    gif_path = (
+        gif_output_path("packing3d", f"p{args.num_parts}", args.gif_dir)
+        if args.save_gif
+        else None
+    )
     success = solve_and_execute(
         num_parts=args.num_parts,
         seed=args.seed,
         max_time=args.max_time,
         use_gui=args.use_gui,
-        gif_path=args.gif_path,
+        gif_path=gif_path,
         verbose=True,
     )
     print(f"Reached goal: {success}")
