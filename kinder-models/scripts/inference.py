@@ -212,7 +212,7 @@ def run_inference(
                 or "StickButton2D" in env_name
             ):
                 target_object_key = "target_agent"
-            elif "Shelf3D" in env_name or "Ground3D" in env_name:
+            elif "Shelf3D" in env_name:
                 target_object_key = f"cube{num_cubes - 1}"
             elif "Transport3D" in env_name:
                 target_object_key = "box0"
@@ -223,8 +223,6 @@ def run_inference(
                 or "Sweep" in env_name
                 or "Shelf3D" in env_name
             ):
-                target_object_key = "target"
-            elif "Motion3D" in env_name:
                 target_object_key = "target"
             elif "Obstruction3D" in env_name:
                 target_object_key = "target_block"

@@ -54,6 +54,7 @@ def _save_demo(
     print(f"\nSaved demo to {save_path}")
     return save_path
 
+
 kinder.register_all_environments()
 
 
