@@ -8,6 +8,19 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+DEFAULT_GIF_DIR = Path(__file__).parents[2] / "outputs"
+
+
+def gif_output_path(
+    env_name: str, variant_name: str, gif_dir: str | Path | None = None
+) -> Path:
+    """Where one run's GIF goes: `<gif_dir>/<env_name>_<variant_name>.gif`.
+
+    `gif_dir` of None means `DEFAULT_GIF_DIR`, the package's own outputs directory.
+    """
+    directory = DEFAULT_GIF_DIR if gif_dir is None else Path(gif_dir)
+    return directory / f"{env_name}_{variant_name}.gif"
+
 
 def render_frame(sim: Any) -> NDArray[np.uint8]:
     """Render one RGB frame of the environment."""
