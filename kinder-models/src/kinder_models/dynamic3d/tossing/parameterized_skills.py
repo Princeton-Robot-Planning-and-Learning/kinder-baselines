@@ -1,6 +1,7 @@
 """Parameterized skills for the TidyBot3D tossing environment."""
 
 import enum
+import logging
 from typing import Any
 
 import numpy as np
@@ -67,6 +68,8 @@ from kinder_models.dynamic3d.utils import (
     upright_grasp_rotations,
     wrap_arm_joint_difference,
 )
+
+logger = logging.getLogger(__name__)
 
 # Per-joint motion between consecutive control steps below which the arm counts as
 # stopped. A stand-in for joint velocity, which the state does not expose for the arm.
@@ -997,6 +1000,12 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 plan, self._pybullet_sim.robot, max_distance=0.2
             )
 
+        logger.debug(
+            "PickCubeController.reset: cube=%s plan_lengths=%s",
+            cube_pose,
+            {name.name: (None if p is None else len(p)) for name, p in self.plans.items()},
+        )
+
     def step(self) -> Array:
         if self.current_phase == self.PickCubeControllerPhase.OPEN_GRIPPER:
             return self._step_open_gripper()
@@ -1098,11 +1107,36 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         # cannot see it.
         action[3:10] = kp * wrap_arm_joint_difference(target - curr)
         action[-1] = self._get_current_robot_gripper_pose()
-        if idx >= len(plan) - 1 and self._robot_is_close_to_conf(target_waypoint):
+        # Final-waypoint handoff uses ARM_FINAL_CONF_TOLERANCE (tight) and requires
+        # the arm to have actually stopped moving, not just WAYPOINT_TOLERANCE
+        # (the loose intermediate pass-through band) -- see that constant's own
+        # comment: handing off at 4e-2 leaves the grasp ~2.8cm off the cube. This
+        # wires in _robot_arm_has_settled/_record_arm_conf, which previously
+        # existed but were never called from here.
+        at_final_waypoint = idx >= len(plan) - 1 and self._robot_is_close_to_conf(
+            target_waypoint, atol=ARM_FINAL_CONF_TOLERANCE
+        )
+        if at_final_waypoint and self._robot_arm_has_settled():
             if next_phase is not None:
+                logger.debug(
+                    "PickCubeController: %s -> %s (waypoint %d/%d, settled)",
+                    phase.name, next_phase.name, idx, len(plan) - 1,
+                )
                 self.current_phase = next_phase
             else:
+                logger.debug(
+                    "PickCubeController: %s -> lifted=True (waypoint %d/%d, settled)",
+                    phase.name, idx, len(plan) - 1,
+                )
                 self._lifted = True
+        elif at_final_waypoint:
+            # At the final waypoint's position tolerance but still moving --
+            # this is exactly the state the settling gate exists to catch.
+            logger.debug(
+                "PickCubeController: %s at final waypoint %d/%d but not settled yet",
+                phase.name, idx, len(plan) - 1,
+            )
+        self._record_arm_conf(curr)
         return action
 
     def _step_close_gripper(self) -> Array:
