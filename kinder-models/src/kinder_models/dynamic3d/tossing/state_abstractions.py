@@ -7,6 +7,8 @@ toss past it is irreversible.
 TODO: only Tossing3D-o1 is supported; no operator says which cube a throw is aimed at.
 """
 
+import logging
+
 import numpy as np
 from bilevel_planning.structs import (
     RelationalAbstractGoal,
@@ -28,7 +30,8 @@ from relational_structs import (
 )
 
 from kinder_models.dynamic3d.utils import (
-    END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE,
+    END_EFFECTOR_TO_OBJECT_XY_HOLDING_TOLERANCE,
+    END_EFFECTOR_TO_OBJECT_Z_HOLDING_TOLERANCE,
     GRIPPER_GRASPING_THRESHOLD,
     GRIPPER_OPEN_COMMAND_TOLERANCE,
     MINIMUM_HOLDING_HEIGHT,
@@ -36,6 +39,8 @@ from kinder_models.dynamic3d.utils import (
     PyBulletSim,
     cube_tilt_from_upright,
 )
+
+logger = logging.getLogger(__name__)
 
 # Upstream types cube, bin and barrier alike, so names state the type, not the subset.
 MovableInGoalRegion = Predicate("MovableInGoalRegion", [MujocoMovableObjectType])
@@ -84,13 +89,20 @@ class Tossing3DStateAbstractor:
         cubes = self._get_cubes(state)
         barriers = [o for o in movables if o.name == BARRIER_NAME]
 
-        if self._check_gripper_open(state, robot):
+        # HandEmpty needs Holding computed first: it is "gripper commanded open AND
+        # not holding anything", not the command alone. The command-only version let
+        # a gripper that closed on nothing (Holding False) still read as "not
+        # empty", which made HandEmpty AND Holding both false at once -- a real dead
+        # end, since ask_for_reset_cube_bin_only's only precondition is HandEmpty,
+        # so a robot stuck this way couldn't even ask for help.
+        holding = {cube: self._check_holding(state, robot, cube) for cube in cubes}
+        if self._check_gripper_open(state, robot) and not any(holding.values()):
             atoms.add(GroundAtom(HandEmpty, [robot]))
 
         for cube in cubes:
             if self._check_on_ground(state, cube):
                 atoms.add(GroundAtom(OnGround, [cube]))
-            if self._check_holding(state, robot, cube):
+            if holding[cube]:
                 atoms.add(GroundAtom(Holding, [robot, cube]))
             if self._check_in_goal_region(state, cube):
                 atoms.add(GroundAtom(MovableInGoalRegion, [cube]))
@@ -147,21 +159,49 @@ class Tossing3DStateAbstractor:
     def _check_holding(
         self, state: ObjectCentricState, robot: Object, movable: Object
     ) -> bool:
-        """Whether the gripper is closed on this movable and lifting it."""
+        """Whether the gripper is closed on this movable and lifting it.
+
+        Per-axis tolerance rather than one shared scalar for x, y and z. The
+        original single-tolerance check conflated planar alignment (empirically
+        <1cm in this domain) with a real, roughly constant vertical TCP-to-cube-
+        center offset that comes from the grasp geometry itself -- one shared
+        tolerance for both meant z was a frequent, hard-to-tune near-miss
+        (measured: dz=0.0610 against a 0.0600 tolerance, 1mm over, with dx/dy
+        both under 0.01 the same tick). A PyBullet finger-contact query was tried
+        first as the physically-correct alternative, but PyBulletSim.set_state()
+        hardcodes the gripper/finger joints to 0.0 regardless of the real
+        pos_gripper command -- that sim was only ever built for arm motion
+        planning, so its fingers never actually close, and no query against it
+        can see a real grasp. Fixing that requires restoring real per-joint
+        gripper state (kindergarden PR #162, unmerged), which is real, separate
+        follow-up work -- not done here."""
         z = state.get(movable, "z")
-        if (
-            state.get(robot, "pos_gripper") <= GRIPPER_GRASPING_THRESHOLD
-            or z <= MINIMUM_HOLDING_HEIGHT
-        ):
+        pos_gripper = state.get(robot, "pos_gripper")
+        if pos_gripper <= GRIPPER_GRASPING_THRESHOLD or z <= MINIMUM_HOLDING_HEIGHT:
+            logger.debug(
+                "_check_holding: %s FALSE (gate) pos_gripper=%.4f (threshold=%.4f) z=%.4f "
+                "(min_height=%.4f)",
+                movable.name, pos_gripper, GRIPPER_GRASPING_THRESHOLD, z, MINIMUM_HOLDING_HEIGHT,
+            )
             return False
         ee_pose = self._pybullet_sim.get_ee_pose()
-        return bool(
-            abs(ee_pose.position[0] - state.get(movable, "x"))
-            < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
-            and abs(ee_pose.position[1] - state.get(movable, "y"))
-            < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
-            and abs(ee_pose.position[2] - z) < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
+        cube_x, cube_y = state.get(movable, "x"), state.get(movable, "y")
+        dx = abs(ee_pose.position[0] - cube_x)
+        dy = abs(ee_pose.position[1] - cube_y)
+        dz = abs(ee_pose.position[2] - z)
+        result = bool(
+            dx < END_EFFECTOR_TO_OBJECT_XY_HOLDING_TOLERANCE
+            and dy < END_EFFECTOR_TO_OBJECT_XY_HOLDING_TOLERANCE
+            and dz < END_EFFECTOR_TO_OBJECT_Z_HOLDING_TOLERANCE
         )
+        logger.debug(
+            "_check_holding: %s %s ee_pose=(%.4f,%.4f,%.4f) cube=(%.4f,%.4f,%.4f) "
+            "delta=(%.4f,%.4f,%.4f) xy_tolerance=%.4f z_tolerance=%.4f",
+            movable.name, result, ee_pose.position[0], ee_pose.position[1], ee_pose.position[2],
+            cube_x, cube_y, z, dx, dy, dz,
+            END_EFFECTOR_TO_OBJECT_XY_HOLDING_TOLERANCE, END_EFFECTOR_TO_OBJECT_Z_HOLDING_TOLERANCE,
+        )
+        return result
 
     @staticmethod
     def _check_is_down_x(
