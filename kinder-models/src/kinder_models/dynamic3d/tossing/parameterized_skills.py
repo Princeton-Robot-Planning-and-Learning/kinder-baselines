@@ -863,6 +863,12 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         target_base_pose = get_target_robot_pose_from_parameters(
             cube_pose, self.TARGET_DISTANCE, self.TARGET_ROTATION
         )
+        robot = self.objects[0]
+        pick_base_motion_start = (
+            float(x.get(robot, "pos_base_x")),
+            float(x.get(robot, "pos_base_y")),
+            float(x.get(robot, "pos_base_rot")),
+        )
         self.plans[self.PickCubeControllerPhase.BASE_MOTION] = run_base_motion_planning(
             state=x,
             target_base_pose=target_base_pose,
@@ -871,8 +877,37 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             seed=0,  # To make this effectively deterministic
             extend_xy_magnitude=extend_xy_magnitude,
             extend_rot_magnitude=extend_rot_magnitude,
+            # The standoff this plans to is only TARGET_DISTANCE=0.55m from the
+            # cube, and the robot's own 0.5x0.5m footprint means any start pose
+            # within ~0.25-0.35m of the cube already overlaps it -- without this,
+            # a robot that ends up parked near the cube (e.g. after an earlier
+            # dispatch's own base motion happened to land it there) has a start
+            # pose already in collision, which no path can escape. Mirrors
+            # MoveToTossLocationAndTossController._plan_base_motion's own
+            # disable_collision_objects=[target] for the identical reason: "The
+            # robot's own cargo would otherwise reject every base plan."
+            disable_collision_objects=[cube_to_pick_up.name],
         )
-        assert self.plans[self.PickCubeControllerPhase.BASE_MOTION] is not None
+        if self.plans[self.PickCubeControllerPhase.BASE_MOTION] is None:
+            logger.debug(
+                "PICK_BASE_MOTION_PLAN result=FAIL start=(%.4f,%.4f,%.4f) "
+                "target=(%.4f,%.4f,%.4f) cube_pose_xy=(%.4f,%.4f)",
+                pick_base_motion_start[0], pick_base_motion_start[1], pick_base_motion_start[2],
+                target_base_pose.x, target_base_pose.y, target_base_pose.theta(),
+                cube_pose.x, cube_pose.y,
+            )
+        else:
+            logger.debug(
+                "PICK_BASE_MOTION_PLAN result=OK start=(%.4f,%.4f,%.4f) "
+                "target=(%.4f,%.4f,%.4f) cube_pose_xy=(%.4f,%.4f)",
+                pick_base_motion_start[0], pick_base_motion_start[1], pick_base_motion_start[2],
+                target_base_pose.x, target_base_pose.y, target_base_pose.theta(),
+                cube_pose.x, cube_pose.y,
+            )
+        assert self.plans[self.PickCubeControllerPhase.BASE_MOTION] is not None, (
+            f"Motion planning failed at BASE_MOTION, start={pick_base_motion_start}, "
+            f"target=({target_base_pose.x},{target_base_pose.y},{target_base_pose.theta()})"
+        )
 
         # MOVE_ARM_TO_HOVER_OVER_CUBE planning
         # Get the last state from the BASE_MOTION plan so that next steps can build on it
@@ -1019,6 +1054,14 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         )
 
     def step(self) -> Array:
+        if getattr(self, "_last_logged_phase", None) != self.current_phase:
+            logger.debug(
+                "PickCubeController: PHASE_ENTER %s (gripper=%.4f closed_gripper=%s)",
+                self.current_phase.name,
+                self._get_current_robot_gripper_pose(),
+                self._closed_gripper,
+            )
+            self._last_logged_phase = self.current_phase
         if self.current_phase == self.PickCubeControllerPhase.OPEN_GRIPPER:
             return self._step_open_gripper()
         if self.current_phase == self.PickCubeControllerPhase.BASE_MOTION:
@@ -1136,11 +1179,27 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             if next_phase is not None:
                 self.current_phase = next_phase
             else:
+                logger.debug(
+                    "PickCubeController: LIFT_CUBE_TO_HOME reached its final waypoint -- "
+                    "_lifted=True (dispatch terminates; this is a motion-completion flag, "
+                    "not confirmation the cube is actually held)"
+                )
                 self._lifted = True
         elif self._stall_ticks[phase] > STALL_REPLAN_PATIENCE:
+            assert self._pybullet_sim is not None
+            # get_joint_distance needs the FULL conf (matching joint_infos/weights),
+            # not the 7-element slice used for the action computation above.
+            dist_to_target = self._pybullet_sim.get_joint_distance(
+                self._get_current_robot_arm_conf(), list(target_waypoint)
+            )
+            per_joint_diff = wrap_arm_joint_difference(target - curr)
             logger.debug(
-                "PickCubeController: %s stalled at waypoint %d/%d for %d ticks -- replanning",
+                "PickCubeController: %s stalled at waypoint %d/%d for %d ticks -- replanning "
+                "dist_to_target=%.5f (WAYPOINT_TOLERANCE=%.5f) curr=%s target=%s per_joint_diff=%s",
                 phase.name, idx, len(plan) - 1, self._stall_ticks[phase],
+                dist_to_target, WAYPOINT_TOLERANCE,
+                np.array2string(curr, precision=4), np.array2string(target, precision=4),
+                np.array2string(per_joint_diff, precision=4),
             )
             self._replan_phase_from_current_state(phase)
             self._stall_ticks[phase] = 0
@@ -1181,8 +1240,22 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             # right now. Leave the stalled plan in place; the watchdog will try
             # again after another STALL_REPLAN_PATIENCE ticks rather than looping
             # this every tick.
-            logger.debug("PickCubeController: replan for %s failed (no plan found)", phase.name)
+            logger.debug(
+                "PickCubeController: replan for %s failed (no plan found) "
+                "current_conf=%s target_conf=%s",
+                phase.name,
+                np.array2string(np.array(current_conf[:7]), precision=4),
+                np.array2string(np.array(target_conf[:7]), precision=4),
+            )
             return
+        logger.debug(
+            "PickCubeController: replan for %s SUCCEEDED new_plan_len=%d "
+            "current_conf=%s target_conf=%s new_plan[-1]=%s",
+            phase.name, len(new_plan),
+            np.array2string(np.array(current_conf[:7]), precision=4),
+            np.array2string(np.array(target_conf[:7]), precision=4),
+            np.array2string(np.array(new_plan[-1][:7]), precision=4),
+        )
         self.plans[phase] = remap_joint_position_plan_to_constant_distance(
             new_plan, self._pybullet_sim.robot, max_distance=0.2
         )
@@ -1194,6 +1267,12 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             self._last_gripper_state,
             atol=0.02,
         ):
+            logger.debug(
+                "PickCubeController: gripper stabilized at %.4f (last=%.4f) -- "
+                "transitioning to LIFT_CUBE_TO_HOME (this does NOT confirm the cube "
+                "is actually grasped, only that the gripper motor stopped moving)",
+                self._get_current_robot_gripper_pose(), self._last_gripper_state,
+            )
             self._closed_gripper = True
             self.current_phase = self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME
         action = np.zeros(11, dtype=np.float32)
@@ -1328,6 +1407,11 @@ class MoveToTossLocationAndTossController(
         BASE_MOTION = enum.auto()
         WINDUP = enum.auto()
         SWING = enum.auto()
+        # Experimental (Josh's request): return the arm to a fixed retract
+        # configuration after the swing, so the NEXT PickCube dispatch's
+        # MOVE_ARM_TO_HOVER_OVER_CUBE plans from a known-good starting pose
+        # instead of wherever the release left the arm.
+        RETURN_HOME = enum.auto()
 
     # Where a throw is possible; the upper part does not score.
     TARGET_DISTANCE_BOUNDS = (1.25, 1.45)
@@ -1375,6 +1459,13 @@ class MoveToTossLocationAndTossController(
         self._swing: TossSwing | None = None
         self._swing_step_idx: int = 0
         self._has_released: bool = False
+
+        # Experimental RETURN_HOME phase: same retract configuration
+        # PickCubeController.home_joints uses, so a post-toss arm and a
+        # post-lift arm land in the same known pose.
+        self._return_home_arm_config = np.deg2rad(
+            [0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0]
+        )
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         del x  # not used
@@ -1431,8 +1522,26 @@ class MoveToTossLocationAndTossController(
             disable_collision_objects = [self.objects[1].name]
         target_object = x.get_object_from_name("bin_0")
         target_object_pose = get_overhead_object_se2_pose(x, target_object)
+        logger.debug(
+            "TOSS_BIN_POSE bin=(%.6f,%.6f,%.6f) raw_quat=(%.6f,%.6f,%.6f,%.6f)",
+            target_object_pose.x, target_object_pose.y, target_object_pose.theta(),
+            float(x.get(target_object, "qw")), float(x.get(target_object, "qx")),
+            float(x.get(target_object, "qy")), float(x.get(target_object, "qz")),
+        )
         target_base_pose = get_target_robot_pose_from_parameters(
             target_object_pose, current_params[0], current_params[1]
+        )
+        robot_obj = self.objects[0]
+        held_obj = self.objects[2]
+        start_pose = (
+            float(x.get(robot_obj, "pos_base_x")),
+            float(x.get(robot_obj, "pos_base_y")),
+            float(x.get(robot_obj, "pos_base_rot")),
+        )
+        cube_pos = (
+            float(x.get(held_obj, "x")),
+            float(x.get(held_obj, "y")),
+            float(x.get(held_obj, "z")),
         )
         base_motion_plan = run_base_motion_planning(
             state=x,
@@ -1445,7 +1554,25 @@ class MoveToTossLocationAndTossController(
             disable_collision_objects=disable_collision_objects,
         )
         if base_motion_plan is None:
+            logger.debug(
+                "TOSS_BASE_PLAN result=FAIL start=(%.4f,%.4f,%.4f) "
+                "target=(%.4f,%.4f,%.4f) cube=(%.4f,%.4f,%.4f) distance=%.4f rotation=%.4f "
+                "x_bounds=%s y_bounds=%s",
+                start_pose[0], start_pose[1], start_pose[2],
+                target_base_pose.x, target_base_pose.y, target_base_pose.theta(),
+                cube_pos[0], cube_pos[1], cube_pos[2],
+                current_params[0], current_params[1],
+                WORLD_X_BOUNDS, WORLD_Y_BOUNDS,
+            )
             raise TrajectorySamplingFailure("Base motion planning failed")
+        logger.debug(
+            "TOSS_BASE_PLAN result=OK start=(%.4f,%.4f,%.4f) "
+            "target=(%.4f,%.4f,%.4f) cube=(%.4f,%.4f,%.4f) distance=%.4f rotation=%.4f",
+            start_pose[0], start_pose[1], start_pose[2],
+            target_base_pose.x, target_base_pose.y, target_base_pose.theta(),
+            cube_pos[0], cube_pos[1], cube_pos[2],
+            current_params[0], current_params[1],
+        )
         return base_motion_plan
 
     def _plan_arm_toss(self, x: ObjectCentricState, final_base_pose: SE2) -> None:
@@ -1470,7 +1597,9 @@ class MoveToTossLocationAndTossController(
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
         if windup_plan is None:
+            logger.debug("MoveToTossLocationAndToss: windup motion planning FAILED")
             raise TrajectorySamplingFailure("Motion planning failed")
+        logger.debug("MoveToTossLocationAndToss: windup motion planning ok")
         windup_start = np.array(self._get_current_robot_arm_conf()[:7])
         self._windup_trajectory, self._windup_dir = _compute_per_joint_profile(
             windup_start,
@@ -1492,7 +1621,9 @@ class MoveToTossLocationAndTossController(
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
         if swing_plan is None:
+            logger.debug("MoveToTossLocationAndToss: swing motion planning FAILED")
             raise TrajectorySamplingFailure("Motion planning failed")
+        logger.debug("MoveToTossLocationAndToss: swing motion planning ok")
         self._swing = plan_toss_swing(
             swing_plan,
             windup_plan[-1],
@@ -1501,9 +1632,12 @@ class MoveToTossLocationAndTossController(
         )
 
     def terminated(self) -> bool:
-        return self._swing is not None and self._swing_step_idx >= len(
-            self._swing.trajectory
-        )
+        if self._phase is not self.MoveToTossLocationAndTossControllerPhase.RETURN_HOME:
+            return False
+        assert self._pybullet_sim is not None
+        curr = self._get_current_robot_arm_conf()
+        dist = self._pybullet_sim.get_joint_distance(curr, list(self._return_home_arm_config))
+        return bool(dist < WAYPOINT_TOLERANCE)
 
     def step(self) -> Array:
         assert self._current_base_motion_plan is not None
@@ -1511,7 +1645,9 @@ class MoveToTossLocationAndTossController(
             return self._action_base_motion()
         if self._phase is self.MoveToTossLocationAndTossControllerPhase.WINDUP:
             return self._action_windup()
-        return self._action_swing()
+        if self._phase is self.MoveToTossLocationAndTossControllerPhase.SWING:
+            return self._action_swing()
+        return self._action_return_home()
 
     def observe(self, x: ObjectCentricState) -> None:
         self._last_state = x
@@ -1568,6 +1704,18 @@ class MoveToTossLocationAndTossController(
         if self._swing_step_idx == self._swing.release_step:
             self._has_released = True
         self._swing_step_idx += 1
+        if self._swing_step_idx >= len(self._swing.trajectory):
+            logger.debug("MoveToTossLocationAndToss: swing done -- entering RETURN_HOME")
+            self._phase = self.MoveToTossLocationAndTossControllerPhase.RETURN_HOME
+        return action
+
+    def _action_return_home(self) -> Array:
+        kp = 2.0
+        curr = np.array(self._get_current_robot_arm_conf()[:7])
+        target = self._return_home_arm_config[:7]
+        action = np.zeros(18, dtype=np.float32)
+        action[3:10] = kp * (target - curr)
+        action[10] = self._get_current_robot_gripper_pose()
         return action
 
     def _get_current_robot_pose(self) -> SE2:
