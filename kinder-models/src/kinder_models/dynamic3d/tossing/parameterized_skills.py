@@ -867,20 +867,11 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             float(x.get(robot, "pos_base_rot")),
         )
 
-        # A cube resting on a face is four-fold symmetric about the vertical for
-        # grasping purposes (see upright_grasp_rotations' own docstring: "a caller
-        # can fall through when the arm cannot reach one"). TARGET_ROTATION=0.0
-        # means the standoff angle is exactly the cube's own yaw with no
-        # adjustment, so which of the four equally-valid approach directions gets
-        # used was, before this, whichever one the cube's measured orientation
-        # happened to produce -- with no regard for whether that direction's
-        # standoff point is on the reachable side of the barrier or not. The
-        # barrier only blocks roughly half the angular range around any given
-        # cube position, so trying each of the four in turn (nearest-yaw first,
-        # upright_grasp_rotations' own ordering) until one's BASE_MOTION plan
-        # succeeds finds a working approach whenever any of the four has one,
-        # instead of failing outright when the nearest-yaw choice happens to
-        # point at the barrier.
+        # A cube is four-fold symmetric for grasping (upright_grasp_rotations
+        # returns all four, nearest-yaw first). Try each until one's BASE_MOTION
+        # plan succeeds -- the barrier only blocks roughly half the angular
+        # range around the cube, so the nearest-yaw approach failing doesn't
+        # mean none of the four can reach it.
         cube_raw_quat = (
             x.get(cube_to_pick_up, "qx"),
             x.get(cube_to_pick_up, "qy"),
@@ -893,10 +884,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         target_base_pose = None
         chosen_grasp_quat = candidate_grasp_quats[0]
         for grasp_quat in candidate_grasp_quats:
-            # These quaternions are pure z-axis rotations by construction
-            # (upright_grasp_rotations always returns (0, 0, sin(a/2), cos(a/2))),
-            # so the yaw is recoverable directly rather than via the general
-            # quaternion-to-yaw formula.
+            # Pure z-axis rotation quaternions, so yaw = 2*atan2(qz, qw).
             candidate_yaw = 2.0 * float(np.arctan2(grasp_quat[2], grasp_quat[3]))
             candidate_cube_pose = SE2(cube_pose.x, cube_pose.y, candidate_yaw)
             candidate_target_base_pose = get_target_robot_pose_from_parameters(
@@ -910,15 +898,10 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 seed=0,  # To make this effectively deterministic
                 extend_xy_magnitude=extend_xy_magnitude,
                 extend_rot_magnitude=extend_rot_magnitude,
-                # The standoff this plans to is only TARGET_DISTANCE=0.55m from the
-                # cube, and the robot's own 0.5x0.5m footprint means any start pose
-                # within ~0.25-0.35m of the cube already overlaps it -- without this,
-                # a robot that ends up parked near the cube (e.g. after an earlier
-                # dispatch's own base motion happened to land it there) has a start
-                # pose already in collision, which no path can escape. Mirrors
-                # MoveToTossLocationAndTossController._plan_base_motion's own
-                # disable_collision_objects=[target] for the identical reason: "The
-                # robot's own cargo would otherwise reject every base plan."
+                # The 0.55m standoff is within the robot's own 0.5x0.5m footprint of
+                # the cube, so a robot already parked nearby would otherwise start in
+                # collision. Mirrors MoveToTossLocationAndTossController's own
+                # disable_collision_objects=[target] for the same reason.
                 disable_collision_objects=[cube_to_pick_up.name],
             )
             if candidate_plan is not None:
@@ -929,32 +912,23 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
 
         self.plans[self.PickCubeControllerPhase.BASE_MOTION] = base_motion_plan
         if base_motion_plan is None:
-            # None of the four succeeded; report against the nearest-yaw one for a
-            # debuggable message, same as what a single-attempt failure used to log.
-            fallback_target = get_target_robot_pose_from_parameters(
-                cube_pose, self.TARGET_DISTANCE, self.TARGET_ROTATION
-            )
             logger.debug(
-                "PICK_BASE_MOTION_PLAN result=FAIL (all %d grasp-symmetric approaches "
-                "tried) start=(%.4f,%.4f,%.4f) nearest_target=(%.4f,%.4f,%.4f) "
-                "cube_pose_xy=(%.4f,%.4f)",
+                "PICK_BASE_MOTION_PLAN result=FAIL cube_pose_xy=(%.4f,%.4f), all %d "
+                "grasp-symmetric approaches tried",
+                cube_pose.x,
+                cube_pose.y,
                 len(candidate_grasp_quats),
-                pick_base_motion_start[0], pick_base_motion_start[1], pick_base_motion_start[2],
-                fallback_target.x, fallback_target.y, fallback_target.theta(),
-                cube_pose.x, cube_pose.y,
             )
         else:
-            assert target_base_pose is not None
             logger.debug(
-                "PICK_BASE_MOTION_PLAN result=OK start=(%.4f,%.4f,%.4f) "
-                "target=(%.4f,%.4f,%.4f) cube_pose_xy=(%.4f,%.4f)",
-                pick_base_motion_start[0], pick_base_motion_start[1], pick_base_motion_start[2],
-                target_base_pose.x, target_base_pose.y, target_base_pose.theta(),
-                cube_pose.x, cube_pose.y,
+                "PICK_BASE_MOTION_PLAN result=OK cube_pose_xy=(%.4f,%.4f)",
+                cube_pose.x,
+                cube_pose.y,
             )
         assert self.plans[self.PickCubeControllerPhase.BASE_MOTION] is not None, (
-            f"Motion planning failed at BASE_MOTION for all {len(candidate_grasp_quats)} "
-            f"grasp-symmetric approaches, start={pick_base_motion_start}"
+            f"Motion planning failed at BASE_MOTION for all "
+            f"{len(candidate_grasp_quats)} grasp-symmetric approaches, "
+            f"start={pick_base_motion_start}"
         )
         assert target_base_pose is not None
 
@@ -1092,21 +1066,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 plan, self._pybullet_sim.robot, max_distance=0.2
             )
 
-        logger.debug(
-            "PickCubeController.reset: cube=%s plan_lengths=%s",
-            cube_pose,
-            {name.name: (None if p is None else len(p)) for name, p in self.plans.items()},
-        )
-
     def step(self) -> Array:
-        if getattr(self, "_last_logged_phase", None) != self.current_phase:
-            logger.debug(
-                "PickCubeController: PHASE_ENTER %s (gripper=%.4f closed_gripper=%s)",
-                self.current_phase.name,
-                self._get_current_robot_gripper_pose(),
-                self._closed_gripper,
-            )
-            self._last_logged_phase = self.current_phase
         if self.current_phase == self.PickCubeControllerPhase.OPEN_GRIPPER:
             return self._step_open_gripper()
         if self.current_phase == self.PickCubeControllerPhase.BASE_MOTION:
@@ -1207,13 +1167,9 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         # cannot see it.
         action[3:10] = kp * wrap_arm_joint_difference(target - curr)
         action[-1] = self._get_current_robot_gripper_pose()
-        # ALTERNATE FIX (comparison run): original WAYPOINT_TOLERANCE-only handoff,
-        # no settling gate -- instead, a stall watchdog replans this phase's
-        # remaining path from the arm's live conf if `idx` (the waypoint being
-        # driven toward -- ANY waypoint, not just the phase's final one; the
-        # original bug this was written for gets stuck at waypoint 0/26, never
-        # even taking its first step) hasn't advanced for STALL_REPLAN_PATIENCE
-        # ticks straight.
+        # Stall watchdog: replan this phase's remaining path from the arm's live
+        # conf if the waypoint index hasn't advanced for STALL_REPLAN_PATIENCE
+        # ticks straight (any waypoint, not just the phase's final one).
         if idx == self._prev_plan_idx.get(phase):
             self._stall_ticks[phase] = self._stall_ticks.get(phase, 0) + 1
         else:
@@ -1224,28 +1180,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             if next_phase is not None:
                 self.current_phase = next_phase
             else:
-                logger.debug(
-                    "PickCubeController: LIFT_CUBE_TO_HOME reached its final waypoint -- "
-                    "_lifted=True (dispatch terminates; this is a motion-completion flag, "
-                    "not confirmation the cube is actually held)"
-                )
                 self._lifted = True
         elif self._stall_ticks[phase] > STALL_REPLAN_PATIENCE:
-            assert self._pybullet_sim is not None
-            # get_joint_distance needs the FULL conf (matching joint_infos/weights),
-            # not the 7-element slice used for the action computation above.
-            dist_to_target = self._pybullet_sim.get_joint_distance(
-                self._get_current_robot_arm_conf(), list(target_waypoint)
-            )
-            per_joint_diff = wrap_arm_joint_difference(target - curr)
-            logger.debug(
-                "PickCubeController: %s stalled at waypoint %d/%d for %d ticks -- replanning "
-                "dist_to_target=%.5f (WAYPOINT_TOLERANCE=%.5f) curr=%s target=%s per_joint_diff=%s",
-                phase.name, idx, len(plan) - 1, self._stall_ticks[phase],
-                dist_to_target, WAYPOINT_TOLERANCE,
-                np.array2string(curr, precision=4), np.array2string(target, precision=4),
-                np.array2string(per_joint_diff, precision=4),
-            )
             self._replan_phase_from_current_state(phase)
             self._stall_ticks[phase] = 0
         return action
@@ -1253,13 +1189,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
     def _replan_phase_from_current_state(
         self, phase: "PickCubeController.PickCubeControllerPhase"
     ) -> None:
-        """Stall recovery: re-run motion planning for `phase`'s remaining path,
-        from the arm's LIVE current conf to the same final target the phase's
-        original plan aimed for (its own last waypoint). Used when the arm has
-        sat at the final waypoint without completing for STALL_REPLAN_PATIENCE
-        ticks straight, which otherwise burns the rest of the step budget with
-        no progress -- see the original bug this was written for: LIFT_CUBE_TO_HOME
-        stuck at waypoint 0/26 for 276 ticks straight."""
+        """Stall recovery: re-run motion planning for `phase`'s remaining path, from
+        the arm's live conf to the same final target its original plan aimed for."""
         assert self._pybullet_sim is not None
         plan = self.plans[phase]
         assert plan is not None and len(plan) > 0
@@ -1274,33 +1205,18 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             self._pybullet_sim.robot,
             current_conf,
             target_conf,
-            collision_bodies=self._pybullet_sim.get_collision_bodies(held_object=held_object),
+            collision_bodies=self._pybullet_sim.get_collision_bodies(
+                held_object=held_object
+            ),
             held_object=held_object,
             base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,
             seed=0,
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
         if new_plan is None:
-            # Genuinely infeasible from the live conf -- nothing a replan can fix
-            # right now. Leave the stalled plan in place; the watchdog will try
-            # again after another STALL_REPLAN_PATIENCE ticks rather than looping
-            # this every tick.
-            logger.debug(
-                "PickCubeController: replan for %s failed (no plan found) "
-                "current_conf=%s target_conf=%s",
-                phase.name,
-                np.array2string(np.array(current_conf[:7]), precision=4),
-                np.array2string(np.array(target_conf[:7]), precision=4),
-            )
+            # Genuinely infeasible from the live conf -- leave the stalled plan in
+            # place; the watchdog retries after another STALL_REPLAN_PATIENCE ticks.
             return
-        logger.debug(
-            "PickCubeController: replan for %s SUCCEEDED new_plan_len=%d "
-            "current_conf=%s target_conf=%s new_plan[-1]=%s",
-            phase.name, len(new_plan),
-            np.array2string(np.array(current_conf[:7]), precision=4),
-            np.array2string(np.array(target_conf[:7]), precision=4),
-            np.array2string(np.array(new_plan[-1][:7]), precision=4),
-        )
         self.plans[phase] = remap_joint_position_plan_to_constant_distance(
             new_plan, self._pybullet_sim.robot, max_distance=0.2
         )
@@ -1312,12 +1228,6 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             self._last_gripper_state,
             atol=0.02,
         ):
-            logger.debug(
-                "PickCubeController: gripper stabilized at %.4f (last=%.4f) -- "
-                "transitioning to LIFT_CUBE_TO_HOME (this does NOT confirm the cube "
-                "is actually grasped, only that the gripper motor stopped moving)",
-                self._get_current_robot_gripper_pose(), self._last_gripper_state,
-            )
             self._closed_gripper = True
             self.current_phase = self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME
         action = np.zeros(11, dtype=np.float32)
@@ -1567,26 +1477,8 @@ class MoveToTossLocationAndTossController(
             disable_collision_objects = [self.objects[1].name]
         target_object = x.get_object_from_name("bin_0")
         target_object_pose = get_overhead_object_se2_pose(x, target_object)
-        logger.debug(
-            "TOSS_BIN_POSE bin=(%.6f,%.6f,%.6f) raw_quat=(%.6f,%.6f,%.6f,%.6f)",
-            target_object_pose.x, target_object_pose.y, target_object_pose.theta(),
-            float(x.get(target_object, "qw")), float(x.get(target_object, "qx")),
-            float(x.get(target_object, "qy")), float(x.get(target_object, "qz")),
-        )
         target_base_pose = get_target_robot_pose_from_parameters(
             target_object_pose, current_params[0], current_params[1]
-        )
-        robot_obj = self.objects[0]
-        held_obj = self.objects[2]
-        start_pose = (
-            float(x.get(robot_obj, "pos_base_x")),
-            float(x.get(robot_obj, "pos_base_y")),
-            float(x.get(robot_obj, "pos_base_rot")),
-        )
-        cube_pos = (
-            float(x.get(held_obj, "x")),
-            float(x.get(held_obj, "y")),
-            float(x.get(held_obj, "z")),
         )
         base_motion_plan = run_base_motion_planning(
             state=x,
@@ -1600,23 +1492,17 @@ class MoveToTossLocationAndTossController(
         )
         if base_motion_plan is None:
             logger.debug(
-                "TOSS_BASE_PLAN result=FAIL start=(%.4f,%.4f,%.4f) "
-                "target=(%.4f,%.4f,%.4f) cube=(%.4f,%.4f,%.4f) distance=%.4f rotation=%.4f "
-                "x_bounds=%s y_bounds=%s",
-                start_pose[0], start_pose[1], start_pose[2],
-                target_base_pose.x, target_base_pose.y, target_base_pose.theta(),
-                cube_pos[0], cube_pos[1], cube_pos[2],
-                current_params[0], current_params[1],
-                WORLD_X_BOUNDS, WORLD_Y_BOUNDS,
+                "TOSS_BASE_PLAN result=FAIL target=(%.4f,%.4f,%.4f)",
+                target_base_pose.x,
+                target_base_pose.y,
+                target_base_pose.theta(),
             )
             raise TrajectorySamplingFailure("Base motion planning failed")
         logger.debug(
-            "TOSS_BASE_PLAN result=OK start=(%.4f,%.4f,%.4f) "
-            "target=(%.4f,%.4f,%.4f) cube=(%.4f,%.4f,%.4f) distance=%.4f rotation=%.4f",
-            start_pose[0], start_pose[1], start_pose[2],
-            target_base_pose.x, target_base_pose.y, target_base_pose.theta(),
-            cube_pos[0], cube_pos[1], cube_pos[2],
-            current_params[0], current_params[1],
+            "TOSS_BASE_PLAN result=OK target=(%.4f,%.4f,%.4f)",
+            target_base_pose.x,
+            target_base_pose.y,
+            target_base_pose.theta(),
         )
         return base_motion_plan
 
@@ -1681,7 +1567,9 @@ class MoveToTossLocationAndTossController(
             return False
         assert self._pybullet_sim is not None
         curr = self._get_current_robot_arm_conf()
-        dist = self._pybullet_sim.get_joint_distance(curr, list(self._return_home_arm_config))
+        dist = self._pybullet_sim.get_joint_distance(
+            curr, list(self._return_home_arm_config)
+        )
         return bool(dist < WAYPOINT_TOLERANCE)
 
     def step(self) -> Array:
@@ -1750,7 +1638,9 @@ class MoveToTossLocationAndTossController(
             self._has_released = True
         self._swing_step_idx += 1
         if self._swing_step_idx >= len(self._swing.trajectory):
-            logger.debug("MoveToTossLocationAndToss: swing done -- entering RETURN_HOME")
+            logger.debug(
+                "MoveToTossLocationAndToss: swing done -- entering RETURN_HOME"
+            )
             self._phase = self.MoveToTossLocationAndTossControllerPhase.RETURN_HOME
         return action
 

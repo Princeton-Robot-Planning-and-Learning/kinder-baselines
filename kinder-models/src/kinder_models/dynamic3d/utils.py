@@ -69,15 +69,12 @@ GRIPPER_OPEN_COMMAND_TOLERANCE = 1e-3
 ON_GROUND_TOLERANCE = 0.05
 GRIPPER_GRASPING_THRESHOLD = 0.1
 MINIMUM_HOLDING_HEIGHT = 0.1
-# Kept for shelf/state_abstractions.py and parameterized_skills.py's motion-planning
-# held-object check -- Tossing3DStateAbstractor._check_holding uses the per-axis
-# tolerances below instead.
+# Kept for other motion-planning held-object checks; Tossing3DStateAbstractor uses
+# the per-axis tolerances below instead.
 END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE = 0.06
-# Tossing3DStateAbstractor._check_holding, split from one shared scalar: planar
-# alignment (x, y) is empirically tight in this domain (<1cm), while the vertical
-# gap has a real, roughly constant TCP-to-cube-center offset from the grasp
-# geometry itself -- one shared tolerance made z a frequent, hard-to-tune near-miss
-# (measured: dz=0.0610 against a 0.0600 tolerance, 1mm over, same tick dx/dy<0.01).
+# Split by axis: planar alignment is tight (<1cm) but the grasp geometry leaves a
+# real, roughly constant vertical TCP-to-cube offset, which made z a frequent
+# near-miss under one shared tolerance.
 END_EFFECTOR_TO_OBJECT_XY_HOLDING_TOLERANCE = 0.02
 END_EFFECTOR_TO_OBJECT_Z_HOLDING_TOLERANCE = 0.08
 
