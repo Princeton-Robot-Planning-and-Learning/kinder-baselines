@@ -148,14 +148,7 @@ class Tossing3DStateAbstractor:
     def _check_holding(
         self, state: ObjectCentricState, robot: Object, movable: Object
     ) -> bool:
-        """Whether the gripper is closed on this movable and lifting it.
-
-        One shared tolerance, not a per-axis split: an 81-point real-grasp A/B
-        sweep found the split (xy=0.02/z=0.08) introduced false negatives a
-        shared 0.06 didn't have, with no rescues, and a separate sweep found
-        0.06 itself never differed from 0.05 in the same data -- neither
-        change earned its complexity.
-        """
+        """Whether the gripper is closed on this movable and lifting it."""
         z = state.get(movable, "z")
         if (
             state.get(robot, "pos_gripper") <= GRIPPER_GRASPING_THRESHOLD
