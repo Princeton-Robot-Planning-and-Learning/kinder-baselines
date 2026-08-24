@@ -998,7 +998,6 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         # MOVE_ARM_TO_HOVER_OVER_CUBE planning
         # Get the last state from the BASE_MOTION plan so that next steps can build on it
         state_after_base_motion = x.copy()
-        robot = self.objects[0]  # robot is the first parameter
         target_base_pose_plan = self.plans[self.PickCubeControllerPhase.BASE_MOTION]
         assert target_base_pose_plan is not None
         target_base_pose = target_base_pose_plan[-1]
@@ -1708,11 +1707,16 @@ class MoveToTossLocationAndTossController(
         return action
 
     def _action_return_home(self) -> Array:
+        # wrap_arm_joint_difference, not a raw subtraction: the retract target holds
+        # joint index 2 at 180 degrees (as does TOSS_WINDUP/RELEASE_ARM_CONFIGURATION
+        # throughout windup/swing/release, so the arm is expected to be right at that
+        # wrap boundary when RETURN_HOME starts), and a raw target-curr can report
+        # ~2*pi of travel between two identical poses across it.
         kp = 2.0
         curr = np.array(self._get_current_robot_arm_conf()[:7])
         target = self._return_home_arm_config[:7]
         action = np.zeros(18, dtype=np.float32)
-        action[3:10] = kp * (target - curr)
+        action[3:10] = kp * wrap_arm_joint_difference(target - curr)
         action[10] = self._get_current_robot_gripper_pose()
         return action
 
