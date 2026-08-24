@@ -1424,10 +1424,9 @@ class MoveToTossLocationAndTossController(
         BASE_MOTION = enum.auto()
         WINDUP = enum.auto()
         SWING = enum.auto()
-        # Experimental (Josh's request): return the arm to a fixed retract
-        # configuration after the swing, so the NEXT PickCube dispatch's
-        # MOVE_ARM_TO_HOVER_OVER_CUBE plans from a known-good starting pose
-        # instead of wherever the release left the arm.
+        # Returns the arm to a fixed retract configuration after the swing, so
+        # the NEXT PickCube dispatch's MOVE_ARM_TO_HOVER_OVER_CUBE plans from a
+        # known-good starting pose instead of wherever the release left the arm.
         RETURN_HOME = enum.auto()
 
     # Where a throw is possible; the upper part does not score.
@@ -1477,7 +1476,7 @@ class MoveToTossLocationAndTossController(
         self._swing_step_idx: int = 0
         self._has_released: bool = False
 
-        # Experimental RETURN_HOME phase: same retract configuration
+        # RETURN_HOME's target: the same retract configuration
         # PickCubeController.home_joints uses, so a post-toss arm and a
         # post-lift arm land in the same known pose.
         self._return_home_arm_config = np.deg2rad(
