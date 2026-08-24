@@ -69,14 +69,7 @@ GRIPPER_OPEN_COMMAND_TOLERANCE = 1e-3
 ON_GROUND_TOLERANCE = 0.05
 GRIPPER_GRASPING_THRESHOLD = 0.1
 MINIMUM_HOLDING_HEIGHT = 0.1
-# Kept for other motion-planning held-object checks; Tossing3DStateAbstractor uses
-# the per-axis tolerances below instead.
-END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE = 0.06
-# Split by axis: planar alignment is tight (<1cm) but the grasp geometry leaves a
-# real, roughly constant vertical TCP-to-cube offset, which made z a frequent
-# near-miss under one shared tolerance.
-END_EFFECTOR_TO_OBJECT_XY_HOLDING_TOLERANCE = 0.02
-END_EFFECTOR_TO_OBJECT_Z_HOLDING_TOLERANCE = 0.08
+END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE = 0.05
 
 # Base navigation sampling bounds.
 MOVE_TO_TARGET_DISTANCE_BOUNDS = (0.5, 0.6)

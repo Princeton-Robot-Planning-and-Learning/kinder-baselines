@@ -28,8 +28,7 @@ from relational_structs import (
 )
 
 from kinder_models.dynamic3d.utils import (
-    END_EFFECTOR_TO_OBJECT_XY_HOLDING_TOLERANCE,
-    END_EFFECTOR_TO_OBJECT_Z_HOLDING_TOLERANCE,
+    END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE,
     GRIPPER_GRASPING_THRESHOLD,
     GRIPPER_OPEN_COMMAND_TOLERANCE,
     MINIMUM_HOLDING_HEIGHT,
@@ -151,27 +150,25 @@ class Tossing3DStateAbstractor:
     ) -> bool:
         """Whether the gripper is closed on this movable and lifting it.
 
-        Per-axis tolerance rather than one shared scalar: planar alignment is
-        empirically <1cm in this domain, but the grasp geometry leaves a real,
-        roughly constant vertical TCP-to-cube-center offset, so a shared
-        tolerance made z a frequent near-miss even with dx/dy well within
-        bounds. A PyBullet finger-contact query would be the physically-correct
-        check, but PyBulletSim.set_state() hardcodes the finger joints to 0.0
-        (that sim is built for arm motion planning only), so it can't see a
-        real grasp -- fixing that needs kindergarden PR #162 (unmerged).
+        One shared tolerance, not a per-axis split: an 81-point real-grasp A/B
+        sweep found the split (xy=0.02/z=0.08) introduced false negatives a
+        shared 0.06 didn't have, with no rescues, and a separate sweep found
+        0.06 itself never differed from 0.05 in the same data -- neither
+        change earned its complexity.
         """
         z = state.get(movable, "z")
-        pos_gripper = state.get(robot, "pos_gripper")
-        if pos_gripper <= GRIPPER_GRASPING_THRESHOLD or z <= MINIMUM_HOLDING_HEIGHT:
+        if (
+            state.get(robot, "pos_gripper") <= GRIPPER_GRASPING_THRESHOLD
+            or z <= MINIMUM_HOLDING_HEIGHT
+        ):
             return False
         ee_pose = self._pybullet_sim.get_ee_pose()
-        dx = abs(ee_pose.position[0] - state.get(movable, "x"))
-        dy = abs(ee_pose.position[1] - state.get(movable, "y"))
-        dz = abs(ee_pose.position[2] - z)
         return bool(
-            dx < END_EFFECTOR_TO_OBJECT_XY_HOLDING_TOLERANCE
-            and dy < END_EFFECTOR_TO_OBJECT_XY_HOLDING_TOLERANCE
-            and dz < END_EFFECTOR_TO_OBJECT_Z_HOLDING_TOLERANCE
+            abs(ee_pose.position[0] - state.get(movable, "x"))
+            < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
+            and abs(ee_pose.position[1] - state.get(movable, "y"))
+            < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
+            and abs(ee_pose.position[2] - z) < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
         )
 
     @staticmethod
