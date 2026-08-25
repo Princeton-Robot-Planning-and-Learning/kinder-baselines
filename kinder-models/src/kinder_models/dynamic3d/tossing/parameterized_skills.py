@@ -83,6 +83,10 @@ ARM_SETTLE_TOLERANCE = 5e-3
 # waypoints: handing off to the gripper at 4e-2 leaves the grasp ~2.8cm off the cube.
 ARM_FINAL_CONF_TOLERANCE = 5e-3
 
+# Ticks a trajectory phase may sit at its final waypoint without completing before
+# the stall watchdog replans its remaining path from the arm's live conf.
+STALL_REPLAN_PATIENCE = 40
+
 
 class MoveToTargetGroundController(
     GroundParameterizedController[ObjectCentricState, Array]
@@ -801,6 +805,12 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE: 0,
             self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME: 0,
         }
+        # Consecutive ticks spent at a phase's final waypoint without completing --
+        # see STALL_REPLAN_PATIENCE.
+        self._stall_ticks: dict[PickCubeController.PickCubeControllerPhase, int] = {}
+        # Previous tick's waypoint idx per phase, so the stall watchdog can detect
+        # "idx hasn't moved" at ANY waypoint, not just the final one.
+        self._prev_plan_idx: dict[PickCubeController.PickCubeControllerPhase, int] = {}
 
         self.home_joints = np.deg2rad(
             [0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0]
@@ -1173,12 +1183,60 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         # cannot see it.
         action[3:10] = kp * wrap_arm_joint_difference(target - curr)
         action[-1] = self._get_current_robot_gripper_pose()
+        # Stall watchdog: replan this phase's remaining path from the arm's live
+        # conf if the waypoint index hasn't advanced for STALL_REPLAN_PATIENCE
+        # ticks straight (any waypoint, not just the phase's final one).
+        if idx == self._prev_plan_idx.get(phase):
+            self._stall_ticks[phase] = self._stall_ticks.get(phase, 0) + 1
+        else:
+            self._stall_ticks[phase] = 0
+        self._prev_plan_idx[phase] = idx
         if idx >= len(plan) - 1 and self._robot_is_close_to_conf(target_waypoint):
+            self._stall_ticks[phase] = 0
             if next_phase is not None:
                 self.current_phase = next_phase
             else:
                 self._lifted = True
+        elif self._stall_ticks[phase] > STALL_REPLAN_PATIENCE:
+            self._replan_phase_from_current_state(phase)
+            self._stall_ticks[phase] = 0
         return action
+
+    def _replan_phase_from_current_state(
+        self, phase: "PickCubeController.PickCubeControllerPhase"
+    ) -> None:
+        """Stall recovery: re-run motion planning for `phase`'s remaining path, from
+        the arm's live conf to the same final target its original plan aimed for."""
+        assert self._pybullet_sim is not None
+        plan = self.plans[phase]
+        assert plan is not None and len(plan) > 0
+        target_conf = plan[-1]
+        current_conf = self._get_current_robot_arm_conf()
+        held_object = None
+        if phase == self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME:
+            cube_to_pick_up = self.objects[1]
+            # pylint: disable=protected-access
+            held_object = self._pybullet_sim._cubes[cube_to_pick_up.name]
+        new_plan = run_motion_planning(
+            self._pybullet_sim.robot,
+            current_conf,
+            target_conf,
+            collision_bodies=self._pybullet_sim.get_collision_bodies(
+                held_object=held_object
+            ),
+            held_object=held_object,
+            base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,
+            seed=0,
+            physics_client_id=self._pybullet_sim.physics_client_id,
+        )
+        if new_plan is None:
+            # Genuinely infeasible from the live conf -- leave the stalled plan in
+            # place; the watchdog retries after another STALL_REPLAN_PATIENCE ticks.
+            return
+        self.plans[phase] = remap_joint_position_plan_to_constant_distance(
+            new_plan, self._pybullet_sim.robot, max_distance=0.2
+        )
+        self._plan_step_idx[phase] = 0
 
     def _step_close_gripper(self) -> Array:
         if self._get_current_robot_gripper_pose() > 0.2 and np.isclose(
