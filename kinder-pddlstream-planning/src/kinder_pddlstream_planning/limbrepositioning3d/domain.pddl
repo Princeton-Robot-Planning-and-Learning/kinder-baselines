@@ -21,7 +21,7 @@
     ; Fluents.
     (AtBConf ?q)
     (AtState ?s)
-    (Grasped ?l)
+    (Grasped ?l ?g)              ; ?l is held with grasp ?g, pinning later reachability
     (HandEmpty)
     (CanMove)                    ; guards against consecutive move_base actions
 
@@ -43,18 +43,19 @@
     :parameters (?l ?g ?q ?at ?s)
     :precondition (and (GraspKin ?l ?g ?q ?at ?s)
                        (AtBConf ?q) (HandEmpty))
-    :effect (and (Grasped ?l) (AtState ?s)
+    :effect (and (Grasped ?l ?g) (AtState ?s)
                  (not (HandEmpty)))
   )
 
   ; `Reachable` ties this action to where the base was parked, so the planner cannot
   ; commit to a pose it can grasp from but never finish from.
   (:action move_limb
-    :parameters (?l ?g ?q ?s1 ?qL2 ?tt ?s2)
-    :precondition (and (Grasped ?l)
+    :parameters (?l ?g ?q ?s1 ?qL1 ?qL2 ?tt ?s2)
+    :precondition (and (Grasped ?l ?g)
                        (AtState ?s1)
+                       (StateConf ?s1 ?qL1)
+                       (not (= ?qL1 ?qL2))
                        (AtBConf ?q)
-                       (Grasp ?l ?g)
                        (Reachable ?l ?g ?q ?qL2)
                        (LimbMotion ?s1 ?qL2 ?tt ?s2)
                        (SafeRobotTorques ?tt)

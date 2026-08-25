@@ -46,7 +46,7 @@ python -m kinder_pddlstream_planning.limbrepositioning3d.run \
 
 # Run all sixteen variants and save a GIF for each.
 python -m kinder_pddlstream_planning.limbrepositioning3d.run \
-    --all-variants --max-time 600 --gif-dir outputs/limbrepositioning3d
+    --all-variants --max-time 600 --save-gif
 ```
 
 `move_limb` carries three constraints, all of them over the whole trajectory:
@@ -78,7 +78,7 @@ Two flags exist for variants the defaults cannot solve. `--all-variants` applies
 - `--no-check-base-collisions` admits base poses overlapping the furniture, which the `bed-*-leg` variants need because their goal is only reachable from inside the hospital bed. 
 - `--robot-base-z` overrides the robot's world z, which recovers the two `wheelchair-*-arm` variants whose goal sits above the arm's vertical reach from any floor position. Use `0.4` for `wheelchair-left-arm` and `0.55` for `wheelchair-right-arm`, against their shipped 0.335 and 0.51. It translates the whole robot rigidly, so it is a reachability experiment rather than a model of a lift mechanism.
 
-All run scripts take `--gif-path` to record the rollout, which is written even when planning or execution fails.
+All run scripts take `--save-gif` to record the rollout, which is written even when planning or execution fails. It goes to `--gif-dir`, which defaults to this package's `outputs/`, as `<environment>_<variant>.gif`.
 
 `--trajectory-dir` writes `<variant>.npz` of per-step measurements and `<variant>.png` of their plots, for a failed run as well as a solved one - a failure replays its closest attempt, which is the rollout worth looking at. Recorded per step: the torque on each of the person's joints and its decomposition into gravity, muscle tone, and the robot's share; the force and moment the grasp transmits, read off the weld constraint; the limb's joint positions and velocities; the torque the robot is asked for, hold plus correction; and the distance left to the goal. The plots read each of those against the limit it is checked on. Redraw without re-planning with `python -m kinder_pddlstream_planning.limbrepositioning3d.plots <npz paths>`.
 

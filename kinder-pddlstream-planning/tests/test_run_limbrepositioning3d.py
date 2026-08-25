@@ -22,26 +22,31 @@ from kinder_pddlstream_planning.limbrepositioning3d.run import (
     variant_kwargs,
 )
 from kinder_pddlstream_planning.limbrepositioning3d.stream import (
+    GRASP_ROLLS,
+    GRASP_SLIDE_FRACTIONS,
+    NUM_SAMPLED_GRASPS,
     LimbConf,
     MPCConfig,
     PredictiveSamplingMPC,
     TorqueTrajectory,
+    check_human_joint_limits,
+    check_human_torque_limits,
+    check_robot_torque_limits,
+    plan_base_motion,
+    plan_grasp_motion,
+    sample_base_pose,
+    sample_grasp,
+)
+from kinder_pddlstream_planning.limbrepositioning3d.utils import (
     _base_in_collision,
     advance_corrected,
     arm_in_collision,
     capture_state,
-    check_human_joint_limits,
-    check_human_torque_limits,
-    check_robot_torque_limits,
     engage_grasp,
     human_in_collision,
     limb_out_of_limits,
-    plan_base_motion,
-    plan_grasp_motion,
     release_grasp,
     restore_state,
-    sample_base_pose,
-    sample_grasp,
 )
 
 # A variant with no furniture, so the tests that build an environment stay fast and are
@@ -166,13 +171,22 @@ def test_sampled_base_poses_reach_the_whole_motion(limb_env):
 
 
 def test_grasp_stream_offers_the_scene_transform_first(limb_env):
-    """The scene's transform is tried first; the rest are rolls of it."""
+    """The scene's transform is tried first, then rolls of it, then slides up the
+    limb."""
     sim, ctx = limb_env
     grasps = [g for (g,) in sample_grasp(ctx, LIMB_NAME)]
     assert grasps[0] == sim.scene.grasp_transform
-    assert len(grasps) > 1
-    for grasp in grasps[1:]:
-        assert np.allclose(grasp.position, sim.scene.grasp_transform.position)
+    assert len(grasps) == 1 + len(GRASP_ROLLS) + NUM_SAMPLED_GRASPS
+    nominal = sim.scene.grasp_transform
+    for grasp in grasps[1 : 1 + len(GRASP_ROLLS)]:
+        assert np.allclose(grasp.position, nominal.position)
+    low, high = GRASP_SLIDE_FRACTIONS
+    for grasp in grasps[1 + len(GRASP_ROLLS) :]:
+        offset = np.subtract(grasp.position, nominal.position)
+        along = float(offset @ ctx.grasp_slide_axis)
+        # The slide runs up the limb and nowhere else.
+        assert np.allclose(offset - along * ctx.grasp_slide_axis, 0.0, atol=1e-6)
+        assert low * ctx.grasp_slide_span <= along <= high * ctx.grasp_slide_span
 
 
 def test_grasp_motion_ends_on_the_limb(limb_env):

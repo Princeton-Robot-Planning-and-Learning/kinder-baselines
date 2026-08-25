@@ -11,6 +11,7 @@ import argparse
 import csv
 import dataclasses
 import time
+import traceback
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -35,34 +36,41 @@ from pybullet_helpers.geometry import SE2Pose
 
 from kinder_pddlstream_planning.limbrepositioning3d.plots import plot_rollout
 from kinder_pddlstream_planning.limbrepositioning3d.stream import (
-    DEFAULT_GRAVITY,
-    DEFAULT_LIMB_JOINT_DAMPING,
-    DEFAULT_ROBOT_INDUCED_TORQUE_LIMIT,
-    ROBOT_TORQUE_LIMITS,
     ArmTrajectory,
     LimbConf,
     LimbStreamContext,
     MPCConfig,
-    RolloutLog,
     TorqueTrajectory,
+    check_human_joint_limits,
+    check_human_torque_limits,
+    check_robot_torque_limits,
+    plan_base_motion,
+    plan_grasp_motion,
+    plan_limb_motion,
+    sample_base_pose,
+    sample_grasp,
+)
+from kinder_pddlstream_planning.limbrepositioning3d.utils import (
+    DEFAULT_GRAVITY,
+    DEFAULT_LIMB_JOINT_DAMPING,
+    DEFAULT_ROBOT_INDUCED_TORQUE_LIMIT,
+    ROBOT_TORQUE_LIMITS,
+    RolloutLog,
     _limb_error,
     advance_corrected,
     advance_logged,
     apply_limb_joint_damping,
-    check_human_joint_limits,
-    check_human_torque_limits,
-    check_robot_torque_limits,
     engage_grasp,
     extend_with_fingers,
     is_grasping,
-    plan_base_motion,
-    plan_grasp_motion,
-    plan_limb_motion,
     release_grasp,
-    sample_base_pose,
-    sample_grasp,
 )
-from kinder_pddlstream_planning.rendering import render_frame, save_gif
+from kinder_pddlstream_planning.rendering import (
+    DEFAULT_GIF_DIR,
+    gif_output_path,
+    render_frame,
+    save_gif,
+)
 
 _HERE = Path(__file__).parent
 DOMAIN_PDDL = read(str(_HERE / "domain.pddl"))
@@ -76,7 +84,7 @@ LIMB_NAME = "limb"
 # The limb's muscle tone model: "none" for a limp limb, "spring" for a spring-damper one.
 DEFAULT_MUSCLE_TONE = "spring"
 
-# The limb's joint limits model: "none", "box", or "realistic".
+# The limb's joint limits model: "none" or "box".
 DEFAULT_JOINT_LIMITS_MODEL = "box"
 
 
@@ -318,7 +326,7 @@ def execute_plan(
             engage_grasp(sim)
             capture()
         elif name == "move_limb":
-            _, _, _, _, _, torque_trajectory, _ = args
+            _, _, _, _, _, _, torque_trajectory, _ = args
             assert isinstance(torque_trajectory, TorqueTrajectory)
             for i, torque in enumerate(torque_trajectory.robot_torques):
                 if log is None:
@@ -360,6 +368,7 @@ def build_failed_attempt_plan(ctx: LimbStreamContext) -> list[tuple[str, tuple]]
                 grasp,
                 state.base_pose,
                 state,
+                LimbConf(tuple(state.limb_positions)),
                 goal_conf,
                 TorqueTrajectory(attempt.robot_torques),
                 state,
@@ -373,7 +382,7 @@ def record_trajectory_metrics(result: RunResult, plan: list[tuple[str, tuple]]) 
     for name, args in plan:
         if name != "move_limb":
             continue
-        trajectory = args[5]
+        trajectory = args[6]
         assert isinstance(trajectory, TorqueTrajectory)
         result.num_torque_steps = len(trajectory.robot_torques)
         if trajectory.human_torques:
@@ -517,6 +526,13 @@ def solve_and_execute(
         sim.close()
 
 
+def _exception_reason(exc: BaseException) -> str:
+    """Name a crash by where it was raised, since a bare `assert` carries no message."""
+    frame = traceback.extract_tb(exc.__traceback__)[-1]
+    where = f"{Path(frame.filename).name}:{frame.lineno}"
+    return f"{type(exc).__name__} at {where}: {exc}".rstrip(": ")
+
+
 def solve_all_variants(
     gif_dir: str | Path | None = None,
     trajectory_dir: str | Path | None = None,
@@ -529,7 +545,11 @@ def solve_all_variants(
     """
     results: dict[str, RunResult] = {}
     for index, variant in enumerate(ALL_VARIANTS, start=1):
-        gif_path = Path(gif_dir) / f"{variant}.gif" if gif_dir is not None else None
+        gif_path = (
+            gif_output_path("limbrepositioning3d", variant, gif_dir)
+            if gif_dir is not None
+            else None
+        )
         trajectory_path = (
             Path(trajectory_dir) / f"{variant}.npz"
             if trajectory_dir is not None
@@ -548,8 +568,8 @@ def solve_all_variants(
                 **variant_kwargs(variant, **kwargs),
             )
         except Exception as exc:  # pylint: disable=broad-except
-            print(f"{variant}: raised {type(exc).__name__}: {exc}")
-            result.failure_reason = f"{type(exc).__name__}: {exc}"
+            traceback.print_exc()
+            result.failure_reason = _exception_reason(exc)
         result.total_time = time.time() - start
         results[variant] = result
         print(
@@ -605,13 +625,15 @@ def main() -> None:
         help=("Run every variant in turn."),
     )
     parser.add_argument(
+        "--save-gif",
+        action="store_true",
+        help="Save a GIF of the rollout (default: off).",
+    )
+    parser.add_argument(
         "--gif-dir",
-        type=str,
-        default=None,
-        help=(
-            "With --all-variants, the directory to write <variant>.gif into. "
-            "Ignored otherwise. Use --gif-path for a single run."
-        ),
+        type=Path,
+        default=DEFAULT_GIF_DIR,
+        help="Directory to write the GIF into (default: %(default)s).",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-time", type=float, default=600.0)
@@ -677,7 +699,7 @@ def main() -> None:
         "--joint-limits-model",
         type=str,
         default=DEFAULT_JOINT_LIMITS_MODEL,
-        choices=["none", "box", "realistic"],
+        choices=["none", "box"],
         help=(
             "The limb's joint limits model: unbounded, per-joint boxes, or the "
             "learned reachable region. The learned one covers arms only."
@@ -730,13 +752,8 @@ def main() -> None:
         default=None,
         help="If set, append one row per run to this CSV, creating it if it is new.",
     )
-    parser.add_argument(
-        "--gif-path",
-        type=str,
-        default=None,
-        help="If set, save a GIF of the rollout to this path.",
-    )
     args = parser.parse_args()
+    gif_dir = args.gif_dir if args.save_gif else None
     shared = {
         "seed": args.seed,
         "max_time": args.max_time,
@@ -769,7 +786,7 @@ def main() -> None:
     if args.all_variants:
         # Per-variant PDDLStream output would bury the summary table.
         results = solve_all_variants(
-            gif_dir=args.gif_dir,
+            gif_dir=gif_dir,
             trajectory_dir=args.trajectory_dir,
             verbose=False,
             **shared,
@@ -787,7 +804,11 @@ def main() -> None:
     try:
         success = solve_and_execute(
             variant=args.variant,
-            gif_path=args.gif_path,
+            gif_path=(
+                gif_output_path("limbrepositioning3d", args.variant, gif_dir)
+                if gif_dir is not None
+                else None
+            ),
             trajectory_path=trajectory_path,
             verbose=True,
             result=result,
@@ -796,8 +817,8 @@ def main() -> None:
         print(f"Reached goal: {success}")
     except Exception as exc:  # pylint: disable=broad-except
         # Still record the row, so a crashed cell of a sweep is not a silent gap.
-        print(f"{args.variant}: raised {type(exc).__name__}: {exc}")
-        result.failure_reason = f"{type(exc).__name__}: {exc}"
+        traceback.print_exc()
+        result.failure_reason = _exception_reason(exc)
     result.total_time = time.time() - start
     if args.results_csv is not None:
         write_results_csv(args.results_csv, [result], settings)
