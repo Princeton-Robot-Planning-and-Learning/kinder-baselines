@@ -1,6 +1,7 @@
 """Parameterized skills for the TidyBot3D tossing environment."""
 
 import enum
+import logging
 from typing import Any
 
 import numpy as np
@@ -20,7 +21,7 @@ from kinder.envs.dynamic3d.robots.tidybot_robot_env import (
     TidyBot3DRobotActionSpace,
 )
 from prpl_utils.utils import get_signed_angle_distance
-from pybullet_helpers.geometry import Pose, multiply_poses
+from pybullet_helpers.geometry import Pose, Quaternion, multiply_poses
 from pybullet_helpers.inverse_kinematics import (
     JointPositions,
     inverse_kinematics,
@@ -31,6 +32,7 @@ from pybullet_helpers.motion_planning import (
 )
 from relational_structs import (
     Array,
+    Object,
     ObjectCentricState,
     Variable,
 )
@@ -67,6 +69,8 @@ from kinder_models.dynamic3d.utils import (
     upright_grasp_rotations,
     wrap_arm_joint_difference,
 )
+
+logger = logging.getLogger(__name__)
 
 # Per-joint motion between consecutive control steps below which the arm counts as
 # stopped. A stand-in for joint velocity, which the state does not expose for the arm.
@@ -818,6 +822,75 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         del x, rng
         return np.zeros(0)
 
+    def _plan_grasp_symmetric_base_motion(
+        self,
+        x: ObjectCentricState,
+        cube_to_pick_up: Object,
+        extend_xy_magnitude: float,
+        extend_rot_magnitude: float,
+    ) -> tuple[list[SE2] | None, SE2 | None, Quaternion, tuple[Quaternion, ...]]:
+        """Try each of the cube's four grasp-symmetric rotations' BASE_MOTION
+        plan (upright_grasp_rotations' own order, nearest-yaw first) until one
+        succeeds -- the barrier only blocks roughly half the angular range
+        around the cube, so the nearest-yaw approach failing doesn't mean none
+        of the four can reach it.
+
+        Returns (plan, target_base_pose, chosen_grasp_quat, candidate_grasp_quats);
+        plan and target_base_pose are None if no candidate found a plan.
+        """
+        cube_pose = get_overhead_object_se2_pose(x, cube_to_pick_up)
+        cube_raw_quat = (
+            x.get(cube_to_pick_up, "qx"),
+            x.get(cube_to_pick_up, "qy"),
+            x.get(cube_to_pick_up, "qz"),
+            x.get(cube_to_pick_up, "qw"),
+        )
+        candidate_grasp_quats = upright_grasp_rotations(cube_raw_quat)
+
+        for grasp_quat in candidate_grasp_quats:
+            # Pure z-axis rotation quaternions, so yaw = 2*atan2(qz, qw).
+            candidate_yaw = 2.0 * float(np.arctan2(grasp_quat[2], grasp_quat[3]))
+            candidate_cube_pose = SE2(cube_pose.x, cube_pose.y, candidate_yaw)
+            candidate_target_base_pose = get_target_robot_pose_from_parameters(
+                candidate_cube_pose, self.TARGET_DISTANCE, self.TARGET_ROTATION
+            )
+            candidate_plan = run_base_motion_planning(
+                state=x,
+                target_base_pose=candidate_target_base_pose,
+                x_bounds=WORLD_X_BOUNDS,
+                y_bounds=WORLD_Y_BOUNDS,
+                seed=0,  # To make this effectively deterministic
+                extend_xy_magnitude=extend_xy_magnitude,
+                extend_rot_magnitude=extend_rot_magnitude,
+                # During random resets, the cube can spawn directly under or right
+                # next to the robot, which would otherwise put the standoff in
+                # collision before planning even starts. Mirrors
+                # MoveToTossLocationAndTossController's own
+                # disable_collision_objects=[target] for the same reason.
+                disable_collision_objects=[cube_to_pick_up.name],
+            )
+            if candidate_plan is not None:
+                logger.debug(
+                    "PICK_BASE_MOTION_PLAN result=OK cube_pose_xy=(%.4f,%.4f)",
+                    cube_pose.x,
+                    cube_pose.y,
+                )
+                return (
+                    candidate_plan,
+                    candidate_target_base_pose,
+                    grasp_quat,
+                    candidate_grasp_quats,
+                )
+
+        logger.debug(
+            "PICK_BASE_MOTION_PLAN result=FAIL cube_pose_xy=(%.4f,%.4f), all %d "
+            "grasp-symmetric approaches tried",
+            cube_pose.x,
+            cube_pose.y,
+            len(candidate_grasp_quats),
+        )
+        return None, None, candidate_grasp_quats[0], candidate_grasp_quats
+
     def reset(
         self,
         x: ObjectCentricState,
@@ -844,31 +917,33 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
 
         # Pre-compute all motion planning
         # BASE_MOTION planning
-        cube_pose = get_overhead_object_se2_pose(x, cube_to_pick_up)
-        target_base_pose = get_target_robot_pose_from_parameters(
-            cube_pose, self.TARGET_DISTANCE, self.TARGET_ROTATION
+        robot = self.objects[0]
+        pick_base_motion_start = (
+            float(x.get(robot, "pos_base_x")),
+            float(x.get(robot, "pos_base_y")),
+            float(x.get(robot, "pos_base_rot")),
         )
-        self.plans[self.PickCubeControllerPhase.BASE_MOTION] = run_base_motion_planning(
-            state=x,
-            target_base_pose=target_base_pose,
-            x_bounds=WORLD_X_BOUNDS,
-            y_bounds=WORLD_Y_BOUNDS,
-            seed=0,  # To make this effectively deterministic
-            extend_xy_magnitude=extend_xy_magnitude,
-            extend_rot_magnitude=extend_rot_magnitude,
-            # During random resets, the cube can spawn directly under or right
-            # next to the robot, which would otherwise put the standoff in
-            # collision before planning even starts. Mirrors
-            # MoveToTossLocationAndTossController's own
-            # disable_collision_objects=[target] for the same reason.
-            disable_collision_objects=[cube_to_pick_up.name],
+
+        (
+            base_motion_plan,
+            target_base_pose,
+            chosen_grasp_quat,
+            candidate_grasp_quats,
+        ) = self._plan_grasp_symmetric_base_motion(
+            x, cube_to_pick_up, extend_xy_magnitude, extend_rot_magnitude
         )
-        assert self.plans[self.PickCubeControllerPhase.BASE_MOTION] is not None
+
+        self.plans[self.PickCubeControllerPhase.BASE_MOTION] = base_motion_plan
+        assert self.plans[self.PickCubeControllerPhase.BASE_MOTION] is not None, (
+            f"Motion planning failed at BASE_MOTION for all "
+            f"{len(candidate_grasp_quats)} grasp-symmetric approaches, "
+            f"start={pick_base_motion_start}"
+        )
+        assert target_base_pose is not None
 
         # MOVE_ARM_TO_HOVER_OVER_CUBE planning
         # Get the last state from the BASE_MOTION plan so that next steps can build on it
         state_after_base_motion = x.copy()
-        robot = self.objects[0]  # robot is the first parameter
         target_base_pose_plan = self.plans[self.PickCubeControllerPhase.BASE_MOTION]
         assert target_base_pose_plan is not None
         target_base_pose = target_base_pose_plan[-1]
@@ -882,17 +957,11 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         # for grasp planning.
         self._pybullet_sim.set_state(state_after_base_motion)
 
-        # We care about the cube's graspable orientation, not absolute orentiation.
-        cube_raw_quat = (
-            state_after_base_motion.get(cube_to_pick_up, "qx"),
-            state_after_base_motion.get(cube_to_pick_up, "qy"),
-            state_after_base_motion.get(cube_to_pick_up, "qz"),
-            state_after_base_motion.get(cube_to_pick_up, "qw"),
-        )
-        cube_grasp_qx, cube_grasp_qy, cube_grasp_qz, cube_grasp_qw = (
-            upright_grasp_rotations(cube_raw_quat)[0]
-        )
-
+        # Reuse whichever grasp-symmetric rotation BASE_MOTION actually found a plan
+        # for, rather than independently re-deriving upright_grasp_rotations(...)[0]
+        # -- the cube itself does not move during base motion, so cube_raw_quat is
+        # unchanged from what BASE_MOTION already computed candidates against, and
+        # the arm's approach must match the direction the base ended up standing at.
         target_hover_end_effector_pose = Pose(
             (
                 state_after_base_motion.get(cube_to_pick_up, "x"),
@@ -903,7 +972,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 # we add half its height ("bb_z").
                 + 0.12,
             ),
-            (cube_grasp_qx, cube_grasp_qy, cube_grasp_qz, cube_grasp_qw),
+            chosen_grasp_quat,
         )
         target_hover_end_effector_pose = multiply_poses(
             target_hover_end_effector_pose, GRASP_TRANSFORM_TO_OBJECT
@@ -931,7 +1000,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 state_after_base_motion.get(cube_to_pick_up, "y"),
                 state_after_base_motion.get(cube_to_pick_up, "z"),
             ),
-            (cube_grasp_qx, cube_grasp_qy, cube_grasp_qz, cube_grasp_qw),
+            chosen_grasp_quat,
         )
         target_around_cube_end_effector_pose = multiply_poses(
             target_around_cube_end_effector_pose, GRASP_TRANSFORM_TO_OBJECT
