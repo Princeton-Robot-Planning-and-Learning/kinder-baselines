@@ -1435,7 +1435,19 @@ class MoveToTossLocationAndTossController(
             disable_collision_objects=disable_collision_objects,
         )
         if base_motion_plan is None:
+            logger.debug(
+                "TOSS_BASE_PLAN result=FAIL target=(%.4f,%.4f,%.4f)",
+                target_base_pose.x,
+                target_base_pose.y,
+                target_base_pose.theta(),
+            )
             raise TrajectorySamplingFailure("Base motion planning failed")
+        logger.debug(
+            "TOSS_BASE_PLAN result=OK target=(%.4f,%.4f,%.4f)",
+            target_base_pose.x,
+            target_base_pose.y,
+            target_base_pose.theta(),
+        )
         return base_motion_plan
 
     def _plan_arm_toss(self, x: ObjectCentricState, final_base_pose: SE2) -> None:
@@ -1460,7 +1472,9 @@ class MoveToTossLocationAndTossController(
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
         if windup_plan is None:
+            logger.debug("MoveToTossLocationAndToss: windup motion planning FAILED")
             raise TrajectorySamplingFailure("Motion planning failed")
+        logger.debug("MoveToTossLocationAndToss: windup motion planning ok")
         windup_start = np.array(self._get_current_robot_arm_conf()[:7])
         self._windup_trajectory, self._windup_dir = _compute_per_joint_profile(
             windup_start,
@@ -1482,7 +1496,9 @@ class MoveToTossLocationAndTossController(
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
         if swing_plan is None:
+            logger.debug("MoveToTossLocationAndToss: swing motion planning FAILED")
             raise TrajectorySamplingFailure("Motion planning failed")
+        logger.debug("MoveToTossLocationAndToss: swing motion planning ok")
         self._swing = plan_toss_swing(
             swing_plan,
             windup_plan[-1],
@@ -1566,6 +1582,9 @@ class MoveToTossLocationAndTossController(
             self._has_released = True
         self._swing_step_idx += 1
         if self._swing_step_idx >= len(self._swing.trajectory):
+            logger.debug(
+                "MoveToTossLocationAndToss: swing done -- entering RETURN_HOME"
+            )
             self._phase = self.MoveToTossLocationAndTossControllerPhase.RETURN_HOME
         return action
 
