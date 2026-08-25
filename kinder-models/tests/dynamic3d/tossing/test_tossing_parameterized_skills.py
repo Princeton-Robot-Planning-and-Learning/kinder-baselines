@@ -37,6 +37,7 @@ from kinder_models.dynamic3d.tossing.toss_swing import (
 )
 from kinder_models.dynamic3d.utils import (
     _CONTROL_TIMESTEP,
+    GRASP_CLOSE_THRESHOLD,
     MOVE_TO_TARGET_DISTANCE_BOUNDS,
     _trapezoidal_motion_profile,
 )
@@ -1698,6 +1699,40 @@ def test_open_gripper_commands_open_until_the_gripper_reads_open():
     opened.set(robot, "pos_gripper", 0.0)
     controller.observe(opened)
     assert controller.terminated()
+    env.close()
+
+
+def test_no_op_controller_terminates_immediately_and_holds_the_gripper_command():
+    """A no-op dispatches one all-zero-motion action and is already terminated --
+    except the gripper index, which must re-issue the robot's own current command
+    rather than zero, since zero means "open" (OpenGripperController.step()) and
+    would drop anything currently held."""
+    num_cubes = 1
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
+    )
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    controllers = create_lifted_controllers(env.action_space)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    controller = controllers["no_op"].ground((robot,))
+
+    open_gripper = state.copy()
+    open_gripper.set(robot, "pos_gripper", 0.0)
+    controller.reset(open_gripper)
+    assert controller.terminated()
+    action = controller.step()
+    assert action.shape == (11,)
+    assert np.all(action == 0)
+
+    closed_gripper = state.copy()
+    closed_gripper.set(robot, "pos_gripper", 1.0)
+    controller.reset(closed_gripper)
+    assert controller.terminated()
+    action = controller.step()
+    assert action[:-1].tolist() == [0.0] * (action.shape[0] - 1)
+    assert action[-1] == GRASP_CLOSE_THRESHOLD
     env.close()
 
 

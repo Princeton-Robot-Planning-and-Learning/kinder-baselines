@@ -759,6 +759,49 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
         return current_gripper_pose < atol
 
 
+class NoOpController(GroundParameterizedController[ObjectCentricState, Array]):
+    """Controller that does nothing for a single control step.
+
+    The object parameters are:
+        robot: The robot itself.
+
+    Re-issues the robot's own current gripper command rather than zeroing it --
+    a bare all-zero action would command the gripper OPEN (see
+    OpenGripperController.step()), which is not a no-op if the robot is
+    currently holding something.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._last_state: ObjectCentricState | None = None
+
+    def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
+        del x, rng
+        return np.zeros(0)
+
+    def reset(self, x: ObjectCentricState, params: Any | None = None) -> None:
+        del params
+        self._last_state = x
+
+    def terminated(self) -> bool:
+        return True
+
+    def step(self) -> Array:
+        action = np.zeros(11, dtype=np.float32)
+        action[-1] = self._get_current_gripper_pose()
+        return action
+
+    def observe(self, x: ObjectCentricState) -> None:
+        self._last_state = x
+
+    def _get_current_gripper_pose(self) -> float:
+        assert self._last_state is not None
+        robot = self.objects[0]
+        if self._last_state.get(robot, "pos_gripper") > 0.2:
+            return GRASP_CLOSE_THRESHOLD
+        return 0.0
+
+
 class PickCubeController(GroundParameterizedController[ObjectCentricState, Array]):
     """Pick a cube up off the ground.
 
@@ -1710,6 +1753,14 @@ def create_lifted_controllers(
         )
     )
 
+    # No-op controller.
+    robot = Variable("?robot", MujocoTidyBotRobotObjectType)
+
+    LiftedNoOpController: LiftedParameterizedController = LiftedParameterizedController(
+        [robot],
+        NoOpController,
+    )
+
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     cube = Variable("?cube", MujocoMovableObjectType)
     # Unused by the controller; present so an operator can say the cube is still on
@@ -1748,6 +1799,7 @@ def create_lifted_controllers(
         "move_arm_to_end_effector": LiftedMoveArmToEndEffectorController,
         "close_gripper": LiftedCloseGripperController,
         "open_gripper": LiftedOpenGripperController,
+        "no_op": LiftedNoOpController,
         "pick_cube": LiftedPickCubeController,
         "move_to_toss_location_and_toss": LiftedMoveToTossLocationAndTossController,
     }
