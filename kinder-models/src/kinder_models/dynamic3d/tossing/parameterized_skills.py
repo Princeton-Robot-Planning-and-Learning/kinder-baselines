@@ -1307,6 +1307,10 @@ class MoveToTossLocationAndTossController(
         BASE_MOTION = enum.auto()
         WINDUP = enum.auto()
         SWING = enum.auto()
+        # Returns the arm to a fixed retract configuration after the swing, so
+        # the NEXT PickCube dispatch's MOVE_ARM_TO_HOVER_OVER_CUBE plans from a
+        # known-good starting pose instead of wherever the release left the arm.
+        RETURN_HOME = enum.auto()
 
     # Where a throw is possible; the upper part does not score.
     TARGET_DISTANCE_BOUNDS = (1.25, 1.45)
@@ -1354,6 +1358,13 @@ class MoveToTossLocationAndTossController(
         self._swing: TossSwing | None = None
         self._swing_step_idx: int = 0
         self._has_released: bool = False
+
+        # RETURN_HOME's target: the same retract configuration
+        # PickCubeController.home_joints uses, so a post-toss arm and a
+        # post-lift arm land in the same known pose.
+        self._return_home_arm_config = np.deg2rad(
+            [0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0]
+        )
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         del x  # not used
@@ -1480,9 +1491,14 @@ class MoveToTossLocationAndTossController(
         )
 
     def terminated(self) -> bool:
-        return self._swing is not None and self._swing_step_idx >= len(
-            self._swing.trajectory
+        if self._phase is not self.MoveToTossLocationAndTossControllerPhase.RETURN_HOME:
+            return False
+        assert self._pybullet_sim is not None
+        curr = self._get_current_robot_arm_conf()
+        dist = self._pybullet_sim.get_joint_distance(
+            curr, list(self._return_home_arm_config)
         )
+        return bool(dist < WAYPOINT_TOLERANCE)
 
     def step(self) -> Array:
         assert self._current_base_motion_plan is not None
@@ -1490,7 +1506,9 @@ class MoveToTossLocationAndTossController(
             return self._action_base_motion()
         if self._phase is self.MoveToTossLocationAndTossControllerPhase.WINDUP:
             return self._action_windup()
-        return self._action_swing()
+        if self._phase is self.MoveToTossLocationAndTossControllerPhase.SWING:
+            return self._action_swing()
+        return self._action_return_home()
 
     def observe(self, x: ObjectCentricState) -> None:
         self._last_state = x
@@ -1547,6 +1565,22 @@ class MoveToTossLocationAndTossController(
         if self._swing_step_idx == self._swing.release_step:
             self._has_released = True
         self._swing_step_idx += 1
+        if self._swing_step_idx >= len(self._swing.trajectory):
+            self._phase = self.MoveToTossLocationAndTossControllerPhase.RETURN_HOME
+        return action
+
+    def _action_return_home(self) -> Array:
+        # wrap_arm_joint_difference, not a raw subtraction: the retract target holds
+        # joint index 2 at 180 degrees (as does TOSS_WINDUP/RELEASE_ARM_CONFIGURATION
+        # throughout windup/swing/release, so the arm is expected to be right at that
+        # wrap boundary when RETURN_HOME starts), and a raw target-curr can report
+        # ~2*pi of travel between two identical poses across it.
+        kp = 2.0
+        curr = np.array(self._get_current_robot_arm_conf()[:7])
+        target = self._return_home_arm_config[:7]
+        action = np.zeros(18, dtype=np.float32)
+        action[3:10] = kp * wrap_arm_joint_difference(target - curr)
+        action[10] = self._get_current_robot_gripper_pose()
         return action
 
     def _get_current_robot_pose(self) -> SE2:
