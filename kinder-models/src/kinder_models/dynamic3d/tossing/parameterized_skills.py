@@ -828,15 +828,14 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         cube_to_pick_up: Object,
         extend_xy_magnitude: float,
         extend_rot_magnitude: float,
-    ) -> tuple[list[SE2] | None, SE2 | None, Quaternion, tuple[Quaternion, ...]]:
+    ) -> tuple[list[SE2] | None, Quaternion | None]:
         """Try each of the cube's four grasp-symmetric rotations' BASE_MOTION
         plan (upright_grasp_rotations' own order, nearest-yaw first) until one
         succeeds -- the barrier only blocks roughly half the angular range
         around the cube, so the nearest-yaw approach failing doesn't mean none
         of the four can reach it.
 
-        Returns (plan, target_base_pose, chosen_grasp_quat, candidate_grasp_quats);
-        plan and target_base_pose are None if no candidate found a plan.
+        Returns (plan, chosen_grasp_quat); both are None if no candidate found a plan.
         """
         cube_pose = get_overhead_object_se2_pose(x, cube_to_pick_up)
         cube_raw_quat = (
@@ -875,21 +874,15 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                     cube_pose.x,
                     cube_pose.y,
                 )
-                return (
-                    candidate_plan,
-                    candidate_target_base_pose,
-                    grasp_quat,
-                    candidate_grasp_quats,
-                )
+                return candidate_plan, grasp_quat
 
         logger.debug(
-            "PICK_BASE_MOTION_PLAN result=FAIL cube_pose_xy=(%.4f,%.4f), all %d "
+            "PICK_BASE_MOTION_PLAN result=FAIL cube_pose_xy=(%.4f,%.4f), all 4 "
             "grasp-symmetric approaches tried",
             cube_pose.x,
             cube_pose.y,
-            len(candidate_grasp_quats),
         )
-        return None, None, candidate_grasp_quats[0], candidate_grasp_quats
+        return None, None
 
     def reset(
         self,
@@ -918,28 +911,18 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         # Pre-compute all motion planning
         # BASE_MOTION planning
         robot = self.objects[0]
-        pick_base_motion_start = (
-            float(x.get(robot, "pos_base_x")),
-            float(x.get(robot, "pos_base_y")),
-            float(x.get(robot, "pos_base_rot")),
-        )
 
-        (
-            base_motion_plan,
-            target_base_pose,
-            chosen_grasp_quat,
-            candidate_grasp_quats,
-        ) = self._plan_grasp_symmetric_base_motion(
+        base_motion_plan, chosen_grasp_quat = self._plan_grasp_symmetric_base_motion(
             x, cube_to_pick_up, extend_xy_magnitude, extend_rot_magnitude
         )
 
         self.plans[self.PickCubeControllerPhase.BASE_MOTION] = base_motion_plan
         assert self.plans[self.PickCubeControllerPhase.BASE_MOTION] is not None, (
-            f"Motion planning failed at BASE_MOTION for all "
-            f"{len(candidate_grasp_quats)} grasp-symmetric approaches, "
-            f"start={pick_base_motion_start}"
+            "Motion planning failed at BASE_MOTION for all 4 grasp-symmetric "
+            f"approaches, start=({float(x.get(robot, 'pos_base_x'))}, "
+            f"{float(x.get(robot, 'pos_base_y'))}, "
+            f"{float(x.get(robot, 'pos_base_rot'))})"
         )
-        assert target_base_pose is not None
 
         # MOVE_ARM_TO_HOVER_OVER_CUBE planning
         # Get the last state from the BASE_MOTION plan so that next steps can build on it
