@@ -923,6 +923,10 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             f"{float(x.get(robot, 'pos_base_y'))}, "
             f"{float(x.get(robot, 'pos_base_rot'))})"
         )
+        # base_motion_plan and chosen_grasp_quat are only None together (the
+        # all-candidates-failed path above already raised), but that's not
+        # visible to mypy from the assert on the dict entry alone.
+        assert chosen_grasp_quat is not None
 
         # MOVE_ARM_TO_HOVER_OVER_CUBE planning
         # Get the last state from the BASE_MOTION plan so that next steps can build on it
