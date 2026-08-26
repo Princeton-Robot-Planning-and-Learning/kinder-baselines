@@ -856,6 +856,12 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             seed=0,  # To make this effectively deterministic
             extend_xy_magnitude=extend_xy_magnitude,
             extend_rot_magnitude=extend_rot_magnitude,
+            # During random resets, the cube can spawn directly under or right
+            # next to the robot, which would otherwise put the standoff in
+            # collision before planning even starts. Mirrors
+            # MoveToTossLocationAndTossController's own
+            # disable_collision_objects=[target] for the same reason.
+            disable_collision_objects=[cube_to_pick_up.name],
         )
         assert self.plans[self.PickCubeControllerPhase.BASE_MOTION] is not None
 
