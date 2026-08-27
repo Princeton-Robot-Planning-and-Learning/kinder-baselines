@@ -19,7 +19,7 @@ from generate_topological_order import get_topological_order
 # release.
 PREINSTALL_REQUIREMENTS = [
     "kindergarden @ git+https://github.com/Princeton-Robot-Planning-and-Learning/"
-    "kindergarden.git@bf420c4404168c13c3ac3270c19918810aa0d4c7",
+    "kindergarden.git@86c55a4e9a19f4f37cd7103d425ee88465042173",
 ]
 
 
