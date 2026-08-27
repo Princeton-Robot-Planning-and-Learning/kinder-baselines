@@ -1820,3 +1820,33 @@ def test_move_to_toss_location_and_toss_plans_every_phase_in_reset():
     assert len(controller._windup_trajectory) > 0  # pylint: disable=protected-access
     assert controller._swing is not None  # pylint: disable=protected-access
     env.close()
+
+
+def test_bin_collision_model_has_an_open_top_and_real_walls():
+    """The gripper may enter the interior, but must not pass through a rim or bottom."""
+    from pybullet_helpers.geometry import Pose
+
+    from kinder_models.dynamic3d.utils import PyBulletSim
+
+    state = _create_robot_state([0.0] * 7, 0.0, -1.0, 0.0, 0.0)
+    sim = PyBulletSim(state)
+    try:
+        body = sim.add_bin(
+            name="bin_0",
+            pose=Pose((1.0, 0.0, 0.0)),
+            length=0.3,
+            width=0.3,
+            height=0.2,
+            wall_thickness=0.02,
+        )
+        assert body in sim.get_collision_bodies()
+        center = p.rayTest(
+            [1.0, 0.0, 0.5], [1.0, 0.0, -0.1], physicsClientId=sim.physics_client_id
+        )[0]
+        rim = p.rayTest(
+            [1.14, 0.0, 0.5], [1.14, 0.0, -0.1], physicsClientId=sim.physics_client_id
+        )[0]
+        assert center[0] == body and np.isclose(center[3][2], 0.02)
+        assert rim[0] == body and np.isclose(rim[3][2], 0.2)
+    finally:
+        sim.close()
