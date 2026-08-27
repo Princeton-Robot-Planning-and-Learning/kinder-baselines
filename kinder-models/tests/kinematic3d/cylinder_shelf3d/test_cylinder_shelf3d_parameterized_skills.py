@@ -2,6 +2,7 @@
 
 import kinder
 import numpy as np
+import pytest
 from bilevel_planning.trajectory_samplers.trajectory_sampler import (
     TrajectorySamplingFailure,
 )
@@ -141,4 +142,98 @@ def test_pick_controller_any_approach_angle():
         target = state.get_object_from_name("cylinder0")
         assert state.get(target, "pose_z") > 0.3, f"No lift for rot={approach_rot}"
 
+    env.close()
+
+
+def test_top_down_pick_controller():
+    """The top-down grasp mode picks the cylinder with a vertical planar descent; joints
+    1/3/5/7 still never leave their retract values."""
+    env = kinder.make(
+        "kinder/KinematicCylinderShelf3D-o1-v0",
+        use_gui=False,
+        realistic_bg=False,
+    )
+    obs, _ = env.reset(seed=123)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+
+    sim = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
+    controllers = create_lifted_controllers(
+        env.action_space, sim, grasp_mode="top_down"
+    )
+    robot = state.get_object_from_name("robot")
+    target = state.get_object_from_name("cylinder0")
+
+    rng = np.random.default_rng(123)
+    picked = False
+    for _ in range(6):
+        controller = controllers["pick"].ground((robot, target))
+        params = controller.sample_parameters(state, rng)
+        controller.reset(state, params)
+        try:
+            for _ in range(600):
+                action = controller.step()
+                obs, _, _, _, _ = env.step(action)
+                state = env.observation_space.devectorize(obs)
+                controller.observe(state)
+                if controller.terminated():
+                    picked = True
+                    break
+            if picked:
+                break
+        except TrajectorySamplingFailure:
+            continue
+    assert picked, "Top-down pick never terminated"
+    target = state.get_object_from_name("cylinder0")
+    assert state.get(target, "pose_z") > 0.3, "Cylinder was not lifted"
+    env.close()
+
+
+def test_top_down_place_infeasible_on_standard_shelf():
+    """With a top-down grasp, no opening of the standard shelf can admit the gripper
+    column above the held cylinder, so every place sample fails."""
+    env = kinder.make(
+        "kinder/KinematicCylinderShelf3D-o1-v0",
+        use_gui=False,
+        realistic_bg=False,
+    )
+    obs, _ = env.reset(seed=123)
+    state = env.observation_space.devectorize(obs)
+
+    sim = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
+    controllers = create_lifted_controllers(
+        env.action_space, sim, grasp_mode="top_down"
+    )
+    robot = state.get_object_from_name("robot")
+    target = state.get_object_from_name("cylinder0")
+    shelf = state.get_object_from_name("shelf")
+
+    rng = np.random.default_rng(123)
+    for _ in range(6):
+        controller = controllers["pick"].ground((robot, target))
+        controller.reset(state, controller.sample_parameters(state, rng))
+        try:
+            for _ in range(600):
+                action = controller.step()
+                obs, _, _, _, _ = env.step(action)
+                state = env.observation_space.devectorize(obs)
+                controller.observe(state)
+                if controller.terminated():
+                    break
+            if controller.terminated():
+                break
+        except TrajectorySamplingFailure:
+            continue
+
+    for _ in range(3):
+        controller = controllers["place"].ground((robot, target, shelf))
+        controller.reset(state, controller.sample_parameters(state, rng))
+        with pytest.raises(TrajectorySamplingFailure):
+            for _ in range(600):
+                action = controller.step()
+                obs, _, _, _, _ = env.step(action)
+                state = env.observation_space.devectorize(obs)
+                controller.observe(state)
+                if controller.terminated():
+                    break
     env.close()

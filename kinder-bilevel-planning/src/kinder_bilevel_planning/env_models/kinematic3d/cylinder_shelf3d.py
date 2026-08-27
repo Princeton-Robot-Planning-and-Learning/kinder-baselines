@@ -43,6 +43,7 @@ def create_bilevel_planning_models(
     action_space: Space,
     num_objects: int = 1,
     config: CylinderShelf3DEnvConfig | None = None,
+    grasp_mode: str = "side",
 ) -> SesameModels:
     """Create the env models for cylinder shelf 3D.
 
@@ -52,6 +53,9 @@ def create_bilevel_planning_models(
     function and state abstractor both see this config via the internal sim,
     so abstract-state checks (OnFixture) are computed against the configured
     shelf rather than the dataclass default.
+
+    ``grasp_mode`` ("side" or "top_down") selects the pick skill's canned
+    planar approach; see kinder_models' create_lifted_controllers.
     """
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, Kinematic3DRobotActionSpace)
@@ -176,7 +180,9 @@ def create_bilevel_planning_models(
     )
 
     # Get lifted controllers from kinder_models
-    lifted_controllers = create_lifted_controllers(action_space, sim)
+    lifted_controllers = create_lifted_controllers(
+        action_space, sim, grasp_mode=grasp_mode
+    )
     PickController = lifted_controllers["pick"]
 
     robot = Variable("?robot", Kinematic3DRobotType)
