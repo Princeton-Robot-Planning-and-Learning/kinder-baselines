@@ -210,7 +210,7 @@ def main() -> None:
 
         time.sleep(0.02)
 
-    env.close()
+    env.close()  # type: ignore[no-untyped-call]
 
 
 if __name__ == "__main__":
