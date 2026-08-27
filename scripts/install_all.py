@@ -7,6 +7,21 @@ from pathlib import Path
 
 from generate_topological_order import get_topological_order
 
+# Unreleased dependencies to install before the packages. Installing these
+# first means the later `uv pip install -e .[develop]` calls see the
+# packages' version pins already satisfied and leave them in place. uv
+# rejects URL dependencies that arrive transitively (a package's git pin on
+# kindergarden would break every package that depends on that package), so
+# the git pin lives here instead of in the pyprojects.
+#
+# kindergarden: pinned to the commit that adds the CylinderShelf3D env,
+# which is not yet in a PyPI release. Remove at the next kindergarden
+# release.
+PREINSTALL_REQUIREMENTS = [
+    "kindergarden @ git+https://github.com/Princeton-Robot-Planning-and-Learning/"
+    "kindergarden.git@bf420c4404168c13c3ac3270c19918810aa0d4c7",
+]
+
 
 def install_package(package_path: Path) -> bool:
     """Install a single package quickly with minimal output."""
@@ -38,6 +53,23 @@ def main():
     """Install all packages in the correct order."""
     repo_root = Path(__file__).parents[1]
     install_order = get_topological_order(repo_root)
+
+    for requirement in PREINSTALL_REQUIREMENTS:
+        print(f"Preinstalling {requirement.split(' @ ')[0]}...", end=" ", flush=True)
+        try:
+            subprocess.run(
+                ["uv", "pip", "install", requirement],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+            )
+            print("✅")
+        except subprocess.CalledProcessError as e:
+            print("❌")
+            print(f"❌ Failed to preinstall {requirement}", file=sys.stderr)
+            if e.stderr:
+                print(f"   Stderr:\n{e.stderr.decode()}", file=sys.stderr)
+            sys.exit(1)
 
     print(f"Installing {len(install_order)} packages...")
 
