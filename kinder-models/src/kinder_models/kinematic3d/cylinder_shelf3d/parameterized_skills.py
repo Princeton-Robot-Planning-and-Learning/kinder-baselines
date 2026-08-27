@@ -212,6 +212,16 @@ def _plan_planar_reach(
             raise TrajectorySamplingFailure(
                 f"Planar reach solve failed at {np.round(position, 3)}"
             )
+        lower = arm.joint_lower_limits[:7]
+        upper = arm.joint_upper_limits[:7]
+        limit_margin = 0.03
+        if any(
+            value < low + limit_margin or value > high - limit_margin
+            for value, low, high in zip(solution, lower, upper)
+        ):
+            raise TrajectorySamplingFailure(
+                "Planar reach solution exceeds a joint limit"
+            )
         full_joints = extend_joints_to_include_fingers(solution)
         arm.set_joints(full_joints)
         if held_object_id is not None:
@@ -286,7 +296,11 @@ def _interpolated_path_targets(
     for step in range(1, num_one + 1):
         t = step / num_one
         position = start_position + t * (mid_position - start_position)
-        pitch = start_pitch + t * (end_pitch - start_pitch)
+        # Quadratic pitch schedule: extend first, pitch late. Pitching
+        # down while the end effector is still close to the body folds
+        # the elbow (joint 4) past its hard limit; extending first
+        # straightens it before the wrist comes down.
+        pitch = start_pitch + t * t * (end_pitch - start_pitch)
         targets.append((position, pitch))
     leg_two = float(np.linalg.norm(end_position - mid_position))
     num_two = max(3, int(np.ceil(leg_two / PLANAR_PATH_STEP)))
