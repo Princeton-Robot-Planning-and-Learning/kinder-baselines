@@ -16,7 +16,10 @@ dependencies = [
    "hydra-core",
    "hydra-joblib-launcher",
    "omegaconf",
-   "kindergarden>=0.2.4",
+   # Temporary git pin: the CylinderShelf3D env is not yet in a PyPI
+   # kindergarden release. Move back to a plain version pin at the next
+   # kindergarden release.
+   "kindergarden @ git+https://github.com/Princeton-Robot-Planning-and-Learning/kindergarden.git@bf420c4404168c13c3ac3270c19918810aa0d4c7",
    "prpl_utils>=0.0.7",
    "relational_structs>=0.0.1",
    "tomsgeoms2d>=0.0.1",
