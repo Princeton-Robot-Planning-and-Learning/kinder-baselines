@@ -83,7 +83,15 @@ MOVE_TO_TARGET_DISTANCE_BOUNDS = (0.78, 0.88)
 MOVE_TO_TARGET_ROT_BOUNDS = (-np.pi, np.pi)
 PLACE_X_OFFSET_BOUNDS = (-0.15, 0.15)
 PLACE_Y_OFFSET_BOUNDS = (-0.05, 0.1)
-PLACE_BASE_DISTANCE = 0.75
+# The staging distance is a sampled parameter: low board targets need the
+# base farther back (a close base forces the folded arm into it), high
+# targets need it closer (reach). Infeasible draws fail the sample's
+# collision or reach checks and the planner resamples.
+PLACE_BASE_DISTANCE_BOUNDS = (0.65, 0.88)
+# Headroom (beyond the standing cylinder) an opening must have for the
+# place approach to slide the cylinder in: the pre-place waypoint enters
+# slightly lifted, so a bare height-sized opening is not placeable.
+PLACE_VERTICAL_CLEARANCE = 0.04
 
 # Side-grasp geometry. The approach axis is tilted down by
 # SIDE_GRASP_PITCH from horizontal (a purely horizontal approach is
@@ -603,7 +611,8 @@ class GroundPlaceController(
         assert isinstance(x, CylinderShelf3DObjectCentricState)
         place_x_offset = rng.uniform(*PLACE_X_OFFSET_BOUNDS)  # type: ignore
         place_y_offset = rng.uniform(*PLACE_Y_OFFSET_BOUNDS)  # type: ignore
-        return np.array([place_x_offset, place_y_offset])
+        base_distance = rng.uniform(*PLACE_BASE_DISTANCE_BOUNDS)
+        return np.array([place_x_offset, place_y_offset, base_distance])
 
     def reset(self, x: ObjectCentricState, params: Any) -> None:
         self._current_params = params
@@ -640,7 +649,7 @@ class GroundPlaceController(
                 target_pose_temp_se2.rot,
             )
             target_base_pose = get_target_robot_pose_from_parameters(
-                target_place_pose_se2, PLACE_BASE_DISTANCE, np.pi / 2
+                target_place_pose_se2, self._current_params[2], np.pi / 2
             )
             all_collision_ids = (
                 self._sim._get_collision_object_ids()  # pylint: disable=protected-access
@@ -700,26 +709,32 @@ class GroundPlaceController(
                 assert grasped_object_transform is not None
 
                 # Compute the desired object placement pose: standing
-                # upright on the shelf layer, at the sampled offset from
-                # the shelf center. The second shelf layer's top surface
-                # sits at shelf_z + 2 * (spacing + layer height) + layer
-                # height / 2; rest the cylinder just above it (within the
-                # env's placement distance threshold) so the release
-                # registers as a placement.
+                # upright on a shelf board, at the sampled offset from the
+                # shelf center, resting just above the board surface
+                # (within the env's placement distance threshold) so the
+                # release registers as a placement.
                 target_surface_pose = self._current_state.get_object_pose(
                     self.objects[2].name
                 )
                 half_height = self._current_state.get(self.objects[1], "half_extent_z")
-                layer_top_z = (
-                    target_surface_pose.position[2]
-                    + (self._sim.config.shelf_spacing + self._sim.config.shelf_height)
-                    * 2
-                    + self._sim.config.shelf_height / 2
-                )
+                # Choose the lowest present board whose opening fits the
+                # standing cylinder plus approach clearance. With the
+                # default full shelf that is a regular gap; with an inner
+                # board omitted (see shelf_omitted_layers) a tall cylinder
+                # lands on the board below the merged opening.
+                cylinder_height = 2 * half_height
+                for surface_z, opening in self._sim.config.get_layer_openings():
+                    if opening >= cylinder_height + PLACE_VERTICAL_CLEARANCE:
+                        target_surface_z = surface_z
+                        break
+                else:
+                    raise TrajectorySamplingFailure(
+                        "No shelf opening fits the cylinder"
+                    )
                 desired_object_position = (
                     target_surface_pose.position[0] + self._current_params[0],
                     target_surface_pose.position[1] - 0.05 + self._current_params[1],
-                    layer_top_z + half_height + 0.004,
+                    target_surface_z + half_height + 0.004,
                 )
 
                 # The cylinder was grasped from an arbitrary angle around
@@ -924,8 +939,20 @@ def create_lifted_controllers(
         [robot, target, target_shelf],
         PlaceController,
         Box(
-            low=np.array([PLACE_X_OFFSET_BOUNDS[0], PLACE_Y_OFFSET_BOUNDS[0]]),
-            high=np.array([PLACE_X_OFFSET_BOUNDS[1], PLACE_Y_OFFSET_BOUNDS[1]]),
+            low=np.array(
+                [
+                    PLACE_X_OFFSET_BOUNDS[0],
+                    PLACE_Y_OFFSET_BOUNDS[0],
+                    PLACE_BASE_DISTANCE_BOUNDS[0],
+                ]
+            ),
+            high=np.array(
+                [
+                    PLACE_X_OFFSET_BOUNDS[1],
+                    PLACE_Y_OFFSET_BOUNDS[1],
+                    PLACE_BASE_DISTANCE_BOUNDS[1],
+                ]
+            ),
         ),
     )
 

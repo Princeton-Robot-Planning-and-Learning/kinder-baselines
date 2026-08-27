@@ -2,6 +2,9 @@
 
 import kinder
 import numpy as np
+from bilevel_planning.trajectory_samplers.trajectory_sampler import (
+    TrajectorySamplingFailure,
+)
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from kinder.envs.kinematic3d.cylinder_shelf3d import ObjectCentricCylinderShelf3DEnv
@@ -64,26 +67,40 @@ def test_pick_and_place_controller():
     target = state.get_object_from_name("cylinder0")
     target_shelf = state.get_object_from_name("shelf")
     object_parameters = (robot, target, target_shelf)
-    controller = lifted_controller.ground(object_parameters)
 
+    # The place resamples on infeasible draws (e.g. a staging distance
+    # whose reach or collision checks fail), just as the planner does.
     rng = np.random.default_rng(123)
-    params = controller.sample_parameters(state, rng)
+    placed = False
+    for _ in range(8):
+        controller = lifted_controller.ground(object_parameters)
+        params = controller.sample_parameters(state, rng)
+        controller.reset(state, params)
+        try:
+            for _ in range(500):
+                action = controller.step()
+                obs, _, _, _, _ = env.step(action)
+                next_state = env.observation_space.devectorize(obs)
+                controller.observe(next_state)
+                state = next_state
+                if controller.terminated():
+                    placed = True
+                    break
+            if placed:
+                break
+        except TrajectorySamplingFailure:
+            continue
+    assert placed, "Place controller never terminated"
 
-    controller.reset(state, params)
-    for _ in range(500):
-        action = controller.step()
-        obs, _, _, _, _ = env.step(action)
-        next_state = env.observation_space.devectorize(obs)
-        controller.observe(next_state)
-        state = next_state
-        if controller.terminated():
-            break
-    else:
-        assert False, "Controller did not terminate"
-
-    # The cylinder should be standing on the shelf.
+    # The cylinder should be standing on a shelf board at resting height.
+    config = sim.config
     target = state.get_object_from_name("cylinder0")
-    assert state.get(target, "pose_z") > 0.5, "Cylinder is not on the shelf"
+    half_height = state.get(target, "half_extent_z")
+    resting_zs = [z + half_height for z in config.get_layer_surface_zs()]
+    cylinder_z = state.get(target, "pose_z")
+    assert any(
+        abs(cylinder_z - resting_z) < 0.05 for resting_z in resting_zs
+    ), f"Cylinder z {cylinder_z} is not resting on a shelf board"
 
     env.close()
 

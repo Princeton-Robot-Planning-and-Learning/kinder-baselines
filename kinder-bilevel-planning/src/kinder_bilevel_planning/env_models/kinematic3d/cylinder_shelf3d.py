@@ -126,7 +126,10 @@ def create_bilevel_planning_models(
                 if target.name == x.grasped_object:
                     atoms.add(GroundAtom(Holding, [robot, target]))
 
-        # OnFixture.
+        # OnFixture: within the shelf footprint and resting above floor
+        # level (a floor-standing cylinder has pose_z == half_extent_z; one
+        # standing on any shelf board sits at least a board thickness
+        # higher).
         for target in target_objects:
             for fixture in target_fixtures:
                 if (
@@ -140,7 +143,8 @@ def create_bilevel_planning_models(
                         0.0,
                         atol=0.25,
                     )
-                    and x.get(target, "pose_z") > 0.3
+                    and x.get(target, "pose_z")
+                    > x.get(target, "half_extent_z") + 0.015
                 ):
                     atoms.add(GroundAtom(OnFixture, [target, fixture]))
 
