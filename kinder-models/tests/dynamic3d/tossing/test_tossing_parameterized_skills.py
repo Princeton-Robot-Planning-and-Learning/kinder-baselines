@@ -15,6 +15,7 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoObjectTypeFeatures,
     MujocoTidyBotRobotObjectType,
 )
+from pybullet_helpers.geometry import Pose
 from relational_structs import Object, ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
 from relational_structs.utils import create_state_from_dict
@@ -39,6 +40,7 @@ from kinder_models.dynamic3d.utils import (
     _CONTROL_TIMESTEP,
     GRASP_CLOSE_THRESHOLD,
     MOVE_TO_TARGET_DISTANCE_BOUNDS,
+    PyBulletSim,
     _trapezoidal_motion_profile,
 )
 
@@ -1824,10 +1826,6 @@ def test_move_to_toss_location_and_toss_plans_every_phase_in_reset():
 
 def test_bin_collision_model_has_an_open_top_and_real_walls():
     """The gripper may enter the interior, but must not pass through a rim or bottom."""
-    from pybullet_helpers.geometry import Pose
-
-    from kinder_models.dynamic3d.utils import PyBulletSim
-
     state = _create_robot_state([0.0] * 7, 0.0, -1.0, 0.0, 0.0)
     sim = PyBulletSim(state)
     try:
