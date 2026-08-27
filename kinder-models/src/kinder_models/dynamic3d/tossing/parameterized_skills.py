@@ -887,7 +887,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             x.get(cube_to_pick_up, "qz"),
             x.get(cube_to_pick_up, "qw"),
         )
-        candidate_grasp_quats = upright_grasp_rotations(cube_raw_quat)
+        candidate_grasp_quats = self._grasp_rotations(cube_raw_quat)
 
         for grasp_quat in candidate_grasp_quats:
             # Pure z-axis rotation quaternions, so yaw = 2*atan2(qz, qw).
@@ -996,11 +996,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             (
                 state_after_base_motion.get(cube_to_pick_up, "x"),
                 state_after_base_motion.get(cube_to_pick_up, "y"),
-                state_after_base_motion.get(cube_to_pick_up, "z")
-                + state_after_base_motion.get(cube_to_pick_up, "bb_z") / 2
-                # 12 cm above the cube's top surface. "z" is the cube's centre, so
-                # we add half its height ("bb_z").
-                + 0.12,
+                self._hover_height(state_after_base_motion, cube_to_pick_up),
             ),
             chosen_grasp_quat,
         )
@@ -1070,20 +1066,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         self._pybullet_sim.base_link_to_held_obj = (
             GRASP_TRANSFORM_TO_OBJECT.invert()
         )  # For Motion planning so it knows to avoid bonking the cube on things
-        self.plans[self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME] = (
-            run_motion_planning(
-                self._pybullet_sim.robot,
-                # Again where the previous plan ends, not the IK target it aimed at.
-                around_plan[-1],
-                self.home_joints.tolist(),
-                collision_bodies=self._pybullet_sim.get_collision_bodies(
-                    held_object=held_object
-                ),
-                held_object=held_object,
-                base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,
-                seed=0,
-                physics_client_id=self._pybullet_sim.physics_client_id,
-            )
+        self.plans[self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME] = self._plan_lift(
+            around_plan[-1], hover_plan[-1], held_object
         )
 
         for name, plan in self.plans.items():
@@ -1101,6 +1085,41 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             self.plans[name] = remap_joint_position_plan_to_constant_distance(
                 plan, self._pybullet_sim.robot, max_distance=0.2
             )
+
+    def _grasp_rotations(self, rotation: Quaternion) -> tuple[Quaternion, ...]:
+        return upright_grasp_rotations(rotation)
+
+    def _hover_height(self, state: ObjectCentricState, cube: Object) -> float:
+        return float(state.get(cube, "z") + state.get(cube, "bb_z") / 2 + 0.12)
+
+    def _plan_lift(
+        self, start: JointPositions, hover: JointPositions, held_object: int
+    ) -> list[JointPositions] | None:
+        del hover
+        return self._plan_held_motion(start, self.home_joints.tolist(), held_object)
+
+    def _plan_held_motion(
+        self,
+        start: JointPositions,
+        target: JointPositions,
+        held_object: int,
+        *,
+        distance_threshold: float = 1e-6,
+    ) -> list[JointPositions] | None:
+        assert self._pybullet_sim is not None
+        return run_motion_planning(
+            self._pybullet_sim.robot,
+            start,
+            target,
+            collision_bodies=self._pybullet_sim.get_collision_bodies(
+                held_object=held_object
+            ),
+            held_object=held_object,
+            base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,
+            seed=0,
+            physics_client_id=self._pybullet_sim.physics_client_id,
+            distance_threshold=distance_threshold,
+        )
 
     def step(self) -> Array:
         if self.current_phase == self.PickCubeControllerPhase.OPEN_GRIPPER:
@@ -1317,6 +1336,74 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             return False
         curr = np.array(self._get_current_robot_arm_conf()[:7])
         return bool(np.max(np.abs(curr - self._prev_arm_conf)) < atol)
+
+
+class PickCubeFromBinController(PickCubeController):
+    """Grasp above an open bin, descend, and lift clear before retracting.
+
+    Objects: robot, cube, bin. The caller supplies a PyBulletSim with the live
+    bin geometry; omitting it fails rather than planning through invisible walls.
+    """
+
+    def __init__(
+        self, *args: Any, pybullet_sim: PyBulletSim | None = None, **kwargs: Any
+    ) -> None:
+        super().__init__(*args, pybullet_sim=pybullet_sim, **kwargs)
+        self._grasp_index = 0
+
+    def reset(
+        self,
+        x: ObjectCentricState,
+        params: Any,
+        extend_xy_magnitude: float = 0.025,
+        extend_rot_magnitude: float = np.pi / 8,
+    ) -> None:
+        if self._pybullet_sim is None:
+            raise ValueError("Bin retrieval requires a bin-aware collision simulator")
+        last_error: Exception | None = None
+        for index in range(4):
+            self._grasp_index = index
+            try:
+                super().reset(x, params, extend_xy_magnitude, extend_rot_magnitude)
+                return
+            except (AssertionError, ValueError) as error:
+                last_error = error
+        raise ValueError(f"No collision-free bin grasp: {last_error}")
+
+    def _grasp_rotations(self, rotation: Quaternion) -> tuple[Quaternion, ...]:
+        return (upright_grasp_rotations(rotation)[self._grasp_index],)
+
+    def _robot_is_close_to_pose(self, pose: SE2, atol: float = 0.003) -> bool:
+        # Arm plans are computed at the target base pose. The floor controller's
+        # 4 cm tolerance can close the fingers beside a cube near the bin wall.
+        return super()._robot_is_close_to_pose(pose, atol=atol)
+
+    def _hover_height(self, state: ObjectCentricState, cube: Object) -> float:
+        bin_object = self.objects[2]
+        return max(
+            super()._hover_height(state, cube),
+            float(state.get(bin_object, "z") + state.get(bin_object, "bb_z") + 0.12),
+        )
+
+    def _plan_lift(
+        self, start: JointPositions, hover: JointPositions, held_object: int
+    ) -> list[JointPositions] | None:
+        # MuJoCo support contacts penetrate by submillimetres (0.42 mm in the
+        # regression). Permit at most 1 mm, without dropping the bin collision body.
+        clear_rim = self._plan_held_motion(
+            start, hover, held_object, distance_threshold=-0.001
+        )
+        if clear_rim is None:
+            return None
+        retract = self._plan_held_motion(
+            clear_rim[-1],
+            self.home_joints.tolist(),
+            held_object,
+            distance_threshold=-0.001,
+        )
+        if retract is None:
+            return None
+        return clear_rim + retract[1:]
 
 
 class MoveToTossLocationAndTossController(
@@ -1774,6 +1861,17 @@ def create_lifted_controllers(
         )
     )
 
+    class PickCubeFromBin(PickCubeFromBinController):
+        """Bin retrieval with the caller's collision geometry."""
+
+        def __init__(self, objects):
+            super().__init__(objects, pybullet_sim=pybullet_sim)
+
+    bin_object = Variable("?bin", MujocoMovableObjectType)
+    LiftedPickCubeFromBinController: LiftedParameterizedController = (
+        LiftedParameterizedController([robot, cube, bin_object], PickCubeFromBin)
+    )
+
     class MoveToTossLocationAndToss(MoveToTossLocationAndTossController):
         """Composed move-and-toss with pre-configured PyBullet sim."""
 
@@ -1801,5 +1899,6 @@ def create_lifted_controllers(
         "open_gripper": LiftedOpenGripperController,
         "no_op": LiftedNoOpController,
         "pick_cube": LiftedPickCubeController,
+        "pick_cube_from_bin": LiftedPickCubeFromBinController,
         "move_to_toss_location_and_toss": LiftedMoveToTossLocationAndTossController,
     }
