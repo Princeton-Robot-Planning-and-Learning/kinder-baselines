@@ -1,5 +1,7 @@
 """Bilevel planning models for the cylinder shelf 3D environment."""
 
+from collections.abc import Collection
+
 import numpy as np
 from bilevel_planning.structs import (
     LiftedSkill,
@@ -24,6 +26,8 @@ from kinder.envs.kinematic3d.utils import (
 from kinder_models.kinematic3d.cylinder_shelf3d.parameterized_skills import (
     create_lifted_controllers,
 )
+from kinder_models.magic import make_magic_lifted_controller
+from kinder_models.structs import SkillCall
 from numpy.typing import NDArray
 from relational_structs import (
     GroundAtom,
@@ -37,12 +41,16 @@ from relational_structs.spaces import ObjectCentricBoxSpace, ObjectCentricStateS
 
 GRIPPER_OPEN_THRESHOLD = 0.01
 
+# Operator name -> key in kinder_models' create_lifted_controllers.
+_SKILL_CONTROLLER_KEYS = {"Pick": "pick", "Place": "place"}
+
 
 def create_bilevel_planning_models(
     observation_space: Space,
     action_space: Space,
     num_objects: int = 1,
     config: CylinderShelf3DEnvConfig | None = None,
+    magic_skills: Collection[str] = (),
 ) -> SesameModels:
     """Create the env models for cylinder shelf 3D.
 
@@ -52,9 +60,23 @@ def create_bilevel_planning_models(
     function and state abstractor both see this config via the internal sim,
     so abstract-state checks (OnFixture) are computed against the configured
     shelf rather than the dataclass default.
+
+    ``magic_skills`` names operators ("Pick", "Place") whose low-level policy
+    is not simulated during planning. Each becomes a one-step skill emitting
+    a ``SkillCall`` whose predicted state comes from the controller's own
+    outcome model, and the transition function maps that call straight to
+    the predicted state. Plans then contain a ``SkillCall`` wherever the
+    executor must carry the skill out by other means. Only skills whose
+    controller implements ``OutcomePredictor`` can be made magic.
     """
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, Kinematic3DRobotActionSpace)
+    unknown_magic = set(magic_skills) - set(_SKILL_CONTROLLER_KEYS)
+    if unknown_magic:
+        raise ValueError(
+            f"Unknown magic skill(s) {sorted(unknown_magic)}; expected a subset "
+            f"of {sorted(_SKILL_CONTROLLER_KEYS)}"
+        )
 
     if config is None:
         config = CylinderShelf3DEnvConfig()
@@ -70,9 +92,11 @@ def create_bilevel_planning_models(
     # Create the transition function.
     def transition_fn(
         x: ObjectCentricState,
-        u: NDArray[np.float32],
+        u: NDArray[np.float32] | SkillCall[ObjectCentricState],
     ) -> ObjectCentricState:
-        """Simulate the action."""
+        """Simulate the action, or jump to a SkillCall's predicted state."""
+        if isinstance(u, SkillCall):
+            return u.predicted_state.copy()
         state = x.copy()
         assert isinstance(state, CylinderShelf3DObjectCentricState)
         sim.set_state(state)
@@ -143,8 +167,7 @@ def create_bilevel_planning_models(
                         0.0,
                         atol=0.25,
                     )
-                    and x.get(target, "pose_z")
-                    > x.get(target, "half_extent_z") + 0.015
+                    and x.get(target, "pose_z") > x.get(target, "half_extent_z") + 0.015
                 ):
                     atoms.add(GroundAtom(OnFixture, [target, fixture]))
 
@@ -175,8 +198,14 @@ def create_bilevel_planning_models(
         delete_effects={LiftedAtom(HandEmpty, [robot]), LiftedAtom(OnGround, [target])},
     )
 
-    # Get lifted controllers from kinder_models
+    # Get lifted controllers from kinder_models, swapping in magic versions
+    # where requested.
     lifted_controllers = create_lifted_controllers(action_space, sim)
+    for skill_name in magic_skills:
+        key = _SKILL_CONTROLLER_KEYS[skill_name]
+        lifted_controllers[key] = make_magic_lifted_controller(
+            lifted_controllers[key], skill_name
+        )
     PickController = lifted_controllers["pick"]
 
     robot = Variable("?robot", Kinematic3DRobotType)
