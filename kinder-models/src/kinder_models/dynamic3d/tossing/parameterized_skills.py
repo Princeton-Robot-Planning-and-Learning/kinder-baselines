@@ -837,6 +837,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         self._last_gripper_state: float = 0.0
         self._closed_gripper: bool = False
         self._lifted: bool = False
+        # None tries all base approaches; bin retrieval selects one per full plan.
+        self._grasp_index: int | None = None
         # Previous tick's arm conf, for the settling check in _robot_arm_has_settled.
         self._prev_arm_conf: np.ndarray | None = None
         # Which waypoint of self.plans[phase] step() is currently driving toward. A fresh
@@ -889,7 +891,9 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             x.get(cube_to_pick_up, "qz"),
             x.get(cube_to_pick_up, "qw"),
         )
-        candidate_grasp_quats = self._grasp_rotations(cube_raw_quat)
+        candidate_grasp_quats = upright_grasp_rotations(cube_raw_quat)
+        if self._grasp_index is not None:
+            candidate_grasp_quats = (candidate_grasp_quats[self._grasp_index],)
 
         for grasp_quat in candidate_grasp_quats:
             # Pure z-axis rotation quaternions, so yaw = 2*atan2(qz, qw).
@@ -1104,9 +1108,6 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             self.plans[name] = remap_joint_position_plan_to_constant_distance(
                 plan, self._pybullet_sim.robot, max_distance=0.2
             )
-
-    def _grasp_rotations(self, rotation: Quaternion) -> tuple[Quaternion, ...]:
-        return upright_grasp_rotations(rotation)
 
     def step(self) -> Array:
         if self.current_phase == self.PickCubeControllerPhase.OPEN_GRIPPER:
@@ -1336,12 +1337,6 @@ class PickCubeFromBinController(PickCubeController):
     # The bin remains a collision body; physical contacts are unchanged.
     _HELD_OBJECT_COLLISION_THRESHOLD = -0.001
 
-    def __init__(
-        self, *args: Any, pybullet_sim: PyBulletSim | None = None, **kwargs: Any
-    ) -> None:
-        super().__init__(*args, pybullet_sim=pybullet_sim, **kwargs)
-        self._grasp_index = 0
-
     def reset(
         self,
         x: ObjectCentricState,
@@ -1362,9 +1357,6 @@ class PickCubeFromBinController(PickCubeController):
             except (AssertionError, ValueError) as error:
                 last_error = error
         raise ValueError(f"No collision-free bin grasp: {last_error}")
-
-    def _grasp_rotations(self, rotation: Quaternion) -> tuple[Quaternion, ...]:
-        return (upright_grasp_rotations(rotation)[self._grasp_index],)
 
 
 class MoveToTossLocationAndTossController(
