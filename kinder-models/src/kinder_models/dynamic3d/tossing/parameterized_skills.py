@@ -1358,7 +1358,9 @@ class PickCubeFromBinController(PickCubeController):
         extend_xy_magnitude: float = 0.025,
         extend_rot_magnitude: float = np.pi / 8,
     ) -> None:
-        if self._pybullet_sim is None:
+        if self._pybullet_sim is None or not self._pybullet_sim.has_bin(
+            self.objects[2].name
+        ):
             raise ValueError("Bin retrieval requires a bin-aware collision simulator")
         last_error: Exception | None = None
         for index in range(4):

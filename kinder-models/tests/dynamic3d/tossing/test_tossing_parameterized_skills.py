@@ -1,11 +1,13 @@
 """Tests for ground parameterized skills."""
 
 import gc
+import json
 from pathlib import Path
 
 import kinder
 import numpy as np
 import pybullet as p
+import pytest
 from bilevel_planning.structs import GroundParameterizedController
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
@@ -16,7 +18,7 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoTidyBotRobotObjectType,
 )
 from pybullet_helpers.geometry import Pose
-from relational_structs import Object, ObjectCentricState
+from relational_structs import GroundAtom, Object, ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
 from relational_structs.utils import create_state_from_dict
 from spatialmath import SE2
@@ -25,8 +27,14 @@ from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     MoveToTossLocationAndTossController,
     PickCubeController,
+    PickCubeFromBinController,
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,
+)
+from kinder_models.dynamic3d.tossing.state_abstractions import (
+    Holding,
+    MovableInGoalRegion,
+    Tossing3DStateAbstractor,
 )
 from kinder_models.dynamic3d.tossing.toss_swing import (
     TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
@@ -1848,3 +1856,123 @@ def test_bin_collision_model_has_an_open_top_and_real_walls():
         assert rim[0] == body and np.isclose(rim[3][2], 0.2)
     finally:
         sim.close()
+
+
+@pytest.mark.parametrize("with_sim", [False, True])
+def test_bin_pick_requires_the_named_bin_collision_geometry(monkeypatch, with_sim):
+    """A non-null simulator without the bin must not silently plan through walls."""
+    state = _create_robot_state([0.0] * 7, 0.0, -1.0, 0.0, 0.0)
+    sim = PyBulletSim(state) if with_sim else None
+    monkeypatch.setattr(PickCubeController, "reset", lambda *args: None)
+    controller = PickCubeFromBinController(
+        (
+            _get_robot_from_state(state),
+            state.get_object_from_name("cube1"),
+            Object("bin_0", MujocoMovableObjectType),
+        ),
+        pybullet_sim=sim,
+    )
+    try:
+        with pytest.raises(ValueError, match="bin-aware collision simulator"):
+            controller.reset(state, None)
+    finally:
+        if sim is not None:
+            sim.close()
+
+
+def test_pick_cube_from_bin_after_toss(tmp_path):
+    """Physically pick, throw into a near-side bin, and retrieve without resetting."""
+    task_path = (
+        Path(kinder.__file__).parent
+        / "envs/dynamic3d/tasks/Tossing3D/Tossing3D-o1.json"
+    )
+    config = json.loads(task_path.read_text(encoding="utf-8"))
+    config["regions"]["bin_init_region"]["ranges"] = [[0, -0.7, 0.001, -0.699]]
+    config["cameras"]["task_view"].update(
+        position=[0, -2, 2], lookat=[-0.3, -0.35, 0.15], fovy=70
+    )
+    task_path = tmp_path / "bin-retrieval.json"
+    task_path.write_text(json.dumps(config), encoding="utf-8")
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0",
+        render_mode="rgb_array",
+        task_config_path=str(task_path),
+    )
+    sim = None
+    try:
+        scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+        abstractor = Tossing3DStateAbstractor(scene)
+        scene.set_render_camera("task_view")
+        if MAKE_VIDEOS:
+            env = RecordVideo(
+                env, "unit_test_videos", name_prefix="tossing-bin-retrieval"
+            )
+        obs, _ = env.reset(seed=125)
+        assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+        state = env.observation_space.devectorize(obs)
+        robot = _get_robot_from_state(state)
+        cube = state.get_object_from_name("cube_0")
+        bin_object = state.get_object_from_name("bin_0")
+        barrier = state.get_object_from_name("cuboid_barrier")
+        results = []
+        for name, objects, params in (
+            ("pick_cube", (robot, cube, barrier), None),
+            (
+                "move_to_toss_location_and_toss",
+                (robot, cube, barrier),
+                np.array([1.35, 0, np.deg2rad(130), 792]),
+            ),
+            ("pick_cube_from_bin", (robot, cube, bin_object), None),
+        ):
+            if name == "pick_cube_from_bin":
+                sim = PyBulletSim(state)
+                bin_geometry = scene.get_object("bin_0")
+                sim.add_bin(
+                    name="bin_0",
+                    pose=Pose(
+                        tuple(state.get(bin_object, key) for key in ("x", "y", "z")),
+                        tuple(
+                            state.get(bin_object, key)
+                            for key in ("qx", "qy", "qz", "qw")
+                        ),
+                    ),
+                    length=bin_geometry.length,
+                    width=bin_geometry.width,
+                    height=bin_geometry.height,
+                    wall_thickness=bin_geometry.wall_thickness,
+                )
+            controller = create_lifted_controllers(env.action_space, pybullet_sim=sim)[
+                name
+            ].ground(objects)
+            controller.reset(state, params)
+            for step in range(1000):
+                obs, _, _, _, _ = env.step(controller.step())
+                state = env.observation_space.devectorize(obs)
+                controller.observe(state)
+                if controller.terminated():
+                    break
+            else:
+                pytest.fail(f"{name} did not terminate")
+            expected = (
+                GroundAtom(MovableInGoalRegion, [cube])
+                if name == "move_to_toss_location_and_toss"
+                else GroundAtom(Holding, [robot, cube])
+            )
+            assert expected in abstractor.state_abstractor(state).atoms
+            results.append(
+                {
+                    "controller": name,
+                    "steps": step + 1,
+                    "cube_z": float(state.get(cube, "z")),
+                }
+            )
+        assert state.get(cube, "z") > 0.3
+        if MAKE_VIDEOS:
+            Path("unit_test_videos/tossing-bin-retrieval.json").write_text(
+                json.dumps({"seed": 125, "results": results}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+    finally:
+        env.close()
+        if sim is not None:
+            sim.close()

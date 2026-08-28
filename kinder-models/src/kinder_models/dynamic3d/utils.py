@@ -576,6 +576,10 @@ class PyBulletSim:
         self._bins[name] = body
         return body
 
+    def has_bin(self, name: str) -> bool:
+        """Whether this bin has collision geometry in the planning scene."""
+        return name in self._bins
+
     @property
     def physics_client_id(self) -> int:
         """The physics client ID."""
