@@ -1880,6 +1880,22 @@ def test_bin_pick_requires_the_named_bin_collision_geometry(monkeypatch, with_si
             sim.close()
 
 
+def test_bin_pick_uses_default_base_tolerance():
+    """Bin retrieval keeps the floor picker's base arrival tolerance."""
+    state = _create_robot_state([0.0] * 7, 0.0, 0.0, 0.0, 0.0)
+    controller = PickCubeFromBinController(
+        (
+            _get_robot_from_state(state),
+            state.get_object_from_name("cube1"),
+            Object("bin_0", MujocoMovableObjectType),
+        )
+    )
+    controller.observe(state)
+    assert controller._robot_is_close_to_pose(  # pylint: disable=protected-access
+        SE2(0.02, 0.0, 0.0)
+    )
+
+
 def test_pick_cube_from_bin_after_toss(tmp_path):
     """Physically pick, throw into a near-side bin, and retrieve without resetting."""
     task_path = (
@@ -1944,11 +1960,31 @@ def test_pick_cube_from_bin_after_toss(tmp_path):
             controller = create_lifted_controllers(env.action_space, pybullet_sim=sim)[
                 name
             ].ground(objects)
+            bin_position = np.array(
+                [state.get(bin_object, key) for key in ("x", "y", "z")]
+            )
             controller.reset(state, params)
             for step in range(1000):
+                navigating_to_bin = name == "pick_cube_from_bin" and (
+                    controller.current_phase
+                    in (
+                        PickCubeController.PickCubeControllerPhase.OPEN_GRIPPER,
+                        PickCubeController.PickCubeControllerPhase.BASE_MOTION,
+                    )
+                )
                 obs, _, _, _, _ = env.step(controller.step())
                 state = env.observation_space.devectorize(obs)
                 controller.observe(state)
+                if navigating_to_bin:
+                    assert (
+                        np.linalg.norm(
+                            np.array(
+                                [state.get(bin_object, key) for key in ("x", "y", "z")]
+                            )
+                            - bin_position
+                        )
+                        < 0.001
+                    ), "Base navigation moved the bin"
                 if controller.terminated():
                     break
             else:

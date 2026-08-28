@@ -150,8 +150,8 @@ def get_bounding_box(
     extracted automatically.
     """
     if obj.is_instance(MujocoTidyBotRobotObjectType):
-        # NOTE: hardcoded for now.
-        return (0.5, 0.5, 1.0)
+        # Cover the physical 54.8 by 50.8 cm chassis in base motion planning.
+        return (0.55, 0.55, 1.0)
     if obj.is_instance(MujocoFixtureObjectType):
         # NOTE: hardcoded for now.
         return (0.61, 0.26, 1.0)

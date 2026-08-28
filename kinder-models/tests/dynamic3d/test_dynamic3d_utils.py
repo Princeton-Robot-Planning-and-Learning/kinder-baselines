@@ -8,7 +8,7 @@ from kinder.envs.dynamic3d.envs import TidyBot3DEnv
 from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
 from matplotlib import pyplot as plt
 from pybullet_helpers.joint import get_joint_infos
-from relational_structs import ObjectCentricState
+from relational_structs import Object, ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
 from spatialmath import SE2
 from tomsgeoms2d.structs import Rectangle
@@ -27,6 +27,13 @@ from kinder_models.dynamic3d.utils import (
 )
 
 kinder.register_all_environments()
+
+
+def test_robot_planning_footprint_covers_chassis():
+    """Use a 55 cm square to cover the 54.8 by 50.8 cm physical chassis."""
+    robot = Object("robot", MujocoTidyBotRobotObjectType)
+    assert get_bounding_box(ObjectCentricState({}, {}), robot) == (0.55, 0.55, 1.0)
+
 
 _TEST_TASKS = Path(__file__).parent.parent / "test_tasks"
 
