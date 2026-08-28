@@ -31,30 +31,41 @@ def _make_agent(env, magic_skills):
     return env_models, agent
 
 
-def test_cylinder_shelf3d_magic_pick_planning_and_execution():
-    """With Pick magic, the plan holds exactly one SkillCall for the pick, the
-    predicted state satisfies the pick's effects, and executing the plan with the
-    SkillCall carried out as a teleport reaches the goal."""
+def _predicate(env_models, name):
+    return next(p for p in env_models.predicates if p.name == name)
+
+
+def test_cylinder_shelf3d_magic_grasp_planning_and_execution():
+    """With Grasp magic, the plan reaches the pre-grasp pose with planned motion,
+    holds exactly one SkillCall for the grasp whose predicted state satisfies
+    Holding, and executing the plan with the SkillCall carried out as a teleport
+    reaches the goal."""
     env = kinder.make("kinder/KinematicCylinderShelf3D-o1-v0", allow_state_access=True)
-    env_models, agent = _make_agent(env, magic_skills=("Pick",))
+    env_models, agent = _make_agent(env, magic_skills=("Grasp",))
     obs, info = env.reset(seed=123)
     agent.reset(obs, info)
 
     trajectory = agent.plan()
-    calls = [(x, u) for x, u in trajectory if isinstance(u, SkillCall)]
+    calls = [
+        (i, x, u) for i, (x, u) in enumerate(trajectory) if isinstance(u, SkillCall)
+    ]
     assert len(calls) == 1
-    pre_state, call = calls[0]
-    assert call.skill_name == "Pick"
+    index, pre_state, call = calls[0]
+    assert call.skill_name == "Grasp"
     assert [o.name for o in call.objects] == ["robot", "cylinder0"]
-    assert not any(isinstance(u, SkillCall) for _, u in trajectory[-1:])
+    # The approach to the pre-grasp pose is planned motion, not magic.
+    assert index > 0
+    assert all(isinstance(u, np.ndarray) for _, u in trajectory[:index])
 
-    # The predicted state carries the pick's abstract effects.
     robot = pre_state.get_object_from_name("robot")
     cylinder = pre_state.get_object_from_name("cylinder0")
-    holding = next(p for p in env_models.predicates if p.name == "Holding")
-    abstract = env_models.state_abstractor(call.predicted_state)
-    assert isinstance(abstract, RelationalAbstractState)
-    assert GroundAtom(holding, [robot, cylinder]) in abstract.atoms
+    at_pre_grasp = GroundAtom(_predicate(env_models, "AtPreGrasp"), [robot, cylinder])
+    holding = GroundAtom(_predicate(env_models, "Holding"), [robot, cylinder])
+    before = env_models.state_abstractor(pre_state)
+    after = env_models.state_abstractor(call.predicted_state)
+    assert isinstance(before, RelationalAbstractState)
+    assert at_pre_grasp in before.atoms and holding not in before.atoms
+    assert holding in after.atoms and at_pre_grasp not in after.atoms
     assert env_models.transition_fn(pre_state, call) == call.predicted_state
 
     # Execute: regular actions step the env; the SkillCall teleports it.
@@ -80,13 +91,14 @@ def test_cylinder_shelf3d_magic_skills_validation():
             "cylinder_shelf3d",
             env.observation_space,
             env.action_space,
-            magic_skills=("Fly",),
+            magic_skills=("Pick",),
         )
     env.close()
 
 
 def test_cylinder_shelf3d_without_magic_has_no_skill_calls():
-    """Without magic skills the plan is a plain low-level action sequence."""
+    """Without magic skills the plan is a plain low-level action sequence that
+    reaches the goal."""
     env = kinder.make("kinder/KinematicCylinderShelf3D-o1-v0")
     _, agent = _make_agent(env, magic_skills=())
     obs, info = env.reset(seed=123)
@@ -94,4 +106,10 @@ def test_cylinder_shelf3d_without_magic_has_no_skill_calls():
     trajectory = agent.plan()
     assert trajectory
     assert all(isinstance(u, np.ndarray) for _, u in trajectory)
+    terminated = False
+    for _, action in trajectory:
+        _, _, terminated, _, _ = env.step(action)
+        if terminated:
+            break
+    assert terminated
     env.close()

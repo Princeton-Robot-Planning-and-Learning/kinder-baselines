@@ -12,12 +12,17 @@ from kinder.envs.kinematic3d.cylinder_shelf3d import ObjectCentricCylinderShelf3
 from relational_structs.spaces import ObjectCentricBoxSpace
 
 from kinder_models.kinematic3d.cylinder_shelf3d.parameterized_skills import (
+    PRE_GRASP_POSITION_TOL,
     create_lifted_controllers,
+    get_grasp_positions,
+    is_at_pre_grasp,
 )
 from kinder_models.magic import make_magic_lifted_controller
 from kinder_models.structs import SkillCall
 
 kinder.register_all_environments()
+
+_STAGING_PARAMS = np.array([0.8, 0.0])
 
 
 def _run_controller(env, controller, state, max_steps=600):
@@ -31,26 +36,149 @@ def _run_controller(env, controller, state, max_steps=600):
     raise AssertionError("Controller did not terminate")
 
 
-def test_pick_predict_outcome_matches_rollout():
-    """The pick's outcome model agrees with actually running the pick controller."""
+def _make_env_and_controllers(seed=456):
     env = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
-    init_state, _ = env.reset(seed=456)
+    init_state, _ = env.reset(seed=seed)
     sim = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
     controllers = create_lifted_controllers(env.action_space, sim)
-    robot = init_state.get_object_from_name("robot")
-    target = init_state.get_object_from_name("cylinder0")
-    params = np.array([0.8, 0.0])
+    return env, sim, controllers, init_state
 
-    controller = controllers["pick"].ground((robot, target))
-    predicted = controller.predict_outcome(init_state, params)
 
-    controller = controllers["pick"].ground((robot, target))
-    controller.reset(init_state, params)
-    actual = _run_controller(env, controller, init_state)
+def _move_to_pre_grasp(env, controllers, state, params=_STAGING_PARAMS):
+    robot = state.get_object_from_name("robot")
+    target = state.get_object_from_name("cylinder0")
+    controller = controllers["move_to_pre_grasp"].ground((robot, target))
+    controller.reset(state, params)
+    return _run_controller(env, controller, state)
 
-    assert predicted.grasped_object == "cylinder0"
-    assert actual.grasped_object == "cylinder0"
-    assert predicted.get(target, "pose_z") > 0.3
+
+def _grasp(env, controllers, state):
+    robot = state.get_object_from_name("robot")
+    target = state.get_object_from_name("cylinder0")
+    controller = controllers["grasp"].ground((robot, target))
+    controller.reset(
+        state, controller.sample_parameters(state, np.random.default_rng(0))
+    )
+    return _run_controller(env, controller, state)
+
+
+def _place(env, controllers, state, rng):
+    """Run the place, resampling on infeasible draws just as the planner does."""
+    robot = state.get_object_from_name("robot")
+    target = state.get_object_from_name("cylinder0")
+    shelf = state.get_object_from_name("shelf")
+    for _ in range(8):
+        controller = controllers["place"].ground((robot, target, shelf))
+        controller.reset(state, controller.sample_parameters(state, rng))
+        try:
+            return _run_controller(env, controller, state)
+        except TrajectorySamplingFailure:
+            continue
+    raise AssertionError("Place controller never terminated")
+
+
+def _assert_on_shelf(sim, state):
+    target = state.get_object_from_name("cylinder0")
+    half_height = state.get(target, "half_extent_z")
+    resting_zs = [z + half_height for z in sim.config.get_layer_surface_zs()]
+    cylinder_z = state.get(target, "pose_z")
+    assert any(
+        abs(cylinder_z - resting_z) < 0.05 for resting_z in resting_zs
+    ), f"Cylinder z {cylinder_z} is not resting on a shelf board"
+    assert state.grasped_object is None
+
+
+def test_move_to_pre_grasp_reaches_pre_grasp_pose():
+    """MoveToPreGrasp ends with the empty gripper at the pre-grasp position."""
+    env, sim, controllers, init_state = _make_env_and_controllers()
+    assert not is_at_pre_grasp(sim, init_state, "cylinder0")
+    state = _move_to_pre_grasp(env, controllers, init_state)
+    assert state.grasped_object is None
+    assert is_at_pre_grasp(sim, state, "cylinder0")
+    sim.set_state(state)
+    ee_position = np.array(sim.robot.arm.get_end_effector_pose().position)
+    _, pre_grasp_position = get_grasp_positions(state, "cylinder0")
+    assert np.linalg.norm(ee_position - pre_grasp_position) < PRE_GRASP_POSITION_TOL
+    env.close()
+    sim.close()
+
+
+def test_move_to_pre_grasp_grasp_and_place():
+    """The three skills in sequence pick the cylinder off the floor and place it on a
+    shelf board."""
+    env = kinder.make(
+        "kinder/KinematicCylinderShelf3D-o1-v0",
+        render_mode="rgb_array",
+        use_gui=False,
+        realistic_bg=True,
+    )
+    if MAKE_VIDEOS:
+        env = RecordVideo(env, "unit_test_videos", name_prefix="CylinderShelf3D")
+    obs, _ = env.reset(seed=123)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    sim = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
+    controllers = create_lifted_controllers(env.action_space, sim)
+    robot = state.get_object_from_name("robot")
+    target = state.get_object_from_name("cylinder0")
+    shelf = state.get_object_from_name("shelf")
+    rng = np.random.default_rng(123)
+
+    def _run(controller, state):
+        for _ in range(500):
+            action = controller.step()
+            obs, _, _, _, _ = env.step(action)
+            state = env.observation_space.devectorize(obs)
+            controller.observe(state)
+            if controller.terminated():
+                return state
+        raise AssertionError("Controller did not terminate")
+
+    stage = controllers["move_to_pre_grasp"].ground((robot, target))
+    stage.reset(state, stage.sample_parameters(state, rng))
+    state = _run(stage, state)
+    assert is_at_pre_grasp(sim, state, "cylinder0")
+
+    grasp = controllers["grasp"].ground((robot, target))
+    grasp.reset(state, grasp.sample_parameters(state, rng))
+    state = _run(grasp, state)
+    assert state.grasped_object == "cylinder0"
+    assert state.get(target, "pose_z") > 0.3, "Cylinder was not lifted"
+    assert not is_at_pre_grasp(sim, state, "cylinder0")
+
+    # The place resamples on infeasible draws, just as the planner does.
+    rng = np.random.default_rng(123)
+    placed = False
+    for _ in range(8):
+        place = controllers["place"].ground((robot, target, shelf))
+        place.reset(state, place.sample_parameters(state, rng))
+        try:
+            state = _run(place, state)
+            placed = True
+            break
+        except TrajectorySamplingFailure:
+            continue
+    assert placed, "Place controller never terminated"
+    _assert_on_shelf(sim, state)
+    env.close()
+
+
+def test_grasp_any_approach_angle():
+    """The side grasp works from arbitrary approach angles around the cylinder."""
+    env, sim, controllers, _ = _make_env_and_controllers()
+    for approach_rot in [-2.5, 0.0, 2.5]:
+        state, _ = env.reset(seed=456)
+        state = _move_to_pre_grasp(
+            env, controllers, state, params=np.array([0.8, approach_rot])
+        )
+        state = _grasp(env, controllers, state)
+        target = state.get_object_from_name("cylinder0")
+        assert state.get(target, "pose_z") > 0.3, f"No lift for rot={approach_rot}"
+    env.close()
+    sim.close()
+
+
+def _assert_robot_close(predicted, actual, target):
     assert np.allclose(
         [predicted.base_pose.x, predicted.base_pose.y, predicted.base_pose.rot],
         [actual.base_pose.x, actual.base_pose.y, actual.base_pose.rot],
@@ -64,23 +192,50 @@ def test_pick_predict_outcome_matches_rollout():
     assert np.allclose(joint_error, 0.0, atol=2e-2)
     assert np.isclose(predicted.finger_state, actual.finger_state, atol=1e-2)
     assert np.allclose(
-        predicted.get_object_pose("cylinder0").position,
-        actual.get_object_pose("cylinder0").position,
+        predicted.get_object_pose(target.name).position,
+        actual.get_object_pose(target.name).position,
         atol=2e-2,
     )
+
+
+def test_move_to_pre_grasp_predict_outcome_matches_rollout():
+    """MoveToPreGrasp's outcome model agrees with actually running the controller."""
+    env, sim, controllers, init_state = _make_env_and_controllers()
+    robot = init_state.get_object_from_name("robot")
+    target = init_state.get_object_from_name("cylinder0")
+    controller = controllers["move_to_pre_grasp"].ground((robot, target))
+    predicted = controller.predict_outcome(init_state, _STAGING_PARAMS)
+    actual = _move_to_pre_grasp(env, controllers, init_state)
+    assert is_at_pre_grasp(sim, predicted, "cylinder0")
+    _assert_robot_close(predicted, actual, target)
     env.close()
     sim.close()
 
 
-def test_pick_predict_outcome_rejects_infeasible_parameters():
-    """Staging the base inside the shelf fails the prediction like a real sample."""
-    env = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
-    init_state, _ = env.reset(seed=456)
-    sim = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
-    controllers = create_lifted_controllers(env.action_space, sim)
+def test_grasp_predict_outcome_matches_rollout():
+    """Grasp's outcome model agrees with actually running the grasp from the pre-grasp
+    pose."""
+    env, sim, controllers, init_state = _make_env_and_controllers()
     robot = init_state.get_object_from_name("robot")
     target = init_state.get_object_from_name("cylinder0")
-    controller = controllers["pick"].ground((robot, target))
+    staged = _move_to_pre_grasp(env, controllers, init_state)
+    controller = controllers["grasp"].ground((robot, target))
+    predicted = controller.predict_outcome(staged, np.zeros(0))
+    actual = _grasp(env, controllers, staged)
+    assert predicted.grasped_object == "cylinder0"
+    assert actual.grasped_object == "cylinder0"
+    assert predicted.get(target, "pose_z") > 0.3
+    _assert_robot_close(predicted, actual, target)
+    env.close()
+    sim.close()
+
+
+def test_move_to_pre_grasp_predict_outcome_rejects_infeasible_parameters():
+    """Staging the base inside the shelf fails the prediction like a real sample."""
+    env, sim, controllers, init_state = _make_env_and_controllers()
+    robot = init_state.get_object_from_name("robot")
+    target = init_state.get_object_from_name("cylinder0")
+    controller = controllers["move_to_pre_grasp"].ground((robot, target))
 
     # Put the cylinder 0.8 m in front of the shelf and stage the base 0.8 m
     # behind the cylinder, i.e. at the shelf's own position.
@@ -96,175 +251,28 @@ def test_pick_predict_outcome_rejects_infeasible_parameters():
     sim.close()
 
 
-def test_magic_pick_then_real_place():
-    """A magic pick's predicted state is a valid start for the real place skill."""
-    env = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
-    init_state, _ = env.reset(seed=456)
-    sim = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
-    controllers = create_lifted_controllers(env.action_space, sim)
+def test_magic_grasp_then_real_place():
+    """After a real MoveToPreGrasp, a magic Grasp's predicted state is a valid start for
+    the real place skill."""
+    env, sim, controllers, init_state = _make_env_and_controllers()
     robot = init_state.get_object_from_name("robot")
     target = init_state.get_object_from_name("cylinder0")
-    shelf = init_state.get_object_from_name("shelf")
+    staged = _move_to_pre_grasp(env, controllers, init_state)
 
-    magic_pick = make_magic_lifted_controller(controllers["pick"], "Pick")
-    rng = np.random.default_rng(456)
-    pick = magic_pick.ground((robot, target))
-    pick.reset(init_state, np.array([0.8, 0.0]))
-    call = pick.step()
-    assert pick.terminated()
+    magic_grasp = make_magic_lifted_controller(controllers["grasp"], "Grasp")
+    grasp = magic_grasp.ground((robot, target))
+    grasp.reset(staged, grasp.sample_parameters(staged, np.random.default_rng(0)))
+    call = grasp.step()
+    assert grasp.terminated()
     assert isinstance(call, SkillCall)
-    assert call.skill_name == "Pick"
+    assert call.skill_name == "Grasp"
     assert call.objects == (robot, target)
-    state = call.predicted_state
-    assert state.grasped_object == "cylinder0"
+    assert call.predicted_state.grasped_object == "cylinder0"
 
-    # Execute the magic pick by teleporting the env to the predicted state.
-    env.set_state(state)
+    # Execute the magic grasp by teleporting the env to the predicted state.
+    env.set_state(call.predicted_state)
     state = env.get_state()
-
-    placed = False
-    for _ in range(8):
-        place = controllers["place"].ground((robot, target, shelf))
-        place.reset(state, place.sample_parameters(state, rng))
-        try:
-            state = _run_controller(env, place, state)
-            placed = True
-            break
-        except TrajectorySamplingFailure:
-            continue
-    assert placed, "Place controller never terminated from the predicted state"
-
-    half_height = state.get(target, "half_extent_z")
-    resting_zs = [z + half_height for z in sim.config.get_layer_surface_zs()]
-    cylinder_z = state.get(target, "pose_z")
-    assert any(abs(cylinder_z - z) < 0.05 for z in resting_zs)
-    assert state.grasped_object is None
+    state = _place(env, controllers, state, np.random.default_rng(456))
+    _assert_on_shelf(sim, state)
     env.close()
     sim.close()
-
-
-def test_pick_and_place_controller():
-    """Test pick and place controllers in the CylinderShelf3D environment."""
-    env = kinder.make(
-        "kinder/KinematicCylinderShelf3D-o1-v0",
-        render_mode="rgb_array",
-        use_gui=False,
-        realistic_bg=True,
-    )
-    if MAKE_VIDEOS:
-        env = RecordVideo(env, "unit_test_videos", name_prefix="CylinderShelf3D")
-
-    obs, _ = env.reset(seed=123)
-    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
-    state = env.observation_space.devectorize(obs)
-
-    sim = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
-    controllers = create_lifted_controllers(
-        env.action_space,
-        sim,
-    )
-    lifted_controller = controllers["pick"]
-    robot = state.get_object_from_name("robot")
-    target = state.get_object_from_name("cylinder0")
-    object_parameters = (robot, target)
-    controller = lifted_controller.ground(object_parameters)
-
-    rng = np.random.default_rng(123)
-    params = controller.sample_parameters(state, rng)
-
-    controller.reset(state, params)
-    for _ in range(500):
-        action = controller.step()
-        obs, _, _, _, _ = env.step(action)
-        next_state = env.observation_space.devectorize(obs)
-        controller.observe(next_state)
-        state = next_state
-        if controller.terminated():
-            break
-    else:
-        assert False, "Controller did not terminate"
-
-    # The cylinder should have been picked up: it is well above the ground.
-    target = state.get_object_from_name("cylinder0")
-    assert state.get(target, "pose_z") > 0.3, "Cylinder was not lifted"
-
-    lifted_controller = controllers["place"]
-    robot = state.get_object_from_name("robot")
-    target = state.get_object_from_name("cylinder0")
-    target_shelf = state.get_object_from_name("shelf")
-    object_parameters = (robot, target, target_shelf)
-
-    # The place resamples on infeasible draws (e.g. a staging distance
-    # whose reach or collision checks fail), just as the planner does.
-    rng = np.random.default_rng(123)
-    placed = False
-    for _ in range(8):
-        controller = lifted_controller.ground(object_parameters)
-        params = controller.sample_parameters(state, rng)
-        controller.reset(state, params)
-        try:
-            for _ in range(500):
-                action = controller.step()
-                obs, _, _, _, _ = env.step(action)
-                next_state = env.observation_space.devectorize(obs)
-                controller.observe(next_state)
-                state = next_state
-                if controller.terminated():
-                    placed = True
-                    break
-            if placed:
-                break
-        except TrajectorySamplingFailure:
-            continue
-    assert placed, "Place controller never terminated"
-
-    # The cylinder should be standing on a shelf board at resting height.
-    config = sim.config
-    target = state.get_object_from_name("cylinder0")
-    half_height = state.get(target, "half_extent_z")
-    resting_zs = [z + half_height for z in config.get_layer_surface_zs()]
-    cylinder_z = state.get(target, "pose_z")
-    assert any(
-        abs(cylinder_z - resting_z) < 0.05 for resting_z in resting_zs
-    ), f"Cylinder z {cylinder_z} is not resting on a shelf board"
-
-    env.close()
-
-
-def test_pick_controller_any_approach_angle():
-    """The side grasp works from arbitrary approach angles around the cylinder."""
-    env = kinder.make(
-        "kinder/KinematicCylinderShelf3D-o1-v0",
-        use_gui=False,
-        realistic_bg=False,
-    )
-    obs, _ = env.reset(seed=456)
-    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
-    init_state = env.observation_space.devectorize(obs)
-
-    sim = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
-    controllers = create_lifted_controllers(env.action_space, sim)
-    lifted_controller = controllers["pick"]
-    robot = init_state.get_object_from_name("robot")
-    target = init_state.get_object_from_name("cylinder0")
-
-    for approach_rot in [-2.5, 0.0, 2.5]:
-        obs, _ = env.reset(seed=456)
-        state = env.observation_space.devectorize(obs)
-        controller = lifted_controller.ground((robot, target))
-        params = np.array([0.8, approach_rot])
-        controller.reset(state, params)
-        for _ in range(500):
-            action = controller.step()
-            obs, _, _, _, _ = env.step(action)
-            next_state = env.observation_space.devectorize(obs)
-            controller.observe(next_state)
-            state = next_state
-            if controller.terminated():
-                break
-        else:
-            assert False, f"Controller did not terminate for rot={approach_rot}"
-        target = state.get_object_from_name("cylinder0")
-        assert state.get(target, "pose_z") > 0.3, f"No lift for rot={approach_rot}"
-
-    env.close()

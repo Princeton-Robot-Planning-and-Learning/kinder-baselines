@@ -1,24 +1,32 @@
 """Parameterized skills for the CylinderShelf3D environment.
 
-The cylinders in this environment are tall enough that they must be
-grasped from the side: the end effector approaches near-horizontally
-(with a slight downward pitch) and the fingers straddle the cylinder.
-Because cylinders are rotationally symmetric, the approach angle around
-the cylinder axis is a free parameter, so the pick skill samples the
-full circle when choosing where to stage the base.
+Three skills cover pick-and-place of a tall cylinder with a planar side
+grasp:
 
-Neither skill uses arm motion planning. All arm motion is planar:
-joints 3, 5, and 7 stay at their retract values, joint 1 absorbs only
-the small lateral correction that keeps the arm plane through the
-target, and the motion happens in joints 2, 4, and 6 — the pitch
-joints — so the gripper travels forward, up, and down in the vertical
-plane without twisting. Joint trajectories are solved by numerical
-continuation along prescribed in-plane end-effector paths, and every
-configuration is collision-checked against the robot base, the shelf,
-and (while grasped) the held cylinder. The pick's stow and the place's
-retreat replay their approach configurations in reverse. Because the
-grasp is planar, entering the shelf at the grasp's own pitch keeps the
-cylinder upright through the placement.
+* ``MoveToPreGrasp`` stages the base around the cylinder (the approach
+  angle is a free parameter because cylinders are rotationally
+  symmetric) and reaches the arm from the retract posture to the
+  pre-grasp pose, a short standoff behind the grasp along the approach
+  axis.
+* ``Grasp`` covers the last mile: it pushes the gripper straight in from
+  the pre-grasp pose to the grasp, closes, and stows the arm to a
+  carrying pose. It takes no parameters. Splitting it out lets a planner
+  treat just this part as magic and hand it to a teleoperator or a
+  learned policy while the approach stays planned.
+* ``Place`` navigates to the shelf and slides the cylinder in upright.
+
+Neither the reach nor the place uses arm motion planning. All arm motion
+is planar: joints 3, 5, and 7 stay at their retract values, joint 1
+absorbs only the small lateral correction that keeps the arm plane
+through the target, and the motion happens in joints 2, 4, and 6 — the
+pitch joints — so the gripper travels forward, up, and down in the
+vertical plane without twisting. Joint trajectories are solved by
+numerical continuation along prescribed in-plane end-effector paths, and
+every configuration is collision-checked against the robot base, the
+shelf, and (while grasped) the held cylinder. The grasp's stow and the
+place's retreat replay their approach configurations in reverse. Because
+the grasp is planar, entering the shelf at the grasp's own pitch keeps
+the cylinder upright through the placement.
 """
 
 from typing import Any, Sequence
@@ -53,7 +61,11 @@ from pybullet_helpers.geometry import (
     set_pose,
 )
 from pybullet_helpers.inverse_kinematics import check_body_collisions
-from pybullet_helpers.joint import JointPositions, get_jointwise_difference
+from pybullet_helpers.joint import (
+    JointInfo,
+    JointPositions,
+    get_jointwise_difference,
+)
 from pybullet_helpers.motion_planning import (
     remap_joint_position_plan_to_constant_distance,
     remap_se2_pose_plan_to_constant_distance,
@@ -108,6 +120,9 @@ GRASP_AXIS_STANDOFF = 0.02
 # value down to SIDE_GRASP_PITCH before the pre-grasp, so the final
 # approach segment is a pure translation.
 PRE_GRASP_BACKOFF = 0.10
+# How close (m) the end effector must be to the pre-grasp position for the
+# robot to count as being at the pre-grasp pose.
+PRE_GRASP_POSITION_TOL = 0.03
 # The place approach's pre-place waypoint: backed off along the shelf
 # approach axis and lifted slightly, so the final segment slides the
 # cylinder in over the shelf layer.
@@ -284,12 +299,14 @@ def _interpolated_path_targets(
     mid_position: np.ndarray,
     end_position: np.ndarray,
     end_pitch: float = SIDE_GRASP_PITCH,
-) -> list[tuple[np.ndarray, float]]:
+) -> tuple[list[tuple[np.ndarray, float]], int]:
     """Dense (position, pitch) targets for the two-leg planar reach.
 
     Leg one runs from the start to the mid waypoint (the pre-grasp or
     pre-place) while the pitch ramps to ``end_pitch``; leg two pushes
-    straight in to the end position at constant pitch.
+    straight in to the end position at constant pitch. Also returns the
+    number of leg-one targets, so callers can split the path at the mid
+    waypoint.
     """
     targets: list[tuple[np.ndarray, float]] = []
     leg_one = float(np.linalg.norm(mid_position - start_position))
@@ -309,18 +326,205 @@ def _interpolated_path_targets(
         t = step / num_two
         position = mid_position + t * (end_position - mid_position)
         targets.append((position, end_pitch))
-    return targets
+    return targets, num_one
 
 
 # Controllers.
-class GroundPickController(
+def get_grasp_positions(
+    state: CylinderShelf3DObjectCentricState, target_name: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """(grasp position, pre-grasp position) of the side grasp on ``target_name``.
+
+    The approach is aligned with the base heading toward the cylinder so the
+    gripper reaches straight out from wherever the base is around it. The
+    grasp position is where the end effector sits at the grasp; the
+    pre-grasp position is PRE_GRASP_BACKOFF behind it along the approach
+    axis.
+    """
+    cylinder_pose = state.get_object_pose(target_name)
+    base_pose = state.base_pose
+    approach_yaw = np.arctan2(
+        cylinder_pose.position[1] - base_pose.y,
+        cylinder_pose.position[0] - base_pose.x,
+    )
+    target = state.get_object_from_name(target_name)
+    half_height = state.get(target, "half_extent_z")
+    approach = get_side_grasp_approach(approach_yaw)
+    grasp_point = np.array(
+        [
+            cylinder_pose.position[0],
+            cylinder_pose.position[1],
+            cylinder_pose.position[2] + half_height - GRASP_DEPTH_BELOW_TOP,
+        ]
+    )
+    grasp_position = grasp_point - GRASP_AXIS_STANDOFF * approach
+    pre_grasp_position = grasp_position - PRE_GRASP_BACKOFF * approach
+    return grasp_position, pre_grasp_position
+
+
+def is_at_pre_grasp(
+    sim: ObjectCentricCylinderShelf3DEnv,
+    state: CylinderShelf3DObjectCentricState,
+    target_name: str,
+) -> bool:
+    """Whether the (empty) gripper is within PRE_GRASP_POSITION_TOL of the pre-grasp
+    position for ``target_name``. The sim is set to ``state`` to read the end effector
+    pose."""
+    if state.grasped_object is not None:
+        return False
+    sim.set_state(state)
+    ee_position = np.array(sim.robot.arm.get_end_effector_pose().position)
+    _, pre_grasp_position = get_grasp_positions(state, target_name)
+    return bool(
+        np.linalg.norm(ee_position - pre_grasp_position) < PRE_GRASP_POSITION_TOL
+    )
+
+
+def _plan_reach(
+    sim: ObjectCentricCylinderShelf3DEnv,
+    state: CylinderShelf3DObjectCentricState,
+    target_name: str,
+) -> tuple[list[JointPositions], int]:
+    """Solve the planar reach from the retract posture to the grasp.
+
+    The sim is set to ``state`` first. Returns the reach configurations and
+    the index of the pre-grasp configuration within them; the configurations
+    after that index are the final straight-in approach. Raises
+    ``TrajectorySamplingFailure`` when the reach is infeasible.
+    """
+    sim.set_state(state)
+    grasp_position, pre_grasp_position = get_grasp_positions(state, target_name)
+    # The reach starts from the retract posture: joints 3, 5, 7 keep their
+    # retract values throughout, so the continuation must be seeded from
+    # the retract configuration.
+    home_joints = HOME_JOINT_POSITIONS.tolist()
+    sim.robot.arm.set_joints(home_joints)
+    home_ee = sim.robot.arm.get_end_effector_pose()
+    home_pitch = _approach_pitch(matrix_from_quat(home_ee.orientation))
+    path_targets, num_leg_one = _interpolated_path_targets(
+        np.array(home_ee.position),
+        home_pitch,
+        pre_grasp_position,
+        grasp_position,
+    )
+    return _plan_planar_reach(sim, home_joints, path_targets), num_leg_one - 1
+
+
+def _plan_stow(
+    sim: ObjectCentricCylinderShelf3DEnv,
+    state: CylinderShelf3DObjectCentricState,
+    reach_configurations: list[JointPositions],
+) -> list[JointPositions]:
+    """Replay the reach in reverse while the held cylinder stays clear.
+
+    The sim is set to ``state`` (which must hold the cylinder) first. The
+    stow stops at the last configuration where the cylinder stays clear of
+    the arm body and the base: that configuration is the carrying pose.
+    Continuing all the way to the retract posture would press the cylinder
+    into the lower arm.
+    """
+    sim.set_state(state)
+    grasped_object_id = sim._grasped_object_id  # pylint: disable=protected-access
+    grasped_object_transform = (
+        sim._grasped_object_transform  # pylint: disable=protected-access
+    )
+    assert grasped_object_id is not None
+    assert grasped_object_transform is not None
+    arm = sim.robot.arm
+    stow_configs: list[JointPositions] = []
+    candidates = list(reversed(reach_configurations)) + [HOME_JOINT_POSITIONS.tolist()]
+    for candidate in candidates:
+        arm.set_joints(candidate)
+        held_pose = multiply_poses(
+            arm.get_end_effector_pose(), grasped_object_transform
+        )
+        set_pose(grasped_object_id, held_pose, sim.physics_client_id)
+        if _held_object_collides(sim, grasped_object_id):
+            break
+        stow_configs.append(candidate)
+    if not stow_configs:
+        raise TrajectorySamplingFailure(
+            "No collision-free carrying pose along the stow"
+        )
+    return stow_configs
+
+
+def _predict_grasp_outcome(
+    sim: ObjectCentricCylinderShelf3DEnv,
+    x: CylinderShelf3DObjectCentricState,
+    target_name: str,
+) -> ObjectCentricState:
+    """Predict the state after grasping ``target_name`` from ``x``.
+
+    ``x`` must already have the base staged (the arm may be anywhere). The
+    planar reach is solved, the grasp is registered by the sim's own grasp
+    rule at the reach's final configuration, and the arm ends at the
+    carrying pose (the last collision-free configuration of the reversed
+    reach).
+    """
+    reach_plan, _ = _plan_reach(sim, x, target_name)
+    at_grasp = x.copy()
+    _set_arm_joints(at_grasp, reach_plan[-1])
+    sim.set_state(at_grasp)
+    close_action = np.array([0.0] * 10 + [-1.0], dtype=np.float32)
+    grasped, _, _, _, _ = sim.step(close_action)
+    assert isinstance(grasped, CylinderShelf3DObjectCentricState)
+    if grasped.grasped_object != target_name:
+        raise TrajectorySamplingFailure("Grasp did not register at the reach")
+
+    stow_configs = _plan_stow(sim, grasped, reach_plan)
+    carry_joints = stow_configs[-1]
+    grasp_transform = grasped.grasped_object_transform
+    assert grasp_transform is not None
+    arm = sim.robot.arm
+    arm.set_joints(carry_joints)
+    held_pose = multiply_poses(arm.get_end_effector_pose(), grasp_transform)
+    predicted = grasped.copy()
+    _set_arm_joints(predicted, carry_joints)
+    _set_object_pose(predicted, target_name, held_pose)
+    sim.set_state(predicted)
+    return sim.get_state()
+
+
+def _remap_joint_plan(
+    sim: ObjectCentricCylinderShelf3DEnv,
+    state: CylinderShelf3DObjectCentricState,
+    configurations: list[JointPositions],
+) -> list[JointPositions]:
+    """Remap ``[current joints] + configurations`` to the action limits, excluding the
+    current joints."""
+    current_joints = extend_joints_to_include_fingers(list(state.joint_positions))
+    joint_plan = remap_joint_position_plan_to_constant_distance(
+        [current_joints] + configurations,
+        sim.robot.arm,
+        max_distance=sim.config.max_action_mag / 2,
+    )
+    return joint_plan[1:]
+
+
+def _arm_action(
+    joint_infos: list[JointInfo],
+    target_joints: JointPositions,
+    state: CylinderShelf3DObjectCentricState,
+) -> np.ndarray:
+    """Kinder action moving the arm joints toward ``target_joints``."""
+    delta_lst = get_jointwise_difference(
+        joint_infos, target_joints[:7], state.joint_positions
+    )
+    return np.array([0.0] * 3 + delta_lst + [0.0], dtype=np.float32)
+
+
+class GroundMoveToPreGraspController(
     GroundParameterizedController[ObjectCentricState, np.ndarray],
     OutcomePredictor[ObjectCentricState],
 ):
-    """Controller for picking up a cylinder with a planar side grasp.
+    """Stage the base around a cylinder and reach the arm to its pre-grasp pose.
 
-    The controller also predicts its own outcome (:meth:`predict_outcome`),
-    so the pick can be planned as a magic skill.
+    The parameters are the base staging distance and the approach angle
+    around the cylinder. The base is motion-planned to the staged pose, then
+    the arm follows the first leg of the planar reach from the retract
+    posture to the pre-grasp waypoint. The controller also predicts its own
+    outcome (:meth:`predict_outcome`).
     """
 
     def __init__(
@@ -333,16 +537,11 @@ class GroundPickController(
         self._joint_infos = sim.robot.arm.get_arm_joint_infos()[:7]
         self._robot, self._target = objects
         self._current_params: np.ndarray | None = None
-        self._current_arm_joint_plan: list[JointPositions] | None = None
-        self._current_retract_plan: list[JointPositions] | None = None
-        self._reach_configurations: list[JointPositions] | None = None
         self._current_plan: list[SE2Pose] | None = None
+        self._current_arm_joint_plan: list[JointPositions] | None = None
         self._current_state: ObjectCentricState | None = None
         self._navigated: bool = False
-        self._pre_grasp: bool = False
-        self._closed_gripper: bool = False
-        self._lifted: bool = False
-        self._last_gripper_state: float = 0.0
+        self._reached: bool = False
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         """Sample the base staging distance and the approach angle."""
@@ -354,27 +553,28 @@ class GroundPickController(
     def reset(self, x: ObjectCentricState, params: Any) -> None:
         self._current_params = params
         self._current_plan = None
+        self._current_arm_joint_plan = None
         self._current_state = x
+        self._navigated = False
+        self._reached = False
 
     def terminated(self) -> bool:
-        return self._lifted
+        return self._reached
 
     def step(self) -> np.ndarray:
         assert self._current_state is not None
         assert self._current_params is not None
         assert isinstance(self._current_state, CylinderShelf3DObjectCentricState)
 
-        # Generate the motion plan if it doesn't exist yet.
+        # Generate the base motion plan if it doesn't exist yet.
         if self._current_plan is None:
             self._sim.set_state(self._current_state)
-
             target_pose = self._current_state.get_object_pose(
-                self.objects[1].name
+                self._target.name
             ).to_se2()
             target_base_pose = get_target_robot_pose_from_parameters(
                 target_pose, self._current_params[0], self._current_params[1]
             )
-            # Run base motion planning to the target pose.
             base_plan = run_single_arm_mobile_base_motion_planning(
                 self._sim.robot,
                 self._sim.robot.base.get_pose(),
@@ -382,22 +582,18 @@ class GroundPickController(
                 collision_bodies=self._sim._get_collision_object_ids(),  # pylint: disable=protected-access
                 seed=0,  # for determinism
             )
-
             if base_plan is None:
                 raise TrajectorySamplingFailure("Base motion planning failed")
-
             # Remap the plan to ensure we stay within action limits.
             base_plan = remap_se2_pose_plan_to_constant_distance(
                 base_plan,
                 max_distance=self._sim.config.max_action_mag,
             )
-
             # Store the plan (excluding the first state which is the current state).
             self._current_plan = base_plan[1:]
 
         if not self._navigated:
             # Step toward the next waypoint within action limits.
-            assert self._current_plan is not None
             delta_lst, exhausted = step_toward_se2_waypoint(
                 self._current_state.base_pose,
                 self._current_plan,
@@ -405,116 +601,29 @@ class GroundPickController(
             )
             if exhausted:
                 self._navigated = True
+            return np.array(delta_lst + [0.0] * 7 + [0.0], dtype=np.float32)
 
-            # Create action: [base_x, base_y, base_rot, joint1, ..., joint7, gripper].
-            action_lst = delta_lst + [0.0] * 7 + [0.0]
-            action = np.array(action_lst, dtype=np.float32)
-
-            return action
-
-        if self._navigated and not self._pre_grasp:
-            # Generate the planar reach plan if it doesn't exist yet.
+        if not self._reached:
+            # Generate the reach plan (leg one only) if it doesn't exist yet.
             if self._current_arm_joint_plan is None:
-                reach_plan = self._plan_reach(self._current_state)
-                # Remember the reach so the stow can replay it in reverse.
-                self._reach_configurations = reach_plan
-
-                home_joints = HOME_JOINT_POSITIONS.tolist()
-                current_joints = extend_joints_to_include_fingers(
-                    list(self._current_state.joint_positions)
+                reach_plan, pre_grasp_index = _plan_reach(
+                    self._sim, self._current_state, self._target.name
                 )
-                joint_plan = [current_joints] + reach_plan
-                if not np.allclose(current_joints[:7], home_joints[:7], atol=1e-3):
+                configurations = reach_plan[: pre_grasp_index + 1]
+                home_joints = HOME_JOINT_POSITIONS.tolist()
+                if not np.allclose(
+                    self._current_state.joint_positions, home_joints[:7], atol=1e-3
+                ):
                     # The arm is not at the retract posture; go there first
                     # so the planar reach starts from its seed.
-                    joint_plan = [current_joints, home_joints] + reach_plan
-
-                # Remap the plan to ensure we stay within action limits.
-                joint_plan = remap_joint_position_plan_to_constant_distance(
-                    joint_plan,
-                    self._sim.robot.arm,
-                    max_distance=self._sim.config.max_action_mag / 2,
+                    configurations = [home_joints] + configurations
+                self._current_arm_joint_plan = _remap_joint_plan(
+                    self._sim, self._current_state, configurations
                 )
-
-                # Store the plan (excluding the first state which is the current state).
-                self._current_arm_joint_plan = joint_plan[1:]
-            # Pop the next target joint positions from the plan.
-            assert self._current_arm_joint_plan is not None
             target_joints = self._current_arm_joint_plan.pop(0)
-            if len(self._current_arm_joint_plan) == 0:
-                self._pre_grasp = True
-            # Compute delta joint positions.
-            delta_lst = get_jointwise_difference(
-                self._joint_infos,
-                target_joints[:7],
-                self._current_state.joint_positions,
-            )
-
-            # Create action: [base_x, base_y, base_rot, joint1, ..., joint7, gripper].
-            action_lst = [0.0] * 3 + delta_lst + [0.0]
-            action = np.array(action_lst, dtype=np.float32)
-
-            return action
-
-        if self._pre_grasp and not self._closed_gripper:
-            if (
-                self._get_current_robot_gripper_pose() > GRIPPER_CLOSE_THRESHOLD
-                and np.isclose(
-                    self._get_current_robot_gripper_pose(),
-                    self._last_gripper_state,
-                    atol=0.02,
-                )
-            ):
-                self._closed_gripper = True
-            action_lst = [0.0] * 10 + [-1.0]
-            action = np.array(action_lst, dtype=np.float32)
-            self._last_gripper_state = self._get_current_robot_gripper_pose()
-            return action
-
-        if self._closed_gripper and not self._lifted:
-            # Generate the stow plan if it doesn't exist yet: the reach
-            # configurations replayed in reverse (so the cylinder retraces
-            # the same planar path out of the grasp region), stopping at
-            # the last configuration where the held cylinder stays clear
-            # of the arm body and the base. That configuration is the
-            # carrying pose — continuing all the way to the retract
-            # posture would press the cylinder into the lower arm.
-            if self._current_retract_plan is None:
-                assert self._reach_configurations is not None
-                stow_configs = self._plan_stow(
-                    self._current_state, self._reach_configurations
-                )
-                current_joints = extend_joints_to_include_fingers(
-                    list(self._current_state.joint_positions)
-                )
-                joint_plan = [current_joints] + stow_configs
-
-                # Remap the plan to ensure we stay within action limits.
-                joint_plan = remap_joint_position_plan_to_constant_distance(
-                    joint_plan,
-                    self._sim.robot.arm,
-                    max_distance=self._sim.config.max_action_mag / 2,
-                )
-
-                # Store the plan (excluding the first state which is the current state).
-                self._current_retract_plan = joint_plan[1:]
-            # Pop the next target joint positions from the plan.
-            assert self._current_retract_plan is not None
-            target_joints = self._current_retract_plan.pop(0)
-            if len(self._current_retract_plan) == 0:
-                self._lifted = True
-            # Compute delta joint positions.
-            delta_lst = get_jointwise_difference(
-                self._joint_infos,
-                target_joints[:7],
-                self._current_state.joint_positions,
-            )
-
-            # Create action: [base_x, base_y, base_rot, joint1, ..., joint7, gripper].
-            action_lst = [0.0] * 3 + delta_lst + [0.0]
-            action = np.array(action_lst, dtype=np.float32)
-
-            return action
+            if not self._current_arm_joint_plan:
+                self._reached = True
+            return _arm_action(self._joint_infos, target_joints, self._current_state)
 
         raise ValueError("Invalid state")
 
@@ -522,19 +631,14 @@ class GroundPickController(
         self._current_state = x
 
     def predict_outcome(self, x: ObjectCentricState, params: Any) -> ObjectCentricState:
-        """Predict the post-pick state without simulating the motion.
+        """Predict the state at the pre-grasp pose without simulating the motion.
 
-        The prediction follows the same geometry the controller executes:
-        the base is staged where ``params`` put it, the planar reach is
-        solved from the retract posture, the grasp is registered by the
-        sim's own grasp rule at the reach's final configuration, and the
-        arm ends at the carrying pose (the last collision-free
-        configuration of the reversed reach). Base motion planning is
-        skipped; the staged pose only has to be collision-free.
+        The base is staged where ``params`` put it (base motion planning is
+        skipped; the staged pose only has to be collision-free) and the arm is
+        set to the pre-grasp configuration of the planar reach.
         """
         assert isinstance(x, CylinderShelf3DObjectCentricState)
-        target_name = self._target.name
-        target_se2 = x.get_object_pose(target_name).to_se2()
+        target_se2 = x.get_object_pose(self._target.name).to_se2()
         staged_base_pose = get_target_robot_pose_from_parameters(
             target_se2, params[0], params[1]
         )
@@ -546,121 +650,120 @@ class GroundPickController(
             self._sim._robot_or_held_object_collision_exists()  # pylint: disable=protected-access
         ):
             raise TrajectorySamplingFailure("Staged base pose is in collision")
-
-        reach_plan = self._plan_reach(staged)
-        at_grasp = staged.copy()
-        _set_arm_joints(at_grasp, reach_plan[-1])
-        self._sim.set_state(at_grasp)
-        close_action = np.array([0.0] * 10 + [-1.0], dtype=np.float32)
-        grasped, _, _, _, _ = self._sim.step(close_action)
-        assert isinstance(grasped, CylinderShelf3DObjectCentricState)
-        if grasped.grasped_object != target_name:
-            raise TrajectorySamplingFailure("Grasp did not register at the reach")
-
-        stow_configs = self._plan_stow(grasped, reach_plan)
-        carry_joints = stow_configs[-1]
-        grasp_transform = grasped.grasped_object_transform
-        assert grasp_transform is not None
-        arm = self._sim.robot.arm
-        arm.set_joints(carry_joints)
-        held_pose = multiply_poses(arm.get_end_effector_pose(), grasp_transform)
-        predicted = grasped.copy()
-        _set_arm_joints(predicted, carry_joints)
-        _set_object_pose(predicted, target_name, held_pose)
+        reach_plan, pre_grasp_index = _plan_reach(self._sim, staged, self._target.name)
+        predicted = staged.copy()
+        _set_arm_joints(predicted, reach_plan[pre_grasp_index])
         self._sim.set_state(predicted)
         return self._sim.get_state()
 
-    def _plan_reach(
-        self, state: CylinderShelf3DObjectCentricState
-    ) -> list[JointPositions]:
-        """Solve the planar reach from the retract posture to the grasp.
 
-        The sim is set to ``state`` first; the reach is aligned with the
-        base heading so the gripper reaches straight out from wherever the
-        base is around the cylinder. Raises ``TrajectorySamplingFailure``
-        when the reach is infeasible.
-        """
-        self._sim.set_state(state)
-        cylinder_pose = state.get_object_pose(self._target.name)
-        base_pose = state.base_pose
-        approach_yaw = np.arctan2(
-            cylinder_pose.position[1] - base_pose.y,
-            cylinder_pose.position[0] - base_pose.x,
-        )
-        half_height = state.get(self._target, "half_extent_z")
-        approach = get_side_grasp_approach(approach_yaw)
-        grasp_point = np.array(
-            [
-                cylinder_pose.position[0],
-                cylinder_pose.position[1],
-                cylinder_pose.position[2] + half_height - GRASP_DEPTH_BELOW_TOP,
-            ]
-        )
-        grasp_position = grasp_point - GRASP_AXIS_STANDOFF * approach
-        pre_grasp_position = grasp_position - PRE_GRASP_BACKOFF * approach
+class GroundGraspController(
+    GroundParameterizedController[ObjectCentricState, np.ndarray],
+    OutcomePredictor[ObjectCentricState],
+):
+    """Close the last mile of a side grasp from the pre-grasp pose.
 
-        # The reach starts from the retract posture: joints 3, 5, 7 keep
-        # their retract values throughout, so the continuation must be
-        # seeded from the retract configuration.
-        home_joints = HOME_JOINT_POSITIONS.tolist()
-        self._sim.robot.arm.set_joints(home_joints)
-        home_ee = self._sim.robot.arm.get_end_effector_pose()
-        home_pitch = _approach_pitch(matrix_from_quat(home_ee.orientation))
-        path_targets = _interpolated_path_targets(
-            np.array(home_ee.position),
-            home_pitch,
-            pre_grasp_position,
-            grasp_position,
-        )
-        return _plan_planar_reach(self._sim, home_joints, path_targets)
+    Takes no parameters. The arm pushes straight in along the approach axis
+    from the pre-grasp pose to the grasp (the final leg of the planar reach,
+    re-solved from the current state), closes the gripper, then stows: the
+    reach configurations are replayed in reverse, stopping at the last
+    configuration where the held cylinder stays clear of the arm body and
+    the base — the carrying pose. The controller also predicts its own
+    outcome (:meth:`predict_outcome`), which is what lets a planner treat
+    the grasp as a magic skill and hand it to a teleoperator.
+    """
 
-    def _plan_stow(
+    def __init__(
         self,
-        state: CylinderShelf3DObjectCentricState,
-        reach_configurations: list[JointPositions],
-    ) -> list[JointPositions]:
-        """Replay the reach in reverse while the held cylinder stays clear.
+        objects: Sequence[Object],
+        sim: ObjectCentricCylinderShelf3DEnv,
+    ) -> None:
+        super().__init__(objects)
+        self._sim = sim
+        self._joint_infos = sim.robot.arm.get_arm_joint_infos()[:7]
+        self._robot, self._target = objects
+        self._current_approach_plan: list[JointPositions] | None = None
+        self._current_stow_plan: list[JointPositions] | None = None
+        self._reach_configurations: list[JointPositions] | None = None
+        self._current_state: ObjectCentricState | None = None
+        self._approached: bool = False
+        self._closed_gripper: bool = False
+        self._lifted: bool = False
+        self._last_gripper_state: float = 0.0
 
-        The sim is set to ``state`` (which must hold the cylinder) first.
-        The stow stops at the last configuration where the cylinder stays
-        clear of the arm body and the base: that configuration is the
-        carrying pose. Continuing all the way to the retract posture would
-        press the cylinder into the lower arm.
-        """
-        self._sim.set_state(state)
-        grasped_object_id = (
-            self._sim._grasped_object_id  # pylint: disable=protected-access
-        )
-        grasped_object_transform = (
-            self._sim._grasped_object_transform  # pylint: disable=protected-access
-        )
-        assert grasped_object_id is not None
-        assert grasped_object_transform is not None
-        arm = self._sim.robot.arm
-        stow_configs: list[JointPositions] = []
-        candidates = list(reversed(reach_configurations)) + [
-            HOME_JOINT_POSITIONS.tolist()
-        ]
-        for candidate in candidates:
-            arm.set_joints(candidate)
-            held_pose = multiply_poses(
-                arm.get_end_effector_pose(), grasped_object_transform
-            )
-            set_pose(grasped_object_id, held_pose, self._sim.physics_client_id)
-            if _held_object_collides(self._sim, grasped_object_id):
-                break
-            stow_configs.append(candidate)
-        if not stow_configs:
-            raise TrajectorySamplingFailure(
-                "No collision-free carrying pose along the stow"
-            )
-        return stow_configs
+    def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
+        """The grasp has no free parameters."""
+        del x, rng
+        return np.zeros(0)
 
-    def _get_current_robot_gripper_pose(self) -> float:
-        x = self._current_state
-        assert x is not None
-        robot_obj = x.get_object_from_name("robot")
-        return x.get(robot_obj, "finger_state")
+    def reset(self, x: ObjectCentricState, params: Any) -> None:
+        del params
+        self._current_approach_plan = None
+        self._current_stow_plan = None
+        self._reach_configurations = None
+        self._current_state = x
+        self._approached = False
+        self._closed_gripper = False
+        self._lifted = False
+        self._last_gripper_state = 0.0
+
+    def terminated(self) -> bool:
+        return self._lifted
+
+    def step(self) -> np.ndarray:
+        assert self._current_state is not None
+        assert isinstance(self._current_state, CylinderShelf3DObjectCentricState)
+
+        if not self._approached:
+            # Generate the final approach if it doesn't exist yet: the
+            # configurations after the pre-grasp waypoint of the planar
+            # reach. The full reach is kept so the stow can replay it.
+            if self._current_approach_plan is None:
+                reach_plan, pre_grasp_index = _plan_reach(
+                    self._sim, self._current_state, self._target.name
+                )
+                self._reach_configurations = reach_plan
+                self._current_approach_plan = _remap_joint_plan(
+                    self._sim, self._current_state, reach_plan[pre_grasp_index + 1 :]
+                )
+            target_joints = self._current_approach_plan.pop(0)
+            if not self._current_approach_plan:
+                self._approached = True
+            return _arm_action(self._joint_infos, target_joints, self._current_state)
+
+        if not self._closed_gripper:
+            finger_state = self._current_state.finger_state
+            if finger_state > GRIPPER_CLOSE_THRESHOLD and np.isclose(
+                finger_state, self._last_gripper_state, atol=0.02
+            ):
+                self._closed_gripper = True
+            self._last_gripper_state = finger_state
+            return np.array([0.0] * 10 + [-1.0], dtype=np.float32)
+
+        if not self._lifted:
+            if self._current_stow_plan is None:
+                assert self._reach_configurations is not None
+                stow_configs = _plan_stow(
+                    self._sim, self._current_state, self._reach_configurations
+                )
+                self._current_stow_plan = _remap_joint_plan(
+                    self._sim, self._current_state, stow_configs
+                )
+            target_joints = self._current_stow_plan.pop(0)
+            if not self._current_stow_plan:
+                self._lifted = True
+            return _arm_action(self._joint_infos, target_joints, self._current_state)
+
+        raise ValueError("Invalid state")
+
+    def observe(self, x: ObjectCentricState) -> None:
+        self._current_state = x
+
+    def predict_outcome(self, x: ObjectCentricState, params: Any) -> ObjectCentricState:
+        """Predict the post-grasp state (holding, at the carrying pose) from ``x``."""
+        del params
+        assert isinstance(x, CylinderShelf3DObjectCentricState)
+        return _predict_grasp_outcome(self._sim, x, self._target.name)
 
 
 def _set_base_pose(state: ObjectCentricState, base_pose: SE2Pose) -> None:
@@ -885,7 +988,7 @@ class GroundPlaceController(
 
                 ee_start = self._sim.robot.arm.get_end_effector_pose()
                 start_pitch = _approach_pitch(matrix_from_quat(ee_start.orientation))
-                path_targets = _interpolated_path_targets(
+                path_targets, _ = _interpolated_path_targets(
                     np.array(ee_start.position),
                     start_pitch,
                     pre_place_position,
@@ -1009,8 +1112,14 @@ def create_lifted_controllers(
     del action_space
 
     # Create partial controller classes that include the sim
-    class PickController(GroundPickController):
-        """Controller for picking up a cylinder."""
+    class MoveToPreGraspController(GroundMoveToPreGraspController):
+        """Controller for staging the base and reaching the pre-grasp pose."""
+
+        def __init__(self, objects):
+            super().__init__(objects, sim)
+
+    class GraspController(GroundGraspController):
+        """Controller for the last mile of the grasp."""
 
         def __init__(self, objects):
             super().__init__(objects, sim)
@@ -1026,23 +1135,28 @@ def create_lifted_controllers(
     target = Variable("?target", Kinematic3DCuboidType)
 
     # Lifted controllers
-    pick_controller: LiftedParameterizedController = LiftedParameterizedController(
-        [robot, target],
-        PickController,
-        Box(
-            low=np.array(
-                [
-                    MOVE_TO_TARGET_DISTANCE_BOUNDS[0],
-                    MOVE_TO_TARGET_ROT_BOUNDS[0],
-                ]
+    move_to_pre_grasp_controller: LiftedParameterizedController = (
+        LiftedParameterizedController(
+            [robot, target],
+            MoveToPreGraspController,
+            Box(
+                low=np.array(
+                    [
+                        MOVE_TO_TARGET_DISTANCE_BOUNDS[0],
+                        MOVE_TO_TARGET_ROT_BOUNDS[0],
+                    ]
+                ),
+                high=np.array(
+                    [
+                        MOVE_TO_TARGET_DISTANCE_BOUNDS[1],
+                        MOVE_TO_TARGET_ROT_BOUNDS[1],
+                    ]
+                ),
             ),
-            high=np.array(
-                [
-                    MOVE_TO_TARGET_DISTANCE_BOUNDS[1],
-                    MOVE_TO_TARGET_ROT_BOUNDS[1],
-                ]
-            ),
-        ),
+        )
+    )
+    grasp_controller: LiftedParameterizedController = LiftedParameterizedController(
+        [robot, target], GraspController
     )
 
     # Create variables for lifted controllers
@@ -1073,6 +1187,7 @@ def create_lifted_controllers(
     )
 
     return {
-        "pick": pick_controller,
+        "move_to_pre_grasp": move_to_pre_grasp_controller,
+        "grasp": grasp_controller,
         "place": place_controller,
     }

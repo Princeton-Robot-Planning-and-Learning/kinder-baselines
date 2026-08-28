@@ -25,6 +25,7 @@ from kinder.envs.kinematic3d.utils import (
 )
 from kinder_models.kinematic3d.cylinder_shelf3d.parameterized_skills import (
     create_lifted_controllers,
+    is_at_pre_grasp,
 )
 from kinder_models.magic import make_magic_lifted_controller
 from kinder_models.structs import SkillCall
@@ -42,7 +43,11 @@ from relational_structs.spaces import ObjectCentricBoxSpace, ObjectCentricStateS
 GRIPPER_OPEN_THRESHOLD = 0.01
 
 # Operator name -> key in kinder_models' create_lifted_controllers.
-_SKILL_CONTROLLER_KEYS = {"Pick": "pick", "Place": "place"}
+_SKILL_CONTROLLER_KEYS = {
+    "MoveToPreGrasp": "move_to_pre_grasp",
+    "Grasp": "grasp",
+    "Place": "place",
+}
 
 
 def create_bilevel_planning_models(
@@ -61,8 +66,8 @@ def create_bilevel_planning_models(
     so abstract-state checks (OnFixture) are computed against the configured
     shelf rather than the dataclass default.
 
-    ``magic_skills`` names operators ("Pick", "Place") whose low-level policy
-    is not simulated during planning. Each becomes a one-step skill emitting
+    ``magic_skills`` names operators ("MoveToPreGrasp", "Grasp", "Place")
+    whose low-level policy is not simulated during planning. Each becomes a one-step skill emitting
     a ``SkillCall`` whose predicted state comes from the controller's own
     outcome model, and the transition function maps that call straight to
     the predicted state. Plans then contain a ``SkillCall`` wherever the
@@ -114,7 +119,8 @@ def create_bilevel_planning_models(
     OnGround = Predicate("OnGround", [Kinematic3DCuboidType])
     Holding = Predicate("Holding", [Kinematic3DRobotType, Kinematic3DCuboidType])
     HandEmpty = Predicate("HandEmpty", [Kinematic3DRobotType])
-    predicates = {OnFixture, OnGround, Holding, HandEmpty}
+    AtPreGrasp = Predicate("AtPreGrasp", [Kinematic3DRobotType, Kinematic3DCuboidType])
+    predicates = {OnFixture, OnGround, Holding, HandEmpty, AtPreGrasp}
 
     # State abstractor.
     def state_abstractor(x: ObjectCentricState) -> RelationalAbstractState:
@@ -149,6 +155,11 @@ def create_bilevel_planning_models(
             ):
                 if target.name == x.grasped_object:
                     atoms.add(GroundAtom(Holding, [robot, target]))
+
+        # AtPreGrasp: empty gripper at the target's pre-grasp position.
+        for target in target_objects:
+            if is_at_pre_grasp(sim, x, target.name):
+                atoms.add(GroundAtom(AtPreGrasp, [robot, target]))
 
         # OnFixture: within the shelf footprint and resting above floor
         # level (a floor-standing cylinder has pose_z == half_extent_z; one
@@ -190,12 +201,28 @@ def create_bilevel_planning_models(
     robot = Variable("?robot", Kinematic3DRobotType)
     target = Variable("?target", Kinematic3DCuboidType)
 
-    PickOperator = LiftedOperator(
-        "Pick",
+    MoveToPreGraspOperator = LiftedOperator(
+        "MoveToPreGrasp",
         [robot, target],
         preconditions={LiftedAtom(HandEmpty, [robot]), LiftedAtom(OnGround, [target])},
+        add_effects={LiftedAtom(AtPreGrasp, [robot, target])},
+        delete_effects=set(),
+    )
+
+    GraspOperator = LiftedOperator(
+        "Grasp",
+        [robot, target],
+        preconditions={
+            LiftedAtom(AtPreGrasp, [robot, target]),
+            LiftedAtom(HandEmpty, [robot]),
+            LiftedAtom(OnGround, [target]),
+        },
         add_effects={LiftedAtom(Holding, [robot, target])},
-        delete_effects={LiftedAtom(HandEmpty, [robot]), LiftedAtom(OnGround, [target])},
+        delete_effects={
+            LiftedAtom(AtPreGrasp, [robot, target]),
+            LiftedAtom(HandEmpty, [robot]),
+            LiftedAtom(OnGround, [target]),
+        },
     )
 
     # Get lifted controllers from kinder_models, swapping in magic versions
@@ -206,7 +233,8 @@ def create_bilevel_planning_models(
         lifted_controllers[key] = make_magic_lifted_controller(
             lifted_controllers[key], skill_name
         )
-    PickController = lifted_controllers["pick"]
+    MoveToPreGraspController = lifted_controllers["move_to_pre_grasp"]
+    GraspController = lifted_controllers["grasp"]
 
     robot = Variable("?robot", Kinematic3DRobotType)
     target = Variable("?target", Kinematic3DCuboidType)
@@ -227,7 +255,8 @@ def create_bilevel_planning_models(
 
     # Finalize the skills.
     skills = {
-        LiftedSkill(PickOperator, PickController),
+        LiftedSkill(MoveToPreGraspOperator, MoveToPreGraspController),
+        LiftedSkill(GraspOperator, GraspController),
         LiftedSkill(PlaceOperator, PlaceController),
     }
 
