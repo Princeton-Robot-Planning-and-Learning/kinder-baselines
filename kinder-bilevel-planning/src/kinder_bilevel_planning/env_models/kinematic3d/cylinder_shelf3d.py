@@ -66,13 +66,14 @@ def create_bilevel_planning_models(
     so abstract-state checks (OnFixture) are computed against the configured
     shelf rather than the dataclass default.
 
-    ``magic_skills`` names operators ("MoveToPreGrasp", "Grasp", "Place")
-    whose low-level policy is not simulated during planning. Each becomes a one-step skill emitting
-    a ``SkillCall`` whose predicted state comes from the controller's own
-    outcome model, and the transition function maps that call straight to
-    the predicted state. Plans then contain a ``SkillCall`` wherever the
-    executor must carry the skill out by other means. Only skills whose
-    controller implements ``OutcomePredictor`` can be made magic.
+    ``magic_skills`` names operators (any of "MoveToPreGrasp", "Grasp",
+    "Place") whose low-level policy is not simulated during planning. Each
+    becomes a one-step skill emitting a ``SkillCall`` whose predicted state
+    comes from the controller's own outcome model, and the transition
+    function maps that call straight to the predicted state. Plans then
+    contain a ``SkillCall`` wherever the executor must carry the skill out
+    by other means. Only skills whose controller implements
+    ``OutcomePredictor`` can be made magic.
     """
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, Kinematic3DRobotActionSpace)
