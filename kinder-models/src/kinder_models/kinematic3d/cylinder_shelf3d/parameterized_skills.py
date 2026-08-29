@@ -131,6 +131,12 @@ PRE_PLACE_BACKOFF = 0.10
 PRE_PLACE_LIFT = 0.02
 # Spacing of the continuation targets along the in-plane reach path.
 PLANAR_PATH_STEP = 0.025
+# Interpolation points the base motion planner collision-checks per RRT
+# edge. Edges run up to ~0.2 m with the base turning along them, and its
+# corners sweep out further than its centre moves, so the default 10
+# lets the executed path dip 2-3 cm inside the configured base clearance
+# between checks; 25 keeps it at the clearance at negligible cost.
+BASE_MOTION_EXTEND_NUM_INTERP = 25
 
 # The arm joints that move during the planar reach: joint 1 (index 0)
 # for the small lateral plane correction, and the pitch joints 2, 4, 6
@@ -544,7 +550,8 @@ class GroundMoveToPreGraspController(
         self._joint_infos = sim.robot.arm.get_arm_joint_infos()[:7]
         self._robot, self._target = objects
         self._base_motion_hyperparameters = MotionPlanningHyperparameters(
-            platform_clearance=base_clearance
+            platform_clearance=base_clearance,
+            birrt_extend_num_interp=BASE_MOTION_EXTEND_NUM_INTERP,
         )
         self._current_params: np.ndarray | None = None
         self._current_plan: list[SE2Pose] | None = None
@@ -834,7 +841,8 @@ class GroundPlaceController(
         self._joint_infos = sim.robot.arm.get_arm_joint_infos()[:7]
         self._robot, self._target, self._target_shelf = objects
         self._base_motion_hyperparameters = MotionPlanningHyperparameters(
-            platform_clearance=base_clearance
+            platform_clearance=base_clearance,
+            birrt_extend_num_interp=BASE_MOTION_EXTEND_NUM_INTERP,
         )
         if place_params is not None and len(place_params) not in (2, 3):
             raise ValueError(
