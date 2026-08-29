@@ -27,7 +27,6 @@ from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     MoveToTossLocationAndTossController,
     PickCubeController,
-    PickCubeFromBinController,
     create_lifted_controllers,
     get_target_robot_pose_from_parameters,
 )
@@ -1863,8 +1862,8 @@ def test_bin_pick_requires_the_named_bin_collision_geometry(monkeypatch, with_si
     """A non-null simulator without the bin must not silently plan through walls."""
     state = _create_robot_state([0.0] * 7, 0.0, -1.0, 0.0, 0.0)
     sim = PyBulletSim(state) if with_sim else None
-    monkeypatch.setattr(PickCubeController, "reset", lambda *args: None)
-    controller = PickCubeFromBinController(
+    monkeypatch.setattr(PickCubeController, "_reset_once", lambda *args: None)
+    controller = PickCubeController(
         (
             _get_robot_from_state(state),
             state.get_object_from_name("cube1"),
@@ -1883,7 +1882,7 @@ def test_bin_pick_requires_the_named_bin_collision_geometry(monkeypatch, with_si
 def test_bin_pick_uses_default_base_tolerance():
     """Bin retrieval keeps the floor picker's base arrival tolerance."""
     state = _create_robot_state([0.0] * 7, 0.0, 0.0, 0.0, 0.0)
-    controller = PickCubeFromBinController(
+    controller = PickCubeController(
         (
             _get_robot_from_state(state),
             state.get_object_from_name("cube1"),

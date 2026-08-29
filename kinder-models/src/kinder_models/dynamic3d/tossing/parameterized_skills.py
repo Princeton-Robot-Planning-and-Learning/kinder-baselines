@@ -811,8 +811,6 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
     TARGET_DISTANCE = 0.55
     TARGET_ROTATION = 0.0
 
-    _HELD_OBJECT_COLLISION_THRESHOLD = 1e-6
-
     class PickCubeControllerPhase(enum.Enum):
         """The ordered stages of a pick, stepped through in this order."""
 
@@ -839,6 +837,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         self._lifted: bool = False
         # None tries all base approaches; bin retrieval selects one per full plan.
         self._grasp_index: int | None = None
+        self._held_object_collision_threshold = 1e-6
         # Previous tick's arm conf, for the settling check in _robot_arm_has_settled.
         self._prev_arm_conf: np.ndarray | None = None
         # Which waypoint of self.plans[phase] step() is currently driving toward. A fresh
@@ -933,7 +932,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         )
         return None, None
 
-    def reset(
+    def _reset_once(
         self,
         x: ObjectCentricState,
         params: Any,
@@ -1087,7 +1086,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 ),
                 held_object=held_object,
                 base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,
-                distance_threshold=self._HELD_OBJECT_COLLISION_THRESHOLD,
+                distance_threshold=self._held_object_collision_threshold,
                 seed=0,
                 physics_client_id=self._pybullet_sim.physics_client_id,
             )
@@ -1108,6 +1107,33 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             self.plans[name] = remap_joint_position_plan_to_constant_distance(
                 plan, self._pybullet_sim.robot, max_distance=0.2
             )
+
+    def reset(
+        self,
+        x: ObjectCentricState,
+        params: Any,
+        extend_xy_magnitude: float = 0.025,
+        extend_rot_magnitude: float = np.pi / 8,
+    ) -> None:
+        """Plan once for floor pickup or retry all orientations for bin pickup."""
+        collision_object = self.objects[2]
+        picking_from_bin = collision_object.name.startswith("bin_")
+        if picking_from_bin and (
+            self._pybullet_sim is None
+            or not self._pybullet_sim.has_bin(collision_object.name)
+        ):
+            raise ValueError("Bin retrieval requires a bin-aware collision simulator")
+        self._held_object_collision_threshold = -0.001 if picking_from_bin else 1e-6
+        attempts = range(4) if picking_from_bin else (None,)
+        last_error: Exception | None = None
+        for index in attempts:
+            self._grasp_index = index
+            try:
+                self._reset_once(x, params, extend_xy_magnitude, extend_rot_magnitude)
+                return
+            except (AssertionError, ValueError) as error:
+                last_error = error
+        raise ValueError(f"No collision-free bin grasp: {last_error}")
 
     def step(self) -> Array:
         if self.current_phase == self.PickCubeControllerPhase.OPEN_GRIPPER:
@@ -1324,39 +1350,6 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             return False
         curr = np.array(self._get_current_robot_arm_conf()[:7])
         return bool(np.max(np.abs(curr - self._prev_arm_conf)) < atol)
-
-
-class PickCubeFromBinController(PickCubeController):
-    """Pick from an open bin using grasp retries and support-contact tolerance.
-
-    Objects: robot, cube, bin. The caller supplies a PyBulletSim with the live
-    bin geometry; omitting it fails rather than planning through invisible walls.
-    """
-
-    # Allow up to 1 mm of support-contact overlap while planning the lift.
-    # The bin remains a collision body; physical contacts are unchanged.
-    _HELD_OBJECT_COLLISION_THRESHOLD = -0.001
-
-    def reset(
-        self,
-        x: ObjectCentricState,
-        params: Any,
-        extend_xy_magnitude: float = 0.025,
-        extend_rot_magnitude: float = np.pi / 8,
-    ) -> None:
-        if self._pybullet_sim is None or not self._pybullet_sim.has_bin(
-            self.objects[2].name
-        ):
-            raise ValueError("Bin retrieval requires a bin-aware collision simulator")
-        last_error: Exception | None = None
-        for index in range(4):
-            self._grasp_index = index
-            try:
-                super().reset(x, params, extend_xy_magnitude, extend_rot_magnitude)
-                return
-            except (AssertionError, ValueError) as error:
-                last_error = error
-        raise ValueError(f"No collision-free bin grasp: {last_error}")
 
 
 class MoveToTossLocationAndTossController(
@@ -1814,7 +1807,7 @@ def create_lifted_controllers(
         )
     )
 
-    class PickCubeFromBin(PickCubeFromBinController):
+    class PickCubeFromBin(PickCubeController):
         """Bin retrieval with the caller's collision geometry."""
 
         def __init__(self, objects):
