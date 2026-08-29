@@ -899,7 +899,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             disable_collision_objects=[cube_to_pick_up.name],
         )
 
-    def _reset_once(
+    def _plan_motions(
         self,
         x: ObjectCentricState,
         params: Any,
@@ -908,7 +908,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         *,
         grasp_quat: Quaternion,
         held_object_collision_threshold: float,
-    ) -> None:
+    ) -> bool:
         # This is an entirely hardcoded controller
         del params
         # Initialize the PyBullet interface if this is the first time ever.
@@ -939,18 +939,12 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         )
 
         self.plans[self.PickCubeControllerPhase.BASE_MOTION] = base_motion_plan
-        assert self.plans[self.PickCubeControllerPhase.BASE_MOTION] is not None, (
-            "Motion planning failed at BASE_MOTION, "
-            f"start=({float(x.get(robot, 'pos_base_x'))}, "
-            f"{float(x.get(robot, 'pos_base_y'))}, "
-            f"{float(x.get(robot, 'pos_base_rot'))})"
-        )
+        if base_motion_plan is None:
+            return False
         # MOVE_ARM_TO_HOVER_OVER_CUBE planning
         # Get the last state from the BASE_MOTION plan so that next steps can build on it
         state_after_base_motion = x.copy()
-        target_base_pose_plan = self.plans[self.PickCubeControllerPhase.BASE_MOTION]
-        assert target_base_pose_plan is not None
-        target_base_pose = target_base_pose_plan[-1]
+        target_base_pose = base_motion_plan[-1]
         assert isinstance(target_base_pose, SE2)
         assert self.current_phase == self.PickCubeControllerPhase.OPEN_GRIPPER
         state_after_base_motion.set(robot, "pos_base_x", target_base_pose.x)
@@ -989,7 +983,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             seed=0,
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
-        assert hover_plan is not None, "Motion Planning Failed at hover"
+        if hover_plan is None:
+            return False
         hover_phase = self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE
         self.plans[hover_phase] = hover_plan
 
@@ -1026,7 +1021,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             seed=0,
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
-        assert around_plan is not None, "Motion Planning Failed at around"
+        if around_plan is None:
+            return False
         self.plans[self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE] = around_plan
 
         # CLOSE_GRIPPER_TO_GRASP_CUBE planning
@@ -1040,22 +1036,23 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         self._pybullet_sim.base_link_to_held_obj = (
             GRASP_TRANSFORM_TO_OBJECT.invert()
         )  # For Motion planning so it knows to avoid bonking the cube on things
-        self.plans[self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME] = (
-            run_motion_planning(
-                self._pybullet_sim.robot,
-                # Again where the previous plan ends, not the IK target it aimed at.
-                around_plan[-1],
-                self.home_joints.tolist(),
-                collision_bodies=self._pybullet_sim.get_collision_bodies(
-                    held_object=held_object
-                ),
-                held_object=held_object,
-                base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,
-                distance_threshold=held_object_collision_threshold,
-                seed=0,
-                physics_client_id=self._pybullet_sim.physics_client_id,
-            )
+        lift_plan = run_motion_planning(
+            self._pybullet_sim.robot,
+            # Again where the previous plan ends, not the IK target it aimed at.
+            around_plan[-1],
+            self.home_joints.tolist(),
+            collision_bodies=self._pybullet_sim.get_collision_bodies(
+                held_object=held_object
+            ),
+            held_object=held_object,
+            base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,
+            distance_threshold=held_object_collision_threshold,
+            seed=0,
+            physics_client_id=self._pybullet_sim.physics_client_id,
         )
+        if lift_plan is None:
+            return False
+        self.plans[self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME] = lift_plan
 
         for name, plan in self.plans.items():
             if name in {
@@ -1065,13 +1062,12 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             }:
                 # No arm motion planning for these phases, so nothing to remap.
                 continue
-            # Ensure motion planning didn't fail
-            assert plan is not None, f"Motion Planning Failed at {name}"
-
             # Map the plan onto real robot space, with constant distance
+            assert plan is not None
             self.plans[name] = remap_joint_position_plan_to_constant_distance(
                 plan, self._pybullet_sim.robot, max_distance=0.2
             )
+        return True
 
     def reset(
         self,
@@ -1095,21 +1091,17 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         )
         cube = self.objects[1]
         cube_quat = tuple(x.get(cube, key) for key in ("qx", "qy", "qz", "qw"))
-        last_error: Exception | None = None
         for grasp_quat in upright_grasp_rotations(cube_quat):
-            try:
-                self._reset_once(
-                    x,
-                    params,
-                    extend_xy_magnitude,
-                    extend_rot_magnitude,
-                    grasp_quat=grasp_quat,
-                    held_object_collision_threshold=collision_threshold,
-                )
+            if self._plan_motions(
+                x,
+                params,
+                extend_xy_magnitude,
+                extend_rot_magnitude,
+                grasp_quat=grasp_quat,
+                held_object_collision_threshold=collision_threshold,
+            ):
                 return
-            except (AssertionError, ValueError) as error:
-                last_error = error
-        raise ValueError(f"No collision-free cube grasp: {last_error}")
+        raise ValueError("No collision-free cube grasp")
 
     def step(self) -> Array:
         if self.current_phase == self.PickCubeControllerPhase.OPEN_GRIPPER:

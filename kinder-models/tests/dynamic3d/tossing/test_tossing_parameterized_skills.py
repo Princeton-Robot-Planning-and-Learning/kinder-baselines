@@ -1863,7 +1863,7 @@ def test_bin_pick_requires_the_named_bin_collision_geometry(monkeypatch, with_si
     """A non-null simulator without the bin must not silently plan through walls."""
     state = _create_robot_state([0.0] * 7, 0.0, -1.0, 0.0, 0.0)
     sim = PyBulletSim(state) if with_sim else None
-    monkeypatch.setattr(PickCubeController, "_reset_once", lambda *args: None)
+    monkeypatch.setattr(PickCubeController, "_plan_motions", lambda *args: True)
     controller = PickCubeController(
         (
             _get_robot_from_state(state),
@@ -1900,6 +1900,28 @@ def test_floor_and_bin_pick_share_one_lifted_controller():
     """The object bound as the third argument selects any bin-specific behavior."""
     controllers = create_lifted_controllers(TidyBot3DRobotActionSpace())
     assert controllers["pick_cube"] is controllers["pick_cube_from_bin"]
+
+
+def test_pick_retries_false_planning_canary(monkeypatch):
+    """Expected planning failure returns False and advances to the next grasp."""
+    state = _create_robot_state([0.0] * 7, 0.0, 0.0, 0.0, 0.0)
+    outcomes = iter((False, False, False, True))
+    attempts = []
+
+    def _plan(*_args, **kwargs):
+        attempts.append(kwargs["grasp_quat"])
+        return next(outcomes)
+
+    monkeypatch.setattr(PickCubeController, "_plan_motions", _plan)
+    controller = PickCubeController(
+        (
+            _get_robot_from_state(state),
+            state.get_object_from_name("cube1"),
+            Object("cuboid_barrier", MujocoMovableObjectType),
+        )
+    )
+    controller.reset(state, None)
+    assert len(attempts) == 4
 
 
 def test_pick_cube_from_bin_after_toss(tmp_path):
