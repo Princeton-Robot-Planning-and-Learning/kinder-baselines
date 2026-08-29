@@ -9,7 +9,11 @@ from bilevel_planning.trajectory_samplers.trajectory_sampler import (
 )
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
-from kinder.envs.kinematic3d.cylinder_shelf3d import ObjectCentricCylinderShelf3DEnv
+from kinder.envs.kinematic3d.cylinder_shelf3d import (
+    CylinderShelf3DEnvConfig,
+    ObjectCentricCylinderShelf3DEnv,
+)
+from pybullet_helpers.geometry import SE2Pose
 from relational_structs.spaces import ObjectCentricBoxSpace
 
 from kinder_models.kinematic3d.cylinder_shelf3d.parameterized_skills import (
@@ -371,5 +375,34 @@ def test_base_clearance_keeps_the_base_off_the_shelf_and_cylinder():
             )
             distance = min((point[8] for point in points), default=1.0)
             assert distance >= clearance - 0.03, (name, distance)
+    env.close()
+    sim.close()
+
+
+def test_staging_pose_outside_the_base_box_is_rejected():
+    """A sampled pre-grasp or place base pose outside the env's base pose box is a
+    sampling failure (the planner resamples the angle), not a goal to drive to."""
+    env = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
+    state, _ = env.reset(seed=456)
+    target = state.get_object_from_name("cylinder0")
+    cx = state.get(target, "pose_x")
+    # A box whose +x edge is just past the cylinder: staging from +x (rot 0
+    # puts the base at cx - 0.8, inside) is fine, staging from -x (rot pi puts
+    # it at cx + 0.8) is out.
+    config = CylinderShelf3DEnvConfig(
+        robot_base_pose_lower_bound=SE2Pose(-10.0, -10.0, -np.pi),
+        robot_base_pose_upper_bound=SE2Pose(cx + 0.3, 10.0, np.pi),
+    )
+    sim = ObjectCentricCylinderShelf3DEnv(
+        num_cylinders=1, config=config, allow_state_access=True
+    )
+    controllers = create_lifted_controllers(env.action_space, sim)
+    robot = state.get_object_from_name("robot")
+    controller = controllers["move_to_pre_grasp"].ground((robot, target))
+    controller.reset(state, np.array([0.8, np.pi]))
+    with pytest.raises(TrajectorySamplingFailure, match="outside the base pose box"):
+        controller.step()
+    with pytest.raises(TrajectorySamplingFailure, match="outside the base pose box"):
+        controller.predict_outcome(state, np.array([0.8, np.pi]))
     env.close()
     sim.close()

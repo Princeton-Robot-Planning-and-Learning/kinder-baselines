@@ -523,6 +523,22 @@ def _arm_action(
     return np.array([0.0] * 3 + delta_lst + [0.0], dtype=np.float32)
 
 
+def _check_base_pose_in_bounds(
+    sim: ObjectCentricCylinderShelf3DEnv, pose: SE2Pose, what: str
+) -> None:
+    """Raise ``TrajectorySamplingFailure`` when a sampled base pose lies outside
+    the env's base pose box. The base motion planner only samples inside the box;
+    a goal outside it (a cylinder near the floor's edge staged from the far
+    side) would otherwise be planned to and driven to."""
+    lower = sim.config.robot_base_pose_lower_bound
+    upper = sim.config.robot_base_pose_upper_bound
+    if not (lower.x <= pose.x <= upper.x and lower.y <= pose.y <= upper.y):
+        raise TrajectorySamplingFailure(
+            f"{what} ({pose.x:.2f}, {pose.y:.2f}) is outside the base pose box "
+            f"x [{lower.x:.2f}, {upper.x:.2f}] y [{lower.y:.2f}, {upper.y:.2f}]"
+        )
+
+
 class GroundMoveToPreGraspController(
     GroundParameterizedController[ObjectCentricState, np.ndarray],
     OutcomePredictor[ObjectCentricState],
@@ -592,6 +608,9 @@ class GroundMoveToPreGraspController(
             target_base_pose = get_target_robot_pose_from_parameters(
                 target_pose, self._current_params[0], self._current_params[1]
             )
+            _check_base_pose_in_bounds(
+                self._sim, target_base_pose, "Pre-grasp base pose"
+            )
             base_plan = run_single_arm_mobile_base_motion_planning(
                 self._sim.robot,
                 self._sim.robot.base.get_pose(),
@@ -660,6 +679,7 @@ class GroundMoveToPreGraspController(
         staged_base_pose = get_target_robot_pose_from_parameters(
             target_se2, params[0], params[1]
         )
+        _check_base_pose_in_bounds(self._sim, staged_base_pose, "Pre-grasp base pose")
         staged = x.copy()
         _set_base_pose(staged, staged_base_pose)
         _set_arm_joints(staged, HOME_JOINT_POSITIONS.tolist())
@@ -915,6 +935,7 @@ class GroundPlaceController(
             target_base_pose = get_target_robot_pose_from_parameters(
                 target_place_pose_se2, self._current_params[2], np.pi / 2
             )
+            _check_base_pose_in_bounds(self._sim, target_base_pose, "Place base pose")
             all_collision_ids = (
                 self._sim._get_collision_object_ids()  # pylint: disable=protected-access
             )
