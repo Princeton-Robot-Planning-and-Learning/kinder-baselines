@@ -286,7 +286,7 @@ def test_place_with_fixed_offset():
     sim = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
     offset = (0.10, -0.05)
     controllers = create_lifted_controllers(
-        env.action_space, sim, place_offsets={"cylinder0": offset}
+        env.action_space, sim, place_params={"cylinder0": offset}
     )
     state = _move_to_pre_grasp(env, controllers, init_state)
     state = _grasp(env, controllers, state)
@@ -308,5 +308,28 @@ def test_place_with_fixed_offset():
     )
     placed_xy = (state.get(target, "pose_x"), state.get(target, "pose_y"))
     assert np.allclose(placed_xy, expected_xy, atol=0.02), (placed_xy, expected_xy)
+    env.close()
+    sim.close()
+
+
+def test_place_with_fixed_offset_and_base_distance():
+    """With all three place parameters fixed the sampler is deterministic."""
+    env = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
+    state, _ = env.reset(seed=456)
+    sim = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
+    controllers = create_lifted_controllers(
+        env.action_space, sim, place_params={"cylinder0": (0.10, -0.05, 0.86)}
+    )
+    robot = state.get_object_from_name("robot")
+    target = state.get_object_from_name("cylinder0")
+    shelf = state.get_object_from_name("shelf")
+    controller = controllers["place"].ground((robot, target, shelf))
+    for seed in range(3):
+        params = controller.sample_parameters(state, np.random.default_rng(seed))
+        assert tuple(params) == (0.10, -0.05, 0.86)
+    with pytest.raises(ValueError, match="place_params"):
+        create_lifted_controllers(
+            env.action_space, sim, place_params={"cylinder0": (0.10,)}
+        )["place"].ground((robot, target, shelf))
     env.close()
     sim.close()

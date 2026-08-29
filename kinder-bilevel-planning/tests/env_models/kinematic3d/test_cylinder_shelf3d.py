@@ -115,12 +115,12 @@ def test_cylinder_shelf3d_without_magic_has_no_skill_calls():
     env.close()
 
 
-def test_cylinder_shelf3d_fixed_place_offsets():
-    """With place_offsets the plan sets the cylinder down at the given offset from the
+def test_cylinder_shelf3d_fixed_place_params():
+    """With place_params the plan sets the cylinder down at the given offset from the
     shelf centre."""
     env = kinder.make("kinder/KinematicCylinderShelf3D-o1-v0", allow_state_access=True)
     offset = (-0.10, -0.05)
-    _, agent = _make_agent(env, magic_skills=("Grasp",), place_offsets=[offset])
+    _, agent = _make_agent(env, magic_skills=("Grasp",), place_params=[offset])
     obs, info = env.reset(seed=123)
     agent.reset(obs, info)
 
@@ -147,14 +147,45 @@ def test_cylinder_shelf3d_fixed_place_offsets():
     env.close()
 
 
-def test_cylinder_shelf3d_place_offsets_validation():
-    """One place offset per cylinder, or a ValueError."""
+def test_cylinder_shelf3d_place_params_validation():
+    """One place parameter entry per cylinder, or a ValueError."""
     env = kinder.make("kinder/KinematicCylinderShelf3D-o1-v0")
-    with pytest.raises(ValueError, match="place_offsets has 2 entries"):
+    with pytest.raises(ValueError, match="place_params has 2 entries"):
         create_bilevel_planning_models(
             "cylinder_shelf3d",
             env.observation_space,
             env.action_space,
-            place_offsets=[(0.0, 0.0), None],
+            place_params=[(0.0, 0.0), None],
         )
+    env.close()
+
+
+def test_cylinder_shelf3d_two_cylinders_first_skeleton():
+    """MoveToPreGrasp requires and deletes NotAtPreGrasp, so the abstract planner
+    cannot chain two MoveToPreGrasps and its first skeleton for two cylinders is
+    refinable: planning succeeds with a single abstract plan, one sample per step
+    (the placements are fully fixed), and one MoveToPreGrasp + Grasp per
+    cylinder."""
+    env = kinder.make("kinder/KinematicCylinderShelf3D-o2-v0", allow_state_access=True)
+    env_models = create_bilevel_planning_models(
+        "cylinder_shelf3d",
+        env.observation_space,
+        env.action_space,
+        num_objects=2,
+        magic_skills=("MoveToPreGrasp", "Grasp"),
+        place_params=[(-0.10, -0.05, 0.86), (0.10, -0.05, 0.86)],
+    )
+    agent = BilevelPlanningAgent(
+        env_models,
+        seed=123,
+        max_abstract_plans=1,
+        samples_per_step=1,
+        planning_timeout=600.0,
+        max_skill_horizon=400,
+    )
+    obs, info = env.reset(seed=123)
+    agent.reset(obs, info)
+    calls = [u for _, u in agent.plan() if isinstance(u, SkillCall)]
+    assert [c.skill_name for c in calls] == ["MoveToPreGrasp", "Grasp"] * 2
+    assert {c.objects[1].name for c in calls} == {"cylinder0", "cylinder1"}
     env.close()

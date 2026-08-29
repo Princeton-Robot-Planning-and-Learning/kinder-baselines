@@ -811,16 +811,23 @@ class GroundPlaceController(
         self,
         objects: Sequence[Object],
         sim: ObjectCentricCylinderShelf3DEnv,
-        place_offset: Sequence[float] | None = None,
+        place_params: Sequence[float] | None = None,
     ) -> None:
-        """``place_offset`` fixes the (x, y) placement offset on the shelf instead of
-        sampling it; only the base staging distance is then sampled."""
+        """``place_params`` fixes the placement instead of sampling it: ``(x, y)``
+        fixes the offset on the shelf and leaves the base staging distance to
+        the sampler; ``(x, y, base_distance)`` fixes all three, so the skill has
+        nothing left to sample."""
         super().__init__(objects)
         self._sim = sim
         self._joint_infos = sim.robot.arm.get_arm_joint_infos()[:7]
         self._robot, self._target, self._target_shelf = objects
-        self._place_offset = (
-            None if place_offset is None else tuple(float(v) for v in place_offset)
+        if place_params is not None and len(place_params) not in (2, 3):
+            raise ValueError(
+                f"place_params must be (x, y) or (x, y, base_distance), got "
+                f"{list(place_params)}"
+            )
+        self._place_params = (
+            None if place_params is None else tuple(float(v) for v in place_params)
         )
         self._current_params: np.ndarray | None = None
         self._current_approach_plan: list[JointPositions] | None = None
@@ -834,15 +841,18 @@ class GroundPlaceController(
         self._lifted: bool = False
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
-        """Sample the placement offset on the shelf (unless fixed) and the base staging
-        distance."""
+        """Sample the placement offset on the shelf and the base staging distance,
+        except for whatever ``place_params`` fixed."""
         assert isinstance(x, CylinderShelf3DObjectCentricState)
-        if self._place_offset is None:
+        if self._place_params is None:
             place_x_offset = rng.uniform(*PLACE_X_OFFSET_BOUNDS)  # type: ignore
             place_y_offset = rng.uniform(*PLACE_Y_OFFSET_BOUNDS)  # type: ignore
         else:
-            place_x_offset, place_y_offset = self._place_offset
-        base_distance = rng.uniform(*PLACE_BASE_DISTANCE_BOUNDS)
+            place_x_offset, place_y_offset = self._place_params[:2]
+        if self._place_params is not None and len(self._place_params) == 3:
+            base_distance = self._place_params[2]
+        else:
+            base_distance = rng.uniform(*PLACE_BASE_DISTANCE_BOUNDS)
         return np.array([place_x_offset, place_y_offset, base_distance])
 
     def reset(self, x: ObjectCentricState, params: Any) -> None:
@@ -1119,17 +1129,16 @@ class GroundPlaceController(
 def create_lifted_controllers(
     action_space: Kinematic3DRobotActionSpace,
     sim: ObjectCentricCylinderShelf3DEnv,
-    place_offsets: Mapping[str, Sequence[float]] | None = None,
+    place_params: Mapping[str, Sequence[float]] | None = None,
 ) -> dict[str, LiftedParameterizedController]:
     """Create lifted parameterized controllers for CylinderShelf3D.
 
-    ``place_offsets`` maps a cylinder name to the fixed (x, y) offset from the
-    shelf centre at which the Place controller sets it down (see
-    ``GroundPlaceController``); cylinders not in the mapping get a sampled
-    offset.
+    ``place_params`` maps a cylinder name to its fixed placement, ``(x, y)``
+    or ``(x, y, base_distance)`` (see ``GroundPlaceController``); cylinders
+    not in the mapping get sampled placements.
     """
     del action_space
-    fixed_place_offsets = dict(place_offsets or {})
+    fixed_place_params = dict(place_params or {})
 
     # Create partial controller classes that include the sim
     class MoveToPreGraspController(GroundMoveToPreGraspController):
@@ -1148,7 +1157,7 @@ def create_lifted_controllers(
         """Controller for placing a cylinder."""
 
         def __init__(self, objects):
-            super().__init__(objects, sim, fixed_place_offsets.get(objects[1].name))
+            super().__init__(objects, sim, fixed_place_params.get(objects[1].name))
 
     # Create variables for lifted controllers
     robot = Variable("?robot", Kinematic3DRobotType)
