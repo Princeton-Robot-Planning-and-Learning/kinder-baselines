@@ -810,6 +810,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
 
     TARGET_DISTANCE = 0.55
     TARGET_ROTATION = 0.0
+    HELD_OBJECT_COLLISION_THRESHOLD = 1e-6
+    BIN_HELD_OBJECT_COLLISION_THRESHOLD = -0.001
 
     class PickCubeControllerPhase(enum.Enum):
         """The ordered stages of a pick, stepped through in this order."""
@@ -835,9 +837,6 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         self._last_gripper_state: float = 0.0
         self._closed_gripper: bool = False
         self._lifted: bool = False
-        # None tries all base approaches; bin retrieval selects one per full plan.
-        self._grasp_index: int | None = None
-        self._held_object_collision_threshold = 1e-6
         # Previous tick's arm conf, for the settling check in _robot_arm_has_settled.
         self._prev_arm_conf: np.ndarray | None = None
         # Which waypoint of self.plans[phase] step() is currently driving toward. A fresh
@@ -874,6 +873,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         cube_to_pick_up: Object,
         extend_xy_magnitude: float,
         extend_rot_magnitude: float,
+        grasp_index: int | None,
     ) -> tuple[list[SE2] | None, Quaternion | None]:
         """Try each of the cube's four grasp-symmetric rotations' BASE_MOTION
         plan (upright_grasp_rotations' own order, nearest-yaw first) until one
@@ -891,8 +891,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             x.get(cube_to_pick_up, "qw"),
         )
         candidate_grasp_quats = upright_grasp_rotations(cube_raw_quat)
-        if self._grasp_index is not None:
-            candidate_grasp_quats = (candidate_grasp_quats[self._grasp_index],)
+        if grasp_index is not None:
+            candidate_grasp_quats = (candidate_grasp_quats[grasp_index],)
 
         for grasp_quat in candidate_grasp_quats:
             # Pure z-axis rotation quaternions, so yaw = 2*atan2(qz, qw).
@@ -938,6 +938,9 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         params: Any,
         extend_xy_magnitude: float = 0.025,
         extend_rot_magnitude: float = np.pi / 8,
+        *,
+        grasp_index: int | None,
+        held_object_collision_threshold: float,
     ) -> None:
         # This is an entirely hardcoded controller
         del params
@@ -961,7 +964,11 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         robot = self.objects[0]
 
         base_motion_plan, chosen_grasp_quat = self._plan_grasp_symmetric_base_motion(
-            x, cube_to_pick_up, extend_xy_magnitude, extend_rot_magnitude
+            x,
+            cube_to_pick_up,
+            extend_xy_magnitude,
+            extend_rot_magnitude,
+            grasp_index,
         )
 
         self.plans[self.PickCubeControllerPhase.BASE_MOTION] = base_motion_plan
@@ -1086,7 +1093,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 ),
                 held_object=held_object,
                 base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,
-                distance_threshold=self._held_object_collision_threshold,
+                distance_threshold=held_object_collision_threshold,
                 seed=0,
                 physics_client_id=self._pybullet_sim.physics_client_id,
             )
@@ -1123,13 +1130,23 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             or not self._pybullet_sim.has_bin(collision_object.name)
         ):
             raise ValueError("Bin retrieval requires a bin-aware collision simulator")
-        self._held_object_collision_threshold = -0.001 if picking_from_bin else 1e-6
         attempts = range(4) if picking_from_bin else (None,)
+        collision_threshold = (
+            self.BIN_HELD_OBJECT_COLLISION_THRESHOLD
+            if picking_from_bin
+            else self.HELD_OBJECT_COLLISION_THRESHOLD
+        )
         last_error: Exception | None = None
         for index in attempts:
-            self._grasp_index = index
             try:
-                self._reset_once(x, params, extend_xy_magnitude, extend_rot_magnitude)
+                self._reset_once(
+                    x,
+                    params,
+                    extend_xy_magnitude,
+                    extend_rot_magnitude,
+                    grasp_index=index,
+                    held_object_collision_threshold=collision_threshold,
+                )
                 return
             except (AssertionError, ValueError) as error:
                 last_error = error
