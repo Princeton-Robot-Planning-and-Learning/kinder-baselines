@@ -29,7 +29,7 @@ the grasp is planar, entering the shelf at the grasp's own pitch keeps
 the cylinder upright through the placement.
 """
 
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 from bilevel_planning.structs import (
@@ -335,11 +335,10 @@ def get_grasp_positions(
 ) -> tuple[np.ndarray, np.ndarray]:
     """(grasp position, pre-grasp position) of the side grasp on ``target_name``.
 
-    The approach is aligned with the base heading toward the cylinder so the
-    gripper reaches straight out from wherever the base is around it. The
-    grasp position is where the end effector sits at the grasp; the
-    pre-grasp position is PRE_GRASP_BACKOFF behind it along the approach
-    axis.
+    The approach is aligned with the base heading toward the cylinder so the gripper
+    reaches straight out from wherever the base is around it. The grasp position is
+    where the end effector sits at the grasp; the pre-grasp position is
+    PRE_GRASP_BACKOFF behind it along the approach axis.
     """
     cylinder_pose = state.get_object_pose(target_name)
     base_pose = state.base_pose
@@ -368,8 +367,11 @@ def is_at_pre_grasp(
     target_name: str,
 ) -> bool:
     """Whether the (empty) gripper is within PRE_GRASP_POSITION_TOL of the pre-grasp
-    position for ``target_name``. The sim is set to ``state`` to read the end effector
-    pose."""
+    position for ``target_name``.
+
+    The sim is set to ``state`` to read the end effector
+    pose.
+    """
     if state.grasped_object is not None:
         return False
     sim.set_state(state)
@@ -809,11 +811,17 @@ class GroundPlaceController(
         self,
         objects: Sequence[Object],
         sim: ObjectCentricCylinderShelf3DEnv,
+        place_offset: Sequence[float] | None = None,
     ) -> None:
+        """``place_offset`` fixes the (x, y) placement offset on the shelf instead of
+        sampling it; only the base staging distance is then sampled."""
         super().__init__(objects)
         self._sim = sim
         self._joint_infos = sim.robot.arm.get_arm_joint_infos()[:7]
         self._robot, self._target, self._target_shelf = objects
+        self._place_offset = (
+            None if place_offset is None else tuple(float(v) for v in place_offset)
+        )
         self._current_params: np.ndarray | None = None
         self._current_approach_plan: list[JointPositions] | None = None
         self._current_retract_plan: list[JointPositions] | None = None
@@ -826,10 +834,14 @@ class GroundPlaceController(
         self._lifted: bool = False
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
-        """Sample the placement offset on the shelf."""
+        """Sample the placement offset on the shelf (unless fixed) and the base staging
+        distance."""
         assert isinstance(x, CylinderShelf3DObjectCentricState)
-        place_x_offset = rng.uniform(*PLACE_X_OFFSET_BOUNDS)  # type: ignore
-        place_y_offset = rng.uniform(*PLACE_Y_OFFSET_BOUNDS)  # type: ignore
+        if self._place_offset is None:
+            place_x_offset = rng.uniform(*PLACE_X_OFFSET_BOUNDS)  # type: ignore
+            place_y_offset = rng.uniform(*PLACE_Y_OFFSET_BOUNDS)  # type: ignore
+        else:
+            place_x_offset, place_y_offset = self._place_offset
         base_distance = rng.uniform(*PLACE_BASE_DISTANCE_BOUNDS)
         return np.array([place_x_offset, place_y_offset, base_distance])
 
@@ -1107,9 +1119,17 @@ class GroundPlaceController(
 def create_lifted_controllers(
     action_space: Kinematic3DRobotActionSpace,
     sim: ObjectCentricCylinderShelf3DEnv,
+    place_offsets: Mapping[str, Sequence[float]] | None = None,
 ) -> dict[str, LiftedParameterizedController]:
-    """Create lifted parameterized controllers for CylinderShelf3D."""
+    """Create lifted parameterized controllers for CylinderShelf3D.
+
+    ``place_offsets`` maps a cylinder name to the fixed (x, y) offset from the
+    shelf centre at which the Place controller sets it down (see
+    ``GroundPlaceController``); cylinders not in the mapping get a sampled
+    offset.
+    """
     del action_space
+    fixed_place_offsets = dict(place_offsets or {})
 
     # Create partial controller classes that include the sim
     class MoveToPreGraspController(GroundMoveToPreGraspController):
@@ -1128,7 +1148,7 @@ def create_lifted_controllers(
         """Controller for placing a cylinder."""
 
         def __init__(self, objects):
-            super().__init__(objects, sim)
+            super().__init__(objects, sim, fixed_place_offsets.get(objects[1].name))
 
     # Create variables for lifted controllers
     robot = Variable("?robot", Kinematic3DRobotType)

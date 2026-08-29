@@ -13,12 +13,13 @@ from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 kinder.register_all_environments()
 
 
-def _make_agent(env, magic_skills):
+def _make_agent(env, magic_skills, **kwargs):
     env_models = create_bilevel_planning_models(
         "cylinder_shelf3d",
         env.observation_space,
         env.action_space,
         magic_skills=magic_skills,
+        **kwargs,
     )
     agent = BilevelPlanningAgent(
         env_models,
@@ -36,10 +37,9 @@ def _predicate(env_models, name):
 
 
 def test_cylinder_shelf3d_magic_grasp_planning_and_execution():
-    """With Grasp magic, the plan reaches the pre-grasp pose with planned motion,
-    holds exactly one SkillCall for the grasp whose predicted state satisfies
-    Holding, and executing the plan with the SkillCall carried out as a teleport
-    reaches the goal."""
+    """With Grasp magic, the plan reaches the pre-grasp pose with planned motion, holds
+    exactly one SkillCall for the grasp whose predicted state satisfies Holding, and
+    executing the plan with the SkillCall carried out as a teleport reaches the goal."""
     env = kinder.make("kinder/KinematicCylinderShelf3D-o1-v0", allow_state_access=True)
     env_models, agent = _make_agent(env, magic_skills=("Grasp",))
     obs, info = env.reset(seed=123)
@@ -97,8 +97,8 @@ def test_cylinder_shelf3d_magic_skills_validation():
 
 
 def test_cylinder_shelf3d_without_magic_has_no_skill_calls():
-    """Without magic skills the plan is a plain low-level action sequence that
-    reaches the goal."""
+    """Without magic skills the plan is a plain low-level action sequence that reaches
+    the goal."""
     env = kinder.make("kinder/KinematicCylinderShelf3D-o1-v0")
     _, agent = _make_agent(env, magic_skills=())
     obs, info = env.reset(seed=123)
@@ -112,4 +112,49 @@ def test_cylinder_shelf3d_without_magic_has_no_skill_calls():
         if terminated:
             break
     assert terminated
+    env.close()
+
+
+def test_cylinder_shelf3d_fixed_place_offsets():
+    """With place_offsets the plan sets the cylinder down at the given offset from the
+    shelf centre."""
+    env = kinder.make("kinder/KinematicCylinderShelf3D-o1-v0", allow_state_access=True)
+    offset = (-0.10, -0.05)
+    _, agent = _make_agent(env, magic_skills=("Grasp",), place_offsets=[offset])
+    obs, info = env.reset(seed=123)
+    agent.reset(obs, info)
+
+    terminated = False
+    for _, action in agent.plan():
+        if isinstance(action, SkillCall):
+            obs = env.observation_space.vectorize(action.predicted_state)
+            env.unwrapped.set_state(obs)
+            continue
+        obs, _, terminated, _, _ = env.step(action)
+        if terminated:
+            break
+    assert terminated, "Executing the plan did not reach the goal"
+
+    state = env.observation_space.devectorize(obs)
+    shelf_pose = state.get_object_pose("shelf")
+    cylinder = state.get_object_from_name("cylinder0")
+    placed_xy = (state.get(cylinder, "pose_x"), state.get(cylinder, "pose_y"))
+    expected_xy = (
+        shelf_pose.position[0] + offset[0],
+        shelf_pose.position[1] - 0.05 + offset[1],
+    )
+    assert np.allclose(placed_xy, expected_xy, atol=0.02), (placed_xy, expected_xy)
+    env.close()
+
+
+def test_cylinder_shelf3d_place_offsets_validation():
+    """One place offset per cylinder, or a ValueError."""
+    env = kinder.make("kinder/KinematicCylinderShelf3D-o1-v0")
+    with pytest.raises(ValueError, match="place_offsets has 2 entries"):
+        create_bilevel_planning_models(
+            "cylinder_shelf3d",
+            env.observation_space,
+            env.action_space,
+            place_offsets=[(0.0, 0.0), None],
+        )
     env.close()

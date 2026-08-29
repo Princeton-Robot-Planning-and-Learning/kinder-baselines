@@ -276,3 +276,37 @@ def test_magic_grasp_then_real_place():
     _assert_on_shelf(sim, state)
     env.close()
     sim.close()
+
+
+def test_place_with_fixed_offset():
+    """A fixed place offset is used verbatim (only the base distance is sampled) and the
+    cylinder ends up at that offset from the shelf centre."""
+    env = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
+    init_state, _ = env.reset(seed=456)
+    sim = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
+    offset = (0.10, -0.05)
+    controllers = create_lifted_controllers(
+        env.action_space, sim, place_offsets={"cylinder0": offset}
+    )
+    state = _move_to_pre_grasp(env, controllers, init_state)
+    state = _grasp(env, controllers, state)
+
+    robot = state.get_object_from_name("robot")
+    target = state.get_object_from_name("cylinder0")
+    shelf = state.get_object_from_name("shelf")
+    controller = controllers["place"].ground((robot, target, shelf))
+    for seed in range(3):
+        params = controller.sample_parameters(state, np.random.default_rng(seed))
+        assert tuple(params[:2]) == offset
+
+    state = _place(env, controllers, state, np.random.default_rng(456))
+    _assert_on_shelf(sim, state)
+    shelf_pose = state.get_object_pose("shelf")
+    expected_xy = (
+        shelf_pose.position[0] + offset[0],
+        shelf_pose.position[1] - 0.05 + offset[1],
+    )
+    placed_xy = (state.get(target, "pose_x"), state.get(target, "pose_y"))
+    assert np.allclose(placed_xy, expected_xy, atol=0.02), (placed_xy, expected_xy)
+    env.close()
+    sim.close()

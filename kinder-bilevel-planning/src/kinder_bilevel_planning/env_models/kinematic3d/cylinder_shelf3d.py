@@ -1,6 +1,6 @@
 """Bilevel planning models for the cylinder shelf 3D environment."""
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 
 import numpy as np
 from bilevel_planning.structs import (
@@ -56,6 +56,7 @@ def create_bilevel_planning_models(
     num_objects: int = 1,
     config: CylinderShelf3DEnvConfig | None = None,
     magic_skills: Collection[str] = (),
+    place_offsets: Sequence[Sequence[float] | None] | None = None,
 ) -> SesameModels:
     """Create the env models for cylinder shelf 3D.
 
@@ -74,6 +75,13 @@ def create_bilevel_planning_models(
     contain a ``SkillCall`` wherever the executor must carry the skill out
     by other means. Only skills whose controller implements
     ``OutcomePredictor`` can be made magic.
+
+    ``place_offsets`` fixes where each cylinder is set down on the shelf: the
+    i-th entry is the (x, y) offset from the shelf centre for ``cylinder{i}``
+    (see ``GroundPlaceController``), or ``None`` to leave that cylinder's
+    offset to the sampler. Fixing the offsets removes two of the Place
+    skill's three sampled parameters, which makes planning with several
+    cylinders faster and their layout on the shelf predictable.
     """
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, Kinematic3DRobotActionSpace)
@@ -228,7 +236,19 @@ def create_bilevel_planning_models(
 
     # Get lifted controllers from kinder_models, swapping in magic versions
     # where requested.
-    lifted_controllers = create_lifted_controllers(action_space, sim)
+    if place_offsets is not None and len(place_offsets) != num_objects:
+        raise ValueError(
+            f"place_offsets has {len(place_offsets)} entries for {num_objects} "
+            "cylinders"
+        )
+    fixed_place_offsets = {
+        f"cylinder{i}": offset
+        for i, offset in enumerate(place_offsets or [])
+        if offset is not None
+    }
+    lifted_controllers = create_lifted_controllers(
+        action_space, sim, fixed_place_offsets
+    )
     for skill_name in magic_skills:
         key = _SKILL_CONTROLLER_KEYS[skill_name]
         lifted_controllers[key] = make_magic_lifted_controller(
