@@ -867,22 +867,15 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         del x, rng
         return np.zeros(0)
 
-    def _plan_grasp_symmetric_base_motion(
+    def _plan_base_motion(
         self,
         x: ObjectCentricState,
         cube_to_pick_up: Object,
         extend_xy_magnitude: float,
         extend_rot_magnitude: float,
-        grasp_index: int | None,
+        grasp_index: int,
     ) -> tuple[list[SE2] | None, Quaternion | None]:
-        """Try each of the cube's four grasp-symmetric rotations' BASE_MOTION
-        plan (upright_grasp_rotations' own order, nearest-yaw first) until one
-        succeeds -- the barrier only blocks roughly half the angular range
-        around the cube, so the nearest-yaw approach failing doesn't mean none
-        of the four can reach it.
-
-        Returns (plan, chosen_grasp_quat); both are None if no candidate found a plan.
-        """
+        """Plan base motion for one cube-symmetric grasp orientation."""
         cube_pose = get_overhead_object_se2_pose(x, cube_to_pick_up)
         cube_raw_quat = (
             x.get(cube_to_pick_up, "qx"),
@@ -890,47 +883,24 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             x.get(cube_to_pick_up, "qz"),
             x.get(cube_to_pick_up, "qw"),
         )
-        candidate_grasp_quats = upright_grasp_rotations(cube_raw_quat)
-        if grasp_index is not None:
-            candidate_grasp_quats = (candidate_grasp_quats[grasp_index],)
-
-        for grasp_quat in candidate_grasp_quats:
-            # Pure z-axis rotation quaternions, so yaw = 2*atan2(qz, qw).
-            candidate_yaw = 2.0 * float(np.arctan2(grasp_quat[2], grasp_quat[3]))
-            candidate_cube_pose = SE2(cube_pose.x, cube_pose.y, candidate_yaw)
-            candidate_target_base_pose = get_target_robot_pose_from_parameters(
-                candidate_cube_pose, self.TARGET_DISTANCE, self.TARGET_ROTATION
-            )
-            candidate_plan = run_base_motion_planning(
-                state=x,
-                target_base_pose=candidate_target_base_pose,
-                x_bounds=WORLD_X_BOUNDS,
-                y_bounds=WORLD_Y_BOUNDS,
-                seed=0,  # To make this effectively deterministic
-                extend_xy_magnitude=extend_xy_magnitude,
-                extend_rot_magnitude=extend_rot_magnitude,
-                # During random resets, the cube can spawn directly under or right
-                # next to the robot, which would otherwise put the standoff in
-                # collision before planning even starts. Mirrors
-                # MoveToTossLocationAndTossController's own
-                # disable_collision_objects=[target] for the same reason.
-                disable_collision_objects=[cube_to_pick_up.name],
-            )
-            if candidate_plan is not None:
-                logger.debug(
-                    "PICK_BASE_MOTION_PLAN result=OK cube_pose_xy=(%.4f,%.4f)",
-                    cube_pose.x,
-                    cube_pose.y,
-                )
-                return candidate_plan, grasp_quat
-
-        logger.debug(
-            "PICK_BASE_MOTION_PLAN result=FAIL cube_pose_xy=(%.4f,%.4f), all 4 "
-            "grasp-symmetric approaches tried",
-            cube_pose.x,
-            cube_pose.y,
+        grasp_quat = upright_grasp_rotations(cube_raw_quat)[grasp_index]
+        # Pure z-axis rotation quaternion, so yaw = 2*atan2(qz, qw).
+        candidate_yaw = 2.0 * float(np.arctan2(grasp_quat[2], grasp_quat[3]))
+        candidate_cube_pose = SE2(cube_pose.x, cube_pose.y, candidate_yaw)
+        target_base_pose = get_target_robot_pose_from_parameters(
+            candidate_cube_pose, self.TARGET_DISTANCE, self.TARGET_ROTATION
         )
-        return None, None
+        plan = run_base_motion_planning(
+            state=x,
+            target_base_pose=target_base_pose,
+            x_bounds=WORLD_X_BOUNDS,
+            y_bounds=WORLD_Y_BOUNDS,
+            seed=0,
+            extend_xy_magnitude=extend_xy_magnitude,
+            extend_rot_magnitude=extend_rot_magnitude,
+            disable_collision_objects=[cube_to_pick_up.name],
+        )
+        return (plan, grasp_quat) if plan is not None else (None, None)
 
     def _reset_once(
         self,
@@ -939,7 +909,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         extend_xy_magnitude: float = 0.025,
         extend_rot_magnitude: float = np.pi / 8,
         *,
-        grasp_index: int | None,
+        grasp_index: int,
         held_object_collision_threshold: float,
     ) -> None:
         # This is an entirely hardcoded controller
@@ -963,7 +933,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         # BASE_MOTION planning
         robot = self.objects[0]
 
-        base_motion_plan, chosen_grasp_quat = self._plan_grasp_symmetric_base_motion(
+        base_motion_plan, chosen_grasp_quat = self._plan_base_motion(
             x,
             cube_to_pick_up,
             extend_xy_magnitude,
@@ -973,8 +943,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
 
         self.plans[self.PickCubeControllerPhase.BASE_MOTION] = base_motion_plan
         assert self.plans[self.PickCubeControllerPhase.BASE_MOTION] is not None, (
-            "Motion planning failed at BASE_MOTION for all 4 grasp-symmetric "
-            f"approaches, start=({float(x.get(robot, 'pos_base_x'))}, "
+            f"Motion planning failed at BASE_MOTION for grasp {grasp_index}, "
+            f"start=({float(x.get(robot, 'pos_base_x'))}, "
             f"{float(x.get(robot, 'pos_base_y'))}, "
             f"{float(x.get(robot, 'pos_base_rot'))})"
         )
@@ -1122,7 +1092,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         extend_xy_magnitude: float = 0.025,
         extend_rot_magnitude: float = np.pi / 8,
     ) -> None:
-        """Plan once for floor pickup or retry all orientations for bin pickup."""
+        """Retry the complete pickup plan for all four grasp orientations."""
         collision_object = self.objects[2]
         picking_from_bin = collision_object.name.startswith("bin_")
         if picking_from_bin and (
@@ -1130,14 +1100,13 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             or not self._pybullet_sim.has_bin(collision_object.name)
         ):
             raise ValueError("Bin retrieval requires a bin-aware collision simulator")
-        attempts = range(4) if picking_from_bin else (None,)
         collision_threshold = (
             self.BIN_HELD_OBJECT_COLLISION_THRESHOLD
             if picking_from_bin
             else self.HELD_OBJECT_COLLISION_THRESHOLD
         )
         last_error: Exception | None = None
-        for index in attempts:
+        for index in range(4):
             try:
                 self._reset_once(
                     x,
@@ -1150,7 +1119,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 return
             except (AssertionError, ValueError) as error:
                 last_error = error
-        raise ValueError(f"No collision-free bin grasp: {last_error}")
+        raise ValueError(f"No collision-free cube grasp: {last_error}")
 
     def step(self) -> Array:
         if self.current_phase == self.PickCubeControllerPhase.OPEN_GRIPPER:
