@@ -189,3 +189,14 @@ def test_cylinder_shelf3d_two_cylinders_first_skeleton():
     assert [c.skill_name for c in calls] == ["MoveToPreGrasp", "Grasp"] * 2
     assert {c.objects[1].name for c in calls} == {"cylinder0", "cylinder1"}
     env.close()
+
+
+def test_cylinder_shelf3d_plans_with_base_clearance():
+    """base_clearance reaches the skills' base motion planner and planning still
+    succeeds with a few centimetres of it."""
+    env = kinder.make("kinder/KinematicCylinderShelf3D-o1-v0", allow_state_access=True)
+    _, agent = _make_agent(env, magic_skills=("Grasp",), base_clearance=0.05)
+    obs, info = env.reset(seed=123)
+    agent.reset(obs, info)
+    assert len(agent.plan()) > 0
+    env.close()
