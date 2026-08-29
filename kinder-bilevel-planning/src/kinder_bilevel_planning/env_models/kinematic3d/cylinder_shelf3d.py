@@ -1,6 +1,6 @@
 """Bilevel planning models for the cylinder shelf 3D environment."""
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 
 import numpy as np
 from bilevel_planning.structs import (
@@ -56,6 +56,7 @@ def create_bilevel_planning_models(
     num_objects: int = 1,
     config: CylinderShelf3DEnvConfig | None = None,
     magic_skills: Collection[str] = (),
+    place_params: Sequence[Sequence[float] | None] | None = None,
 ) -> SesameModels:
     """Create the env models for cylinder shelf 3D.
 
@@ -74,6 +75,14 @@ def create_bilevel_planning_models(
     contain a ``SkillCall`` wherever the executor must carry the skill out
     by other means. Only skills whose controller implements
     ``OutcomePredictor`` can be made magic.
+
+    ``place_params`` fixes where each cylinder is set down on the shelf: the
+    i-th entry is for ``cylinder{i}`` and is either ``(x, y)``, the offset
+    from the shelf centre (the base staging distance is still sampled), or
+    ``(x, y, base_distance)``, which leaves the Place skill nothing to sample
+    (see ``GroundPlaceController``); ``None`` keeps sampling everything for
+    that cylinder. Fixed placements make planning with several cylinders
+    faster and their layout on the shelf predictable.
     """
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, Kinematic3DRobotActionSpace)
@@ -121,7 +130,12 @@ def create_bilevel_planning_models(
     Holding = Predicate("Holding", [Kinematic3DRobotType, Kinematic3DCuboidType])
     HandEmpty = Predicate("HandEmpty", [Kinematic3DRobotType])
     AtPreGrasp = Predicate("AtPreGrasp", [Kinematic3DRobotType, Kinematic3DCuboidType])
-    predicates = {OnFixture, OnGround, Holding, HandEmpty, AtPreGrasp}
+    # True when the robot is at no cylinder's pre-grasp pose. MoveToPreGrasp
+    # requires and deletes it, so the abstract planner cannot chain two
+    # MoveToPreGrasps (which would leave a stale AtPreGrasp in the abstract
+    # state that no sampled trajectory can reproduce).
+    NotAtPreGrasp = Predicate("NotAtPreGrasp", [Kinematic3DRobotType])
+    predicates = {OnFixture, OnGround, Holding, HandEmpty, AtPreGrasp, NotAtPreGrasp}
 
     # State abstractor.
     def state_abstractor(x: ObjectCentricState) -> RelationalAbstractState:
@@ -158,9 +172,13 @@ def create_bilevel_planning_models(
                     atoms.add(GroundAtom(Holding, [robot, target]))
 
         # AtPreGrasp: empty gripper at the target's pre-grasp position.
+        at_any_pre_grasp = False
         for target in target_objects:
             if is_at_pre_grasp(sim, x, target.name):
                 atoms.add(GroundAtom(AtPreGrasp, [robot, target]))
+                at_any_pre_grasp = True
+        if not at_any_pre_grasp:
+            atoms.add(GroundAtom(NotAtPreGrasp, [robot]))
 
         # OnFixture: within the shelf footprint and resting above floor
         # level (a floor-standing cylinder has pose_z == half_extent_z; one
@@ -205,9 +223,13 @@ def create_bilevel_planning_models(
     MoveToPreGraspOperator = LiftedOperator(
         "MoveToPreGrasp",
         [robot, target],
-        preconditions={LiftedAtom(HandEmpty, [robot]), LiftedAtom(OnGround, [target])},
+        preconditions={
+            LiftedAtom(HandEmpty, [robot]),
+            LiftedAtom(NotAtPreGrasp, [robot]),
+            LiftedAtom(OnGround, [target]),
+        },
         add_effects={LiftedAtom(AtPreGrasp, [robot, target])},
-        delete_effects=set(),
+        delete_effects={LiftedAtom(NotAtPreGrasp, [robot])},
     )
 
     GraspOperator = LiftedOperator(
@@ -218,7 +240,10 @@ def create_bilevel_planning_models(
             LiftedAtom(HandEmpty, [robot]),
             LiftedAtom(OnGround, [target]),
         },
-        add_effects={LiftedAtom(Holding, [robot, target])},
+        add_effects={
+            LiftedAtom(Holding, [robot, target]),
+            LiftedAtom(NotAtPreGrasp, [robot]),
+        },
         delete_effects={
             LiftedAtom(AtPreGrasp, [robot, target]),
             LiftedAtom(HandEmpty, [robot]),
@@ -228,7 +253,19 @@ def create_bilevel_planning_models(
 
     # Get lifted controllers from kinder_models, swapping in magic versions
     # where requested.
-    lifted_controllers = create_lifted_controllers(action_space, sim)
+    if place_params is not None and len(place_params) != num_objects:
+        raise ValueError(
+            f"place_params has {len(place_params)} entries for {num_objects} "
+            "cylinders"
+        )
+    fixed_place_params = {
+        f"cylinder{i}": params
+        for i, params in enumerate(place_params or [])
+        if params is not None
+    }
+    lifted_controllers = create_lifted_controllers(
+        action_space, sim, fixed_place_params
+    )
     for skill_name in magic_skills:
         key = _SKILL_CONTROLLER_KEYS[skill_name]
         lifted_controllers[key] = make_magic_lifted_controller(
