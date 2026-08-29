@@ -810,7 +810,12 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
 
     TARGET_DISTANCE = 0.55
     TARGET_ROTATION = 0.0
+    # Floor pickup requires separated collision geometry; 1e-6 m is effectively zero
+    # with a small positive margin for floating-point comparisons.
     HELD_OBJECT_COLLISION_THRESHOLD = 1e-6
+    # A cube supported by the bin can begin slightly embedded due to contact solving.
+    # A negative threshold permits up to 1 mm of penetration during lift planning;
+    # the bin remains a collider and MuJoCo's physical contacts are unchanged.
     BIN_HELD_OBJECT_COLLISION_THRESHOLD = -0.001
 
     class PickCubeControllerPhase(enum.Enum):
