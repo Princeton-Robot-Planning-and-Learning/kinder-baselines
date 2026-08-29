@@ -1786,22 +1786,17 @@ def create_lifted_controllers(
     # this side of it, as move_to_target_from_other_target carries ?prev_target.
     barrier = Variable("?barrier", MujocoMovableObjectType)
 
-    LiftedPickCubeController: LiftedParameterizedController = (
-        LiftedParameterizedController(
-            [robot, cube, barrier],
-            PickCubeController,
-        )
-    )
-
-    class PickCubeFromBin(PickCubeController):
-        """Bin retrieval with the caller's collision geometry."""
+    class PickCube(PickCubeController):
+        """Cube pickup with the caller's collision geometry."""
 
         def __init__(self, objects):
             super().__init__(objects, pybullet_sim=pybullet_sim)
 
-    bin_object = Variable("?bin", MujocoMovableObjectType)
-    LiftedPickCubeFromBinController: LiftedParameterizedController = (
-        LiftedParameterizedController([robot, cube, bin_object], PickCubeFromBin)
+    LiftedPickCubeController: LiftedParameterizedController = (
+        LiftedParameterizedController(
+            [robot, cube, barrier],
+            PickCube,
+        )
     )
 
     class MoveToTossLocationAndToss(MoveToTossLocationAndTossController):
@@ -1831,6 +1826,6 @@ def create_lifted_controllers(
         "open_gripper": LiftedOpenGripperController,
         "no_op": LiftedNoOpController,
         "pick_cube": LiftedPickCubeController,
-        "pick_cube_from_bin": LiftedPickCubeFromBinController,
+        "pick_cube_from_bin": LiftedPickCubeController,
         "move_to_toss_location_and_toss": LiftedMoveToTossLocationAndTossController,
     }

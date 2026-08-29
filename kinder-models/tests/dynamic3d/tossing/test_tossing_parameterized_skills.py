@@ -17,6 +17,7 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoObjectTypeFeatures,
     MujocoTidyBotRobotObjectType,
 )
+from kinder.envs.dynamic3d.robots.tidybot_robot_env import TidyBot3DRobotActionSpace
 from pybullet_helpers.geometry import Pose
 from relational_structs import GroundAtom, Object, ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
@@ -1893,6 +1894,12 @@ def test_bin_pick_uses_default_base_tolerance():
     assert controller._robot_is_close_to_pose(  # pylint: disable=protected-access
         SE2(0.02, 0.0, 0.0)
     )
+
+
+def test_floor_and_bin_pick_share_one_lifted_controller():
+    """The object bound as the third argument selects any bin-specific behavior."""
+    controllers = create_lifted_controllers(TidyBot3DRobotActionSpace())
+    assert controllers["pick_cube"] is controllers["pick_cube_from_bin"]
 
 
 def test_pick_cube_from_bin_after_toss(tmp_path):
