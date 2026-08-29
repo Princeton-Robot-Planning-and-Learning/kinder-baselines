@@ -908,8 +908,9 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         """Populate all trajectories for one grasp, returning False if infeasible."""
         assert self._pybullet_sim is not None
 
+        # The cube is always the index 1 object at construction time, and the
+        # barrier the index 2 object.
         cube_to_pick_up = self.objects[1]
-        # The cube is index 1; index 2 supplies the collision context.
 
         # Pre-compute all motion planning
         # BASE_MOTION planning
