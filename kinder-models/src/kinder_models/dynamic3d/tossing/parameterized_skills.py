@@ -878,24 +878,17 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         cube_to_pick_up: Object,
         extend_xy_magnitude: float,
         extend_rot_magnitude: float,
-        grasp_index: int,
-    ) -> tuple[list[SE2] | None, Quaternion | None]:
+        grasp_quat: Quaternion,
+    ) -> list[SE2] | None:
         """Plan base motion for one cube-symmetric grasp orientation."""
         cube_pose = get_overhead_object_se2_pose(x, cube_to_pick_up)
-        cube_raw_quat = (
-            x.get(cube_to_pick_up, "qx"),
-            x.get(cube_to_pick_up, "qy"),
-            x.get(cube_to_pick_up, "qz"),
-            x.get(cube_to_pick_up, "qw"),
-        )
-        grasp_quat = upright_grasp_rotations(cube_raw_quat)[grasp_index]
         # Pure z-axis rotation quaternion, so yaw = 2*atan2(qz, qw).
         candidate_yaw = 2.0 * float(np.arctan2(grasp_quat[2], grasp_quat[3]))
         candidate_cube_pose = SE2(cube_pose.x, cube_pose.y, candidate_yaw)
         target_base_pose = get_target_robot_pose_from_parameters(
             candidate_cube_pose, self.TARGET_DISTANCE, self.TARGET_ROTATION
         )
-        plan = run_base_motion_planning(
+        return run_base_motion_planning(
             state=x,
             target_base_pose=target_base_pose,
             x_bounds=WORLD_X_BOUNDS,
@@ -905,7 +898,6 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             extend_rot_magnitude=extend_rot_magnitude,
             disable_collision_objects=[cube_to_pick_up.name],
         )
-        return (plan, grasp_quat) if plan is not None else (None, None)
 
     def _reset_once(
         self,
@@ -914,7 +906,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         extend_xy_magnitude: float = 0.025,
         extend_rot_magnitude: float = np.pi / 8,
         *,
-        grasp_index: int,
+        grasp_quat: Quaternion,
         held_object_collision_threshold: float,
     ) -> None:
         # This is an entirely hardcoded controller
@@ -938,26 +930,21 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         # BASE_MOTION planning
         robot = self.objects[0]
 
-        base_motion_plan, chosen_grasp_quat = self._plan_base_motion(
+        base_motion_plan = self._plan_base_motion(
             x,
             cube_to_pick_up,
             extend_xy_magnitude,
             extend_rot_magnitude,
-            grasp_index,
+            grasp_quat,
         )
 
         self.plans[self.PickCubeControllerPhase.BASE_MOTION] = base_motion_plan
         assert self.plans[self.PickCubeControllerPhase.BASE_MOTION] is not None, (
-            f"Motion planning failed at BASE_MOTION for grasp {grasp_index}, "
+            "Motion planning failed at BASE_MOTION, "
             f"start=({float(x.get(robot, 'pos_base_x'))}, "
             f"{float(x.get(robot, 'pos_base_y'))}, "
             f"{float(x.get(robot, 'pos_base_rot'))})"
         )
-        # base_motion_plan and chosen_grasp_quat are only None together (the
-        # all-candidates-failed path above already raised), but that's not
-        # visible to mypy from the assert on the dict entry alone.
-        assert chosen_grasp_quat is not None
-
         # MOVE_ARM_TO_HOVER_OVER_CUBE planning
         # Get the last state from the BASE_MOTION plan so that next steps can build on it
         state_after_base_motion = x.copy()
@@ -974,11 +961,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         # for grasp planning.
         self._pybullet_sim.set_state(state_after_base_motion)
 
-        # Reuse whichever grasp-symmetric rotation BASE_MOTION actually found a plan
-        # for, rather than independently re-deriving upright_grasp_rotations(...)[0]
-        # -- the cube itself does not move during base motion, so cube_raw_quat is
-        # unchanged from what BASE_MOTION already computed candidates against, and
-        # the arm's approach must match the direction the base ended up standing at.
+        # The arm approach must match the grasp orientation used for base planning.
         target_hover_end_effector_pose = Pose(
             (
                 state_after_base_motion.get(cube_to_pick_up, "x"),
@@ -989,7 +972,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 # we add half its height ("bb_z").
                 + 0.12,
             ),
-            chosen_grasp_quat,
+            grasp_quat,
         )
         target_hover_end_effector_pose = multiply_poses(
             target_hover_end_effector_pose, GRASP_TRANSFORM_TO_OBJECT
@@ -1017,7 +1000,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 state_after_base_motion.get(cube_to_pick_up, "y"),
                 state_after_base_motion.get(cube_to_pick_up, "z"),
             ),
-            chosen_grasp_quat,
+            grasp_quat,
         )
         target_around_cube_end_effector_pose = multiply_poses(
             target_around_cube_end_effector_pose, GRASP_TRANSFORM_TO_OBJECT
@@ -1110,15 +1093,17 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             if picking_from_bin
             else self.HELD_OBJECT_COLLISION_THRESHOLD
         )
+        cube = self.objects[1]
+        cube_quat = tuple(x.get(cube, key) for key in ("qx", "qy", "qz", "qw"))
         last_error: Exception | None = None
-        for index in range(4):
+        for grasp_quat in upright_grasp_rotations(cube_quat):
             try:
                 self._reset_once(
                     x,
                     params,
                     extend_xy_magnitude,
                     extend_rot_magnitude,
-                    grasp_index=index,
+                    grasp_quat=grasp_quat,
                     held_object_collision_threshold=collision_threshold,
                 )
                 return
