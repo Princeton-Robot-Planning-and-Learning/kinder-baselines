@@ -2,6 +2,7 @@
 
 import kinder
 import numpy as np
+import pybullet as p
 import pytest
 from bilevel_planning.trajectory_samplers.trajectory_sampler import (
     TrajectorySamplingFailure,
@@ -331,5 +332,44 @@ def test_place_with_fixed_offset_and_base_distance():
         create_lifted_controllers(
             env.action_space, sim, place_params={"cylinder0": (0.10,)}
         )["place"].ground((robot, target, shelf))
+    env.close()
+    sim.close()
+
+
+def test_base_clearance_keeps_the_base_off_the_shelf_and_cylinder():
+    """With base_clearance set, the base never comes closer than that to the shelf
+    or the (still standing) cylinder while driving to the pre-grasp pose."""
+    clearance = 0.08
+    env = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
+    state, _ = env.reset(seed=456)
+    sim = ObjectCentricCylinderShelf3DEnv(num_cylinders=1, allow_state_access=True)
+    controllers = create_lifted_controllers(
+        env.action_space, sim, base_clearance=clearance
+    )
+    robot = state.get_object_from_name("robot")
+    target = state.get_object_from_name("cylinder0")
+    controller = controllers["move_to_pre_grasp"].ground((robot, target))
+    controller.reset(state, _STAGING_PARAMS)
+    visited = [state]
+    for _ in range(600):
+        state, _, _, _, _ = env.step(controller.step())
+        controller.observe(state)
+        visited.append(state)
+        if controller.terminated():
+            break
+    assert controller.terminated()
+
+    base_id = env.robot.base.robot_id
+    # pylint: disable=protected-access
+    obstacles = {"shelf": env._shelf_id, "cylinder0": env._cylinders["cylinder0"]}
+    # pylint: enable=protected-access
+    for visited_state in visited:
+        env.set_state(visited_state)
+        for name, body in obstacles.items():
+            points = p.getClosestPoints(
+                base_id, body, 1.0, physicsClientId=env.physics_client_id
+            )
+            distance = min((point[8] for point in points), default=1.0)
+            assert distance >= clearance - 0.03, (name, distance)
     env.close()
     sim.close()

@@ -57,6 +57,7 @@ def create_bilevel_planning_models(
     config: CylinderShelf3DEnvConfig | None = None,
     magic_skills: Collection[str] = (),
     place_params: Sequence[Sequence[float] | None] | None = None,
+    base_clearance: float = 0.0,
 ) -> SesameModels:
     """Create the env models for cylinder shelf 3D.
 
@@ -83,6 +84,11 @@ def create_bilevel_planning_models(
     (see ``GroundPlaceController``); ``None`` keeps sampling everything for
     that cylinder. Fixed placements make planning with several cylinders
     faster and their layout on the shelf predictable.
+
+    ``base_clearance`` is the distance (m) the base must keep from the shelf
+    and the cylinders along its planned paths (the planner's collision check
+    is otherwise contact-only). A few centimetres covers a real base whose
+    cables stick out past its chassis, plus its tracking error.
     """
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, Kinematic3DRobotActionSpace)
@@ -264,7 +270,7 @@ def create_bilevel_planning_models(
         if params is not None
     }
     lifted_controllers = create_lifted_controllers(
-        action_space, sim, fixed_place_params
+        action_space, sim, fixed_place_params, base_clearance
     )
     for skill_name in magic_skills:
         key = _SKILL_CONTROLLER_KEYS[skill_name]

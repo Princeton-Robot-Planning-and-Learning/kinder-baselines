@@ -67,6 +67,7 @@ from pybullet_helpers.joint import (
     get_jointwise_difference,
 )
 from pybullet_helpers.motion_planning import (
+    MotionPlanningHyperparameters,
     remap_joint_position_plan_to_constant_distance,
     remap_se2_pose_plan_to_constant_distance,
     run_single_arm_mobile_base_motion_planning,
@@ -130,6 +131,12 @@ PRE_PLACE_BACKOFF = 0.10
 PRE_PLACE_LIFT = 0.02
 # Spacing of the continuation targets along the in-plane reach path.
 PLANAR_PATH_STEP = 0.025
+# Interpolation points the base motion planner collision-checks per RRT
+# edge. Edges run up to ~0.2 m with the base turning along them, and its
+# corners sweep out further than its centre moves, so the default 10
+# lets the executed path dip 2-3 cm inside the configured base clearance
+# between checks; 25 keeps it at the clearance at negligible cost.
+BASE_MOTION_EXTEND_NUM_INTERP = 25
 
 # The arm joints that move during the planar reach: joint 1 (index 0)
 # for the small lateral plane correction, and the pitch joints 2, 4, 6
@@ -533,11 +540,19 @@ class GroundMoveToPreGraspController(
         self,
         objects: Sequence[Object],
         sim: ObjectCentricCylinderShelf3DEnv,
+        base_clearance: float = 0.0,
     ) -> None:
+        """``base_clearance`` is the distance (m) the base must keep from the
+        shelf and the cylinders along its planned path (see
+        ``MotionPlanningHyperparameters.platform_clearance``)."""
         super().__init__(objects)
         self._sim = sim
         self._joint_infos = sim.robot.arm.get_arm_joint_infos()[:7]
         self._robot, self._target = objects
+        self._base_motion_hyperparameters = MotionPlanningHyperparameters(
+            platform_clearance=base_clearance,
+            birrt_extend_num_interp=BASE_MOTION_EXTEND_NUM_INTERP,
+        )
         self._current_params: np.ndarray | None = None
         self._current_plan: list[SE2Pose] | None = None
         self._current_arm_joint_plan: list[JointPositions] | None = None
@@ -583,6 +598,7 @@ class GroundMoveToPreGraspController(
                 target_base_pose,
                 collision_bodies=self._sim._get_collision_object_ids(),  # pylint: disable=protected-access
                 seed=0,  # for determinism
+                hyperparameters=self._base_motion_hyperparameters,
             )
             if base_plan is None:
                 raise TrajectorySamplingFailure("Base motion planning failed")
@@ -812,15 +828,22 @@ class GroundPlaceController(
         objects: Sequence[Object],
         sim: ObjectCentricCylinderShelf3DEnv,
         place_params: Sequence[float] | None = None,
+        base_clearance: float = 0.0,
     ) -> None:
         """``place_params`` fixes the placement instead of sampling it: ``(x, y)``
         fixes the offset on the shelf and leaves the base staging distance to
         the sampler; ``(x, y, base_distance)`` fixes all three, so the skill has
-        nothing left to sample."""
+        nothing left to sample. ``base_clearance`` is the distance (m) the base
+        must keep from the shelf and the other cylinders along its planned path
+        (see ``MotionPlanningHyperparameters.platform_clearance``)."""
         super().__init__(objects)
         self._sim = sim
         self._joint_infos = sim.robot.arm.get_arm_joint_infos()[:7]
         self._robot, self._target, self._target_shelf = objects
+        self._base_motion_hyperparameters = MotionPlanningHyperparameters(
+            platform_clearance=base_clearance,
+            birrt_extend_num_interp=BASE_MOTION_EXTEND_NUM_INTERP,
+        )
         if place_params is not None and len(place_params) not in (2, 3):
             raise ValueError(
                 f"place_params must be (x, y) or (x, y, base_distance), got "
@@ -904,6 +927,7 @@ class GroundPlaceController(
                 seed=0,  # for determinism
                 held_object=grasped_object_id,
                 base_link_to_held_obj=grasped_object_transform,
+                hyperparameters=self._base_motion_hyperparameters,
             )
 
             if base_plan is None:
@@ -1130,12 +1154,15 @@ def create_lifted_controllers(
     action_space: Kinematic3DRobotActionSpace,
     sim: ObjectCentricCylinderShelf3DEnv,
     place_params: Mapping[str, Sequence[float]] | None = None,
+    base_clearance: float = 0.0,
 ) -> dict[str, LiftedParameterizedController]:
     """Create lifted parameterized controllers for CylinderShelf3D.
 
     ``place_params`` maps a cylinder name to its fixed placement, ``(x, y)``
     or ``(x, y, base_distance)`` (see ``GroundPlaceController``); cylinders
-    not in the mapping get sampled placements.
+    not in the mapping get sampled placements. ``base_clearance`` is the
+    distance (m) the base keeps from the shelf and the cylinders along its
+    planned paths.
     """
     del action_space
     fixed_place_params = dict(place_params or {})
@@ -1145,7 +1172,7 @@ def create_lifted_controllers(
         """Controller for staging the base and reaching the pre-grasp pose."""
 
         def __init__(self, objects):
-            super().__init__(objects, sim)
+            super().__init__(objects, sim, base_clearance)
 
     class GraspController(GroundGraspController):
         """Controller for the last mile of the grasp."""
@@ -1157,7 +1184,9 @@ def create_lifted_controllers(
         """Controller for placing a cylinder."""
 
         def __init__(self, objects):
-            super().__init__(objects, sim, fixed_place_params.get(objects[1].name))
+            super().__init__(
+                objects, sim, fixed_place_params.get(objects[1].name), base_clearance
+            )
 
     # Create variables for lifted controllers
     robot = Variable("?robot", Kinematic3DRobotType)

@@ -17,6 +17,7 @@ dependencies = [
    "flask-socketio",
    "opencv-python>=4.9.0",
    "kindergarden>=0.2.4",
+   "pybullet_helpers>=0.1.2",
    "relational_structs>=0.0.1",
    "bilevel_planning>=0.1.2",
 ]
