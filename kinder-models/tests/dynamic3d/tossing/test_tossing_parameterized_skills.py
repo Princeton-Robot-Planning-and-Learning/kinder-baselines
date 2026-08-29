@@ -1507,7 +1507,8 @@ def test_pick_cube_takes_no_continuous_parameters():
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
     barrier = state.get_object_from_name("cuboid_barrier")
-    controller = controllers["pick_cube"].ground((robot, cube, barrier))
+    bin_object = state.get_object_from_name("bin_0")
+    controller = controllers["pick_cube"].ground((robot, cube, barrier, bin_object))
     for seed in range(5):
         params = controller.sample_parameters(state, np.random.default_rng(seed))
         assert len(params) == 0
@@ -1536,11 +1537,14 @@ def test_pick_cube_resets_and_steps():
     obs, _ = env.reset(seed=125)
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
-    controllers = create_lifted_controllers(env.action_space)
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
     barrier = state.get_object_from_name("cuboid_barrier")
-    controller = controllers["pick_cube"].ground((robot, cube, barrier))
+    bin_object = state.get_object_from_name("bin_0")
+    scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    sim = _create_bin_aware_sim(state, scene)
+    controllers = create_lifted_controllers(env.action_space, pybullet_sim=sim)
+    controller = controllers["pick_cube"].ground((robot, cube, barrier, bin_object))
     params = controller.sample_parameters(state, np.random.default_rng(0))
     controller.reset(state, params)
     assert not controller.terminated()
@@ -1557,17 +1561,39 @@ def _pick_cube_arm_conf(state, robot):
     return np.array([state.get(robot, name) for name in _pick_cube_arm_joint_names()])
 
 
+def _create_bin_aware_sim(state, scene):
+    """Create the pickup planner with the live bin registered as a collider."""
+    sim = PyBulletSim(state)
+    bin_object = state.get_object_from_name("bin_0")
+    bin_geometry = scene.get_object("bin_0")
+    sim.add_bin(
+        name="bin_0",
+        pose=Pose(
+            tuple(state.get(bin_object, key) for key in ("x", "y", "z")),
+            tuple(state.get(bin_object, key) for key in ("qx", "qy", "qz", "qw")),
+        ),
+        length=bin_geometry.length,
+        width=bin_geometry.width,
+        height=bin_geometry.height,
+        wall_thickness=bin_geometry.wall_thickness,
+    )
+    return sim
+
+
 def _ground_pick_cube_on_seed_125():
     """A reset pick_cube controller on the canonical seed, plus its env and state."""
     env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
     obs, _ = env.reset(seed=125)
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
-    controllers = create_lifted_controllers(env.action_space)
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
     barrier = state.get_object_from_name("cuboid_barrier")
-    controller = controllers["pick_cube"].ground((robot, cube, barrier))
+    bin_object = state.get_object_from_name("bin_0")
+    scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    sim = _create_bin_aware_sim(state, scene)
+    controllers = create_lifted_controllers(env.action_space, pybullet_sim=sim)
+    controller = controllers["pick_cube"].ground((robot, cube, barrier, bin_object))
     params = controller.sample_parameters(state, np.random.default_rng(0))
     controller.reset(state, params)
     return env, state, robot, controller
@@ -1868,6 +1894,7 @@ def test_bin_pick_requires_the_named_bin_collision_geometry(monkeypatch, with_si
         (
             _get_robot_from_state(state),
             state.get_object_from_name("cube1"),
+            Object("cuboid_barrier", MujocoMovableObjectType),
             Object("bin_0", MujocoMovableObjectType),
         ),
         pybullet_sim=sim,
@@ -1887,6 +1914,7 @@ def test_bin_pick_uses_default_base_tolerance():
         (
             _get_robot_from_state(state),
             state.get_object_from_name("cube1"),
+            Object("cuboid_barrier", MujocoMovableObjectType),
             Object("bin_0", MujocoMovableObjectType),
         )
     )
@@ -1896,10 +1924,11 @@ def test_bin_pick_uses_default_base_tolerance():
     )
 
 
-def test_floor_and_bin_pick_share_one_lifted_controller():
-    """The object bound as the third argument selects any bin-specific behavior."""
+def test_floor_and_bin_pick_use_one_lifted_controller():
+    """One pickup controller receives both the barrier and bin colliders."""
     controllers = create_lifted_controllers(TidyBot3DRobotActionSpace())
-    assert controllers["pick_cube"] is controllers["pick_cube_from_bin"]
+    assert "pick_cube_from_bin" not in controllers
+    assert len(controllers["pick_cube"].variables) == 4
 
 
 def test_pick_retries_false_planning_canary(monkeypatch):
@@ -1924,7 +1953,7 @@ def test_pick_retries_false_planning_canary(monkeypatch):
     assert len(attempts) == 4
 
 
-def test_pick_cube_from_bin_after_toss(tmp_path):
+def test_pick_cube_retrieves_from_bin_after_toss(tmp_path):
     """Physically pick, throw into a near-side bin, and retrieve without resetting."""
     task_path = (
         Path(kinder.__file__).parent
@@ -1958,42 +1987,27 @@ def test_pick_cube_from_bin_after_toss(tmp_path):
         cube = state.get_object_from_name("cube_0")
         bin_object = state.get_object_from_name("bin_0")
         barrier = state.get_object_from_name("cuboid_barrier")
-        for name, objects, params in (
-            ("pick_cube", (robot, cube, barrier), None),
+        sim = _create_bin_aware_sim(state, scene)
+        controllers = create_lifted_controllers(env.action_space, pybullet_sim=sim)
+        for stage, name, objects, params in (
+            ("initial_pick", "pick_cube", (robot, cube, barrier, bin_object), None),
             (
+                "toss",
                 "move_to_toss_location_and_toss",
                 (robot, cube, barrier),
                 np.array([1.35, 0, np.deg2rad(130), 792]),
             ),
-            ("pick_cube_from_bin", (robot, cube, bin_object), None),
+            ("retrieval", "pick_cube", (robot, cube, barrier, bin_object), None),
         ):
             bin_position = None
-            if name == "pick_cube_from_bin":
-                sim = PyBulletSim(state)
-                bin_geometry = scene.get_object("bin_0")
-                sim.add_bin(
-                    name="bin_0",
-                    pose=Pose(
-                        tuple(state.get(bin_object, key) for key in ("x", "y", "z")),
-                        tuple(
-                            state.get(bin_object, key)
-                            for key in ("qx", "qy", "qz", "qw")
-                        ),
-                    ),
-                    length=bin_geometry.length,
-                    width=bin_geometry.width,
-                    height=bin_geometry.height,
-                    wall_thickness=bin_geometry.wall_thickness,
-                )
+            if stage == "retrieval":
                 bin_position = np.array(
                     [state.get(bin_object, key) for key in ("x", "y", "z")]
                 )
-            controller = create_lifted_controllers(env.action_space, pybullet_sim=sim)[
-                name
-            ].ground(objects)
+            controller = controllers[name].ground(objects)
             controller.reset(state, params)
             for _ in range(1000):
-                navigating_to_bin = name == "pick_cube_from_bin" and (
+                navigating_to_bin = stage == "retrieval" and (
                     controller.current_phase
                     in (
                         PickCubeController.PickCubeControllerPhase.OPEN_GRIPPER,
@@ -2020,7 +2034,7 @@ def test_pick_cube_from_bin_after_toss(tmp_path):
                 pytest.fail(f"{name} did not terminate")
             expected = (
                 GroundAtom(MovableInGoalRegion, [cube])
-                if name == "move_to_toss_location_and_toss"
+                if stage == "toss"
                 else GroundAtom(Holding, [robot, cube])
             )
             assert expected in abstractor.state_abstractor(state).atoms

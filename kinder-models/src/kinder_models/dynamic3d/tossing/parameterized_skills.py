@@ -908,8 +908,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         """Populate all trajectories for one grasp, returning False if infeasible."""
         assert self._pybullet_sim is not None
 
-        # The cube is always the index 1 object at construction time, and the
-        # barrier the index 2 object.
+        # The cube is always index 1. Objects 2 onward are colliders to avoid; the
+        # Tossing3D lifted controller supplies the barrier first, then the bin.
         cube_to_pick_up = self.objects[1]
 
         # Pre-compute all motion planning
@@ -1054,13 +1054,13 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
     ) -> None:
         """Retry the complete pickup plan for all four grasp orientations."""
         del params
-        collision_object = self.objects[2]
-        picking_from_bin = collision_object.name.startswith("bin_")
-        if picking_from_bin and (
+        colliders = self.objects[2:]
+        bins = [obj for obj in colliders if obj.name.startswith("bin_")]
+        if bins and (
             self._pybullet_sim is None
-            or not self._pybullet_sim.has_bin(collision_object.name)
+            or any(not self._pybullet_sim.has_bin(obj.name) for obj in bins)
         ):
-            raise ValueError("Bin retrieval requires a bin-aware collision simulator")
+            raise ValueError("Bin colliders require a bin-aware collision simulator")
         if self._pybullet_sim is None:
             self._pybullet_sim = PyBulletSim(x)
         self.current_phase = self.PickCubeControllerPhase.OPEN_GRIPPER
@@ -1070,7 +1070,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         self._lifted = False
         collision_threshold = (
             self.BIN_HELD_OBJECT_COLLISION_THRESHOLD
-            if picking_from_bin
+            if bins
             else self.HELD_OBJECT_COLLISION_THRESHOLD
         )
         cube = self.objects[1]
@@ -1747,9 +1747,8 @@ def create_lifted_controllers(
 
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     cube = Variable("?cube", MujocoMovableObjectType)
-    # Unused by the controller; present so an operator can say the cube is still on
-    # this side of it, as move_to_target_from_other_target carries ?prev_target.
     barrier = Variable("?barrier", MujocoMovableObjectType)
+    bin_object = Variable("?bin", MujocoMovableObjectType)
 
     class PickCube(PickCubeController):
         """Cube pickup with the caller's collision geometry."""
@@ -1759,7 +1758,7 @@ def create_lifted_controllers(
 
     LiftedPickCubeController: LiftedParameterizedController = (
         LiftedParameterizedController(
-            [robot, cube, barrier],
+            [robot, cube, barrier, bin_object],
             PickCube,
         )
     )
@@ -1791,6 +1790,5 @@ def create_lifted_controllers(
         "open_gripper": LiftedOpenGripperController,
         "no_op": LiftedNoOpController,
         "pick_cube": LiftedPickCubeController,
-        "pick_cube_from_bin": LiftedPickCubeController,
         "move_to_toss_location_and_toss": LiftedMoveToTossLocationAndTossController,
     }
