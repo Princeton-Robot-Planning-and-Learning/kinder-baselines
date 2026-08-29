@@ -1958,7 +1958,6 @@ def test_pick_cube_from_bin_after_toss(tmp_path):
         cube = state.get_object_from_name("cube_0")
         bin_object = state.get_object_from_name("bin_0")
         barrier = state.get_object_from_name("cuboid_barrier")
-        results = []
         for name, objects, params in (
             ("pick_cube", (robot, cube, barrier), None),
             (
@@ -1968,6 +1967,7 @@ def test_pick_cube_from_bin_after_toss(tmp_path):
             ),
             ("pick_cube_from_bin", (robot, cube, bin_object), None),
         ):
+            bin_position = None
             if name == "pick_cube_from_bin":
                 sim = PyBulletSim(state)
                 bin_geometry = scene.get_object("bin_0")
@@ -1985,14 +1985,14 @@ def test_pick_cube_from_bin_after_toss(tmp_path):
                     height=bin_geometry.height,
                     wall_thickness=bin_geometry.wall_thickness,
                 )
+                bin_position = np.array(
+                    [state.get(bin_object, key) for key in ("x", "y", "z")]
+                )
             controller = create_lifted_controllers(env.action_space, pybullet_sim=sim)[
                 name
             ].ground(objects)
-            bin_position = np.array(
-                [state.get(bin_object, key) for key in ("x", "y", "z")]
-            )
             controller.reset(state, params)
-            for step in range(1000):
+            for _ in range(1000):
                 navigating_to_bin = name == "pick_cube_from_bin" and (
                     controller.current_phase
                     in (
@@ -2004,6 +2004,7 @@ def test_pick_cube_from_bin_after_toss(tmp_path):
                 state = env.observation_space.devectorize(obs)
                 controller.observe(state)
                 if navigating_to_bin:
+                    assert bin_position is not None
                     assert (
                         np.linalg.norm(
                             np.array(
@@ -2023,19 +2024,7 @@ def test_pick_cube_from_bin_after_toss(tmp_path):
                 else GroundAtom(Holding, [robot, cube])
             )
             assert expected in abstractor.state_abstractor(state).atoms
-            results.append(
-                {
-                    "controller": name,
-                    "steps": step + 1,
-                    "cube_z": float(state.get(cube, "z")),
-                }
-            )
         assert state.get(cube, "z") > 0.3
-        if MAKE_VIDEOS:
-            Path("unit_test_videos/tossing-bin-retrieval.json").write_text(
-                json.dumps({"seed": 125, "results": results}, indent=2) + "\n",
-                encoding="utf-8",
-            )
     finally:
         env.close()
         if sim is not None:

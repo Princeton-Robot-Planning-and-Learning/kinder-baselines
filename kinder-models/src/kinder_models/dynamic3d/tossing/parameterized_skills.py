@@ -803,10 +803,7 @@ class NoOpController(GroundParameterizedController[ObjectCentricState, Array]):
 
 
 class PickCubeController(GroundParameterizedController[ObjectCentricState, Array]):
-    """Pick a cube up off the ground.
-
-    Stub controller for picking a cube; raises NotImplementedError.
-    """
+    """Plan and execute cube pickup from the floor or a registered bin."""
 
     TARGET_DISTANCE = 0.55
     TARGET_ROTATION = 0.0
@@ -902,29 +899,17 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
     def _plan_motions(
         self,
         x: ObjectCentricState,
-        params: Any,
-        extend_xy_magnitude: float = 0.025,
-        extend_rot_magnitude: float = np.pi / 8,
+        extend_xy_magnitude: float,
+        extend_rot_magnitude: float,
         *,
         grasp_quat: Quaternion,
         held_object_collision_threshold: float,
     ) -> bool:
-        # This is an entirely hardcoded controller
-        del params
-        # Initialize the PyBullet interface if this is the first time ever.
-        if self._pybullet_sim is None:
-            self._pybullet_sim = PyBulletSim(x)
-
-        # Reset to the first phase
-        self.current_phase = self.PickCubeControllerPhase.OPEN_GRIPPER
-        self._last_state = x
-        self._last_gripper_state = 0.0
-        self._closed_gripper = False
-        self._lifted = False
+        """Populate all trajectories for one grasp, returning False if infeasible."""
+        assert self._pybullet_sim is not None
 
         cube_to_pick_up = self.objects[1]
-        # The cube is always the index 1 object at construction time, and the
-        # barrier the index 2 object.
+        # The cube is index 1; index 2 supplies the collision context.
 
         # Pre-compute all motion planning
         # BASE_MOTION planning
@@ -938,7 +923,6 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             grasp_quat,
         )
 
-        self.plans[self.PickCubeControllerPhase.BASE_MOTION] = base_motion_plan
         if base_motion_plan is None:
             return False
         # MOVE_ARM_TO_HOVER_OVER_CUBE planning
@@ -985,9 +969,6 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         )
         if hover_plan is None:
             return False
-        hover_phase = self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE
-        self.plans[hover_phase] = hover_plan
-
         # MOVE_ARM_DOWN_AROUND_CUBE planning
         target_around_cube_end_effector_pose = Pose(
             (
@@ -1023,8 +1004,6 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         )
         if around_plan is None:
             return False
-        self.plans[self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE] = around_plan
-
         # CLOSE_GRIPPER_TO_GRASP_CUBE planning
         # Nothing, because the arm is opened/closed at inference time, not planning time
 
@@ -1052,21 +1031,17 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         )
         if lift_plan is None:
             return False
-        self.plans[self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME] = lift_plan
-
-        for name, plan in self.plans.items():
-            if name in {
-                self.PickCubeControllerPhase.OPEN_GRIPPER,
-                self.PickCubeControllerPhase.BASE_MOTION,
-                self.PickCubeControllerPhase.CLOSE_GRIPPER_TO_GRASP_CUBE,
-            }:
-                # No arm motion planning for these phases, so nothing to remap.
-                continue
-            # Map the plan onto real robot space, with constant distance
-            assert plan is not None
-            self.plans[name] = remap_joint_position_plan_to_constant_distance(
+        planned_arm_motions = {
+            self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE: hover_plan,
+            self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE: around_plan,
+            self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME: lift_plan,
+        }
+        for phase, plan in planned_arm_motions.items():
+            planned_arm_motions[phase] = remap_joint_position_plan_to_constant_distance(
                 plan, self._pybullet_sim.robot, max_distance=0.2
             )
+        self.plans.update(planned_arm_motions)
+        self.plans[self.PickCubeControllerPhase.BASE_MOTION] = base_motion_plan
         return True
 
     def reset(
@@ -1077,6 +1052,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         extend_rot_magnitude: float = np.pi / 8,
     ) -> None:
         """Retry the complete pickup plan for all four grasp orientations."""
+        del params
         collision_object = self.objects[2]
         picking_from_bin = collision_object.name.startswith("bin_")
         if picking_from_bin and (
@@ -1084,6 +1060,13 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             or not self._pybullet_sim.has_bin(collision_object.name)
         ):
             raise ValueError("Bin retrieval requires a bin-aware collision simulator")
+        if self._pybullet_sim is None:
+            self._pybullet_sim = PyBulletSim(x)
+        self.current_phase = self.PickCubeControllerPhase.OPEN_GRIPPER
+        self._last_state = x
+        self._last_gripper_state = 0.0
+        self._closed_gripper = False
+        self._lifted = False
         collision_threshold = (
             self.BIN_HELD_OBJECT_COLLISION_THRESHOLD
             if picking_from_bin
@@ -1094,7 +1077,6 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         for grasp_quat in upright_grasp_rotations(cube_quat):
             if self._plan_motions(
                 x,
-                params,
                 extend_xy_magnitude,
                 extend_rot_magnitude,
                 grasp_quat=grasp_quat,
