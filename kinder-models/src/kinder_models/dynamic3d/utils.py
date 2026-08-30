@@ -150,8 +150,8 @@ def get_bounding_box(
     extracted automatically.
     """
     if obj.is_instance(MujocoTidyBotRobotObjectType):
-        # NOTE: hardcoded for now.
-        return (0.5, 0.5, 1.0)
+        # Cover the physical 54.8 by 50.8 cm chassis in base motion planning.
+        return (0.55, 0.55, 1.0)
     if obj.is_instance(MujocoFixtureObjectType):
         # NOTE: hardcoded for now.
         return (0.61, 0.26, 1.0)
@@ -490,6 +490,7 @@ class PyBulletSim:
         self.base_link_to_held_obj: Pose | None = None
 
         # Create all the cubes.
+        self._bins: dict[str, int] = {}
         self._cubes: dict[str, int] = {}
         for cube_name in initial_state.get_object_names():
             if "cube" in cube_name:
@@ -522,6 +523,62 @@ class PyBulletSim:
 
         # Used for checking if two confs are close.
         self._joint_distance_fn = create_joint_distance_fn(self._robot)
+
+    def add_bin(
+        self,
+        *,
+        name: str,
+        pose: Pose,
+        length: float,
+        width: float,
+        height: float,
+        wall_thickness: float,
+    ) -> int:
+        """Add a hollow bin using the simulator's actual primitive dimensions.
+
+        Opt-in: the stock floor/toss controllers retain their original collision model.
+        The origin is the bottom-panel base, matching KINDER's Bin primitive.
+        """
+        t = wall_thickness
+        if not 0 < t < min(length / 2, width / 2, height):
+            raise ValueError("Bin wall thickness must fit inside its dimensions")
+        if name in self._bins:
+            raise ValueError(f"Bin {name} is already in the collision model")
+        wall_z = (height + t) / 2
+        wall_half_height = (height - t) / 2
+        half_extents = [
+            [length / 2, width / 2, t / 2],
+            [t / 2, width / 2, wall_half_height],
+            [t / 2, width / 2, wall_half_height],
+            [length / 2 - t, t / 2, wall_half_height],
+            [length / 2 - t, t / 2, wall_half_height],
+        ]
+        positions = [
+            [0, 0, t / 2],
+            [(length - t) / 2, 0, wall_z],
+            [-(length - t) / 2, 0, wall_z],
+            [0, (width - t) / 2, wall_z],
+            [0, -(width - t) / 2, wall_z],
+        ]
+        shape = p.createCollisionShapeArray(
+            shapeTypes=[p.GEOM_BOX] * 5,
+            halfExtents=half_extents,
+            collisionFramePositions=positions,
+            physicsClientId=self._physics_client_id,
+        )
+        body = p.createMultiBody(
+            baseMass=0,
+            baseCollisionShapeIndex=shape,
+            basePosition=pose.position,
+            baseOrientation=pose.orientation,
+            physicsClientId=self._physics_client_id,
+        )
+        self._bins[name] = body
+        return body
+
+    def has_bin(self, name: str) -> bool:
+        """Whether this bin has collision geometry in the planning scene."""
+        return name in self._bins
 
     @property
     def physics_client_id(self) -> int:
@@ -585,6 +642,14 @@ class PyBulletSim:
                 )
                 set_pose(self._cubes[cube_name], cube_pose, self._physics_client_id)
 
+        for name, body in self._bins.items():
+            obj = x.get_object_from_name(name)
+            pose = Pose(
+                tuple(x.get(obj, f) for f in ("x", "y", "z")),
+                tuple(x.get(obj, f) for f in ("qx", "qy", "qz", "qw")),
+            )
+            set_pose(body, pose, self._physics_client_id)
+
         if "cupboard_1" in x.get_object_names():
             cupboard1_obj = x.get_object_from_name("cupboard_1")
             cupboard1_shelf_pose = Pose(
@@ -625,6 +690,7 @@ class PyBulletSim:
         """Get pybullet IDs for collision bodies."""
         collision_bodies: set[int] = set()
         collision_bodies.update(self._cubes.values())
+        collision_bodies.update(self._bins.values())
         if self._cupboard1_shelf_id is not None:
             collision_bodies.add(self._cupboard1_shelf_id)
         if held_object is not None:

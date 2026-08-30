@@ -23,12 +23,14 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoObjectType,
     MujocoTidyBotRobotObjectType,
 )
+from kinder.envs.dynamic3d.objects.primitive_objects import Bin
 from kinder.envs.dynamic3d.robots.tidybot_robot_env import TidyBot3DRobotActionSpace
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     PyBulletSim,
     create_lifted_controllers,
 )
 from kinder_models.dynamic3d.tossing.state_abstractions import (
+    BIN_NAME,
     HandEmpty,
     Holding,
     MovableInGoalRegion,
@@ -37,6 +39,7 @@ from kinder_models.dynamic3d.tossing.state_abstractions import (
     Tossing3DStateAbstractor,
 )
 from numpy.typing import NDArray
+from pybullet_helpers.geometry import Pose
 from relational_structs import (
     LiftedAtom,
     LiftedOperator,
@@ -163,6 +166,25 @@ def create_bilevel_planning_models(
     # Controllers.
     assert initial_state is not None
     pybullet_sim = PyBulletSim(initial_state, rendering=False)
+    bin_state_object = initial_state.get_object_from_name(BIN_NAME)
+    bin_geometry = sim.get_object(BIN_NAME)
+    assert isinstance(bin_geometry, Bin)
+    pybullet_sim.add_bin(
+        name=BIN_NAME,
+        pose=Pose(
+            tuple(
+                initial_state.get(bin_state_object, key) for key in ("x", "y", "z")
+            ),
+            tuple(
+                initial_state.get(bin_state_object, key)
+                for key in ("qx", "qy", "qz", "qw")
+            ),
+        ),
+        length=bin_geometry.length,
+        width=bin_geometry.width,
+        height=bin_geometry.height,
+        wall_thickness=bin_geometry.wall_thickness,
+    )
     controllers = create_lifted_controllers(
         action_space, sim.initial_constant_state, pybullet_sim=pybullet_sim
     )
