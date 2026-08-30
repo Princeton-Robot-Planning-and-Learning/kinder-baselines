@@ -1503,12 +1503,12 @@ def test_pick_cube_takes_no_continuous_parameters():
     obs, _ = env.reset(seed=125)
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
-    controllers = create_lifted_controllers(env.action_space)
+    controllers = create_lifted_controllers(env.action_space, state)
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
     barrier = state.get_object_from_name("cuboid_barrier")
-    bin_object = state.get_object_from_name("bin_0")
-    controller = controllers["pick_cube"].ground((robot, cube, barrier, bin_object))
+    controller = controllers["pick_cube"].ground((robot, cube, barrier))
+    assert [obj.name for obj in controller.objects[2:]] == ["cuboid_barrier", "bin_0"]
     for seed in range(5):
         params = controller.sample_parameters(state, np.random.default_rng(seed))
         assert len(params) == 0
@@ -1540,11 +1540,10 @@ def test_pick_cube_resets_and_steps():
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
     barrier = state.get_object_from_name("cuboid_barrier")
-    bin_object = state.get_object_from_name("bin_0")
     scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
     sim = _create_bin_aware_sim(state, scene)
-    controllers = create_lifted_controllers(env.action_space, pybullet_sim=sim)
-    controller = controllers["pick_cube"].ground((robot, cube, barrier, bin_object))
+    controllers = create_lifted_controllers(env.action_space, state, pybullet_sim=sim)
+    controller = controllers["pick_cube"].ground((robot, cube, barrier))
     params = controller.sample_parameters(state, np.random.default_rng(0))
     controller.reset(state, params)
     assert not controller.terminated()
@@ -1589,11 +1588,10 @@ def _ground_pick_cube_on_seed_125():
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
     barrier = state.get_object_from_name("cuboid_barrier")
-    bin_object = state.get_object_from_name("bin_0")
     scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
     sim = _create_bin_aware_sim(state, scene)
-    controllers = create_lifted_controllers(env.action_space, pybullet_sim=sim)
-    controller = controllers["pick_cube"].ground((robot, cube, barrier, bin_object))
+    controllers = create_lifted_controllers(env.action_space, state, pybullet_sim=sim)
+    controller = controllers["pick_cube"].ground((robot, cube, barrier))
     params = controller.sample_parameters(state, np.random.default_rng(0))
     controller.reset(state, params)
     return env, state, robot, controller
@@ -1928,7 +1926,7 @@ def test_floor_and_bin_pick_use_one_lifted_controller():
     """One pickup controller receives both the barrier and bin colliders."""
     controllers = create_lifted_controllers(TidyBot3DRobotActionSpace())
     assert "pick_cube_from_bin" not in controllers
-    assert len(controllers["pick_cube"].variables) == 4
+    assert len(controllers["pick_cube"].variables) == 3
 
 
 def test_pick_retries_false_planning_canary(monkeypatch):
@@ -1988,16 +1986,18 @@ def test_pick_cube_retrieves_from_bin_after_toss(tmp_path):
         bin_object = state.get_object_from_name("bin_0")
         barrier = state.get_object_from_name("cuboid_barrier")
         sim = _create_bin_aware_sim(state, scene)
-        controllers = create_lifted_controllers(env.action_space, pybullet_sim=sim)
+        controllers = create_lifted_controllers(
+            env.action_space, state, pybullet_sim=sim
+        )
         for stage, name, objects, params in (
-            ("initial_pick", "pick_cube", (robot, cube, barrier, bin_object), None),
+            ("initial_pick", "pick_cube", (robot, cube, barrier), None),
             (
                 "toss",
                 "move_to_toss_location_and_toss",
                 (robot, cube, barrier),
                 np.array([1.35, 0, np.deg2rad(130), 792]),
             ),
-            ("retrieval", "pick_cube", (robot, cube, barrier, bin_object), None),
+            ("retrieval", "pick_cube", (robot, cube, barrier), None),
         ):
             bin_position = None
             if stage == "retrieval":

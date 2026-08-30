@@ -1664,7 +1664,7 @@ def create_lifted_controllers(
     pybullet_sim: PyBulletSim | None = None,
 ) -> dict[str, LiftedParameterizedController]:
     """Create lifted parameterized controllers for the TidyBot3D ground environment."""
-    del action_space, init_constant_state  # not used
+    del action_space
 
     # Controllers.
 
@@ -1748,17 +1748,31 @@ def create_lifted_controllers(
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     cube = Variable("?cube", MujocoMovableObjectType)
     barrier = Variable("?barrier", MujocoMovableObjectType)
-    bin_object = Variable("?bin", MujocoMovableObjectType)
 
     class PickCube(PickCubeController):
-        """Cube pickup with the caller's collision geometry."""
+        """Inject the shared simulator and remaining movable collision context."""
 
         def __init__(self, objects):
-            super().__init__(objects, pybullet_sim=pybullet_sim)
+            grounded_objects = list(objects)
+            if init_constant_state is not None:
+                names = {obj.name for obj in grounded_objects}
+                grounded_objects.extend(
+                    sorted(
+                        (
+                            obj
+                            for obj in init_constant_state.get_objects(
+                                MujocoMovableObjectType
+                            )
+                            if obj.name not in names
+                        ),
+                        key=lambda obj: obj.name,
+                    )
+                )
+            super().__init__(grounded_objects, pybullet_sim=pybullet_sim)
 
     LiftedPickCubeController: LiftedParameterizedController = (
         LiftedParameterizedController(
-            [robot, cube, barrier, bin_object],
+            [robot, cube, barrier],
             PickCube,
         )
     )
