@@ -200,3 +200,100 @@ def test_cylinder_shelf3d_plans_with_base_clearance():
     agent.reset(obs, info)
     assert len(agent.plan()) > 0
     env.close()
+
+
+def _real_restock_config_and_params():
+    """The measured physical restock scene plus the fixed per-cylinder parameters a
+    high-level planner would inject (see test_injected_skeleton...)."""
+    from kinder.envs.kinematic3d.cylinder_shelf3d import CylinderShelf3DEnvConfig
+    from pybullet_helpers.geometry import Pose, SE2Pose
+
+    board_half = 0.0127 / 2
+    deep_center = (0.9075, 1.49)
+    shallow_center, shallow_yaw = (0.40, 1.28), 0.25
+
+    def zigzag(center, yaw, pitch, dy):
+        out = []
+        for lx, ly in [(-pitch, -dy), (0.0, dy), (pitch, -dy)]:
+            c, s = np.cos(yaw), np.sin(yaw)
+            out.append((center[0] + c * lx - s * ly, center[1] + s * lx + c * ly))
+        return out
+
+    spots = zigzag(deep_center, 0.0, 0.13, 0.06) + zigzag(
+        shallow_center, shallow_yaw, 0.13, 0.07
+    )
+    config = CylinderShelf3DEnvConfig(
+        shelf_pose=Pose((1.63, 1.51, 0.0)),
+        shelf_layer_zs=(0.100 - board_half, 0.538 - board_half, 0.800 - board_half),
+        cylinder_heights=(0.29, 0.208, 0.233, 0.12, 0.125, 0.10),
+        cylinder_radii=(0.0375, 0.0375, 0.0375, 0.0375, 0.035, 0.0325),
+        boxes=(
+            (0.71, 1.105, 1.34125, 1.63875, 0.215),
+            (0.20, 0.60, 1.12, 1.44, 0.115, shallow_yaw),
+        ),
+        cylinder_init_regions=tuple((x, x, y, y) for x, y in spots),
+        robot_base_home_pose=SE2Pose(1.48, 0.67, 1.54),
+        robot_base_pose_lower_bound=SE2Pose(-0.2, -0.2, -np.pi),
+        robot_base_pose_upper_bound=SE2Pose(2.0, 2.0, np.pi),
+        x_lb=-0.2,
+        x_ub=2.0,
+        y_lb=-0.2,
+        y_ub=2.0,
+    )
+    pitch45 = np.deg2rad(45)
+    grasp_params = [
+        (pitch45, 0.03), (pitch45, 0.05), (pitch45, 0.03),
+        (pitch45, 0.015), (pitch45, 0.05), (pitch45, 0.03),
+    ]
+    move_params = [
+        (0.83, np.pi / 2), (0.88, np.pi / 2), (0.83, np.pi / 2),
+        (0.72, np.pi / 2), (0.78, np.pi / 2), (0.78, np.pi / 2),
+    ]
+    place_params = [
+        (-0.13, -0.05, 0.80, 0), (0.0, -0.05, 0.80, 0), (0.13, -0.05, 0.80, 0),
+        (-0.13, -0.05, 0.80, 1), (0.0, -0.05, 0.80, 1), (0.13, -0.05, 0.80, 1),
+    ]
+    return config, grasp_params, move_params, place_params
+
+
+def test_injected_skeleton_boxed_scene():
+    """A fully specified intermediate representation — the skill skeleton plus fixed
+    per-cylinder move/grasp/place parameters — refines with one sample per step and no
+    abstract search, solving the boxed real-restock scene in a single pass."""
+    import time
+
+    from kinder.envs.kinematic3d.cylinder_shelf3d import CylinderShelf3DEnv
+
+    from kinder_bilevel_planning.injection import run_injected_sesame
+
+    config, grasp_params, move_params, place_params = _real_restock_config_and_params()
+    env = CylinderShelf3DEnv(num_cylinders=6, config=config, allow_state_access=True)
+    env_models = create_bilevel_planning_models(
+        "cylinder_shelf3d",
+        env.observation_space,
+        env.action_space,
+        num_objects=6,
+        config=config,
+        place_params=place_params,
+        grasp_params=grasp_params,
+        move_params=move_params,
+        carry_lift_z=0.27,
+    )
+    obs, _ = env.reset(seed=0)
+    x0 = env_models.observation_to_state(obs)
+    skeleton = []
+    for name in ("cylinder3", "cylinder4", "cylinder5",
+                 "cylinder0", "cylinder1", "cylinder2"):
+        skeleton.append(("MoveToPreGrasp", ("robot", name)))
+        skeleton.append(("Grasp", ("robot", name)))
+        skeleton.append(("Place", ("robot", name, "shelf")))
+    start = time.monotonic()
+    plan, _ = run_injected_sesame(
+        env_models, x0, skeleton, samples_per_step=1, timeout=300.0
+    )
+    wall = time.monotonic() - start
+    assert plan is not None, "Injected skeleton failed to refine"
+    goal = env_models.goal_deriver(x0)
+    assert goal.check_state(plan.states[-1])
+    # The point of injection is speed: no search, one sample per step.
+    assert wall < 120.0, f"Injected refinement too slow: {wall:.1f}s"

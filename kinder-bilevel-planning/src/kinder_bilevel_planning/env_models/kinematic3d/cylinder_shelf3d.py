@@ -58,6 +58,9 @@ def create_bilevel_planning_models(
     magic_skills: Collection[str] = (),
     place_params: Sequence[Sequence[float] | None] | None = None,
     base_clearance: float = 0.0,
+    grasp_params: Sequence[Sequence[float] | None] | None = None,
+    move_params: Sequence[Sequence[float] | None] | None = None,
+    carry_lift_z: float | None = None,
 ) -> SesameModels:
     """Create the env models for cylinder shelf 3D.
 
@@ -79,11 +82,20 @@ def create_bilevel_planning_models(
 
     ``place_params`` fixes where each cylinder is set down on the shelf: the
     i-th entry is for ``cylinder{i}`` and is either ``(x, y)``, the offset
-    from the shelf centre (the base staging distance is still sampled), or
+    from the shelf centre (the base staging distance is still sampled),
     ``(x, y, base_distance)``, which leaves the Place skill nothing to sample
-    (see ``GroundPlaceController``); ``None`` keeps sampling everything for
-    that cylinder. Fixed placements make planning with several cylinders
-    faster and their layout on the shelf predictable.
+    (see ``GroundPlaceController``), or ``(x, y, base_distance, layer)``,
+    which additionally fixes the shelf board the cylinder lands on; ``None``
+    keeps sampling everything for that cylinder. Fixed placements make
+    planning with several cylinders faster and their layout on the shelf
+    predictable.
+
+    ``grasp_params`` similarly fixes each cylinder's grasp geometry as
+    ``(approach pitch, grasp depth below top)``, and ``move_params`` fixes
+    MoveToPreGrasp's ``(staging distance, approach rot)`` — both needed for
+    cylinders staged inside boxes (see the kinder_models skills).
+    ``carry_lift_z`` makes the grasp's stow lift the held cylinder until its
+    bottom clears that height before carrying (also a boxed-scene need).
 
     ``base_clearance`` is the distance (m) the base must keep from the shelf
     and the cylinders along its planned paths (the planner's collision check
@@ -104,6 +116,19 @@ def create_bilevel_planning_models(
     sim = ObjectCentricCylinderShelf3DEnv(
         num_cylinders=num_objects, config=config, allow_state_access=True
     )
+    if grasp_params is not None and len(grasp_params) != num_objects:
+        raise ValueError(
+            f"grasp_params has {len(grasp_params)} entries for {num_objects} cylinders"
+        )
+    if move_params is not None and len(move_params) != num_objects:
+        raise ValueError(
+            f"move_params has {len(move_params)} entries for {num_objects} cylinders"
+        )
+    fixed_grasp_params = {
+        f"cylinder{i}": (float(params[0]), float(params[1]))
+        for i, params in enumerate(grasp_params or [])
+        if params is not None
+    }
 
     # Convert observations into states. The important thing is that states are hashable.
     def observation_to_state(o: NDArray[np.float32]) -> ObjectCentricState:
@@ -180,7 +205,7 @@ def create_bilevel_planning_models(
         # AtPreGrasp: empty gripper at the target's pre-grasp position.
         at_any_pre_grasp = False
         for target in target_objects:
-            if is_at_pre_grasp(sim, x, target.name):
+            if is_at_pre_grasp(sim, x, target.name, fixed_grasp_params):
                 atoms.add(GroundAtom(AtPreGrasp, [robot, target]))
                 at_any_pre_grasp = True
         if not at_any_pre_grasp:
@@ -269,8 +294,19 @@ def create_bilevel_planning_models(
         for i, params in enumerate(place_params or [])
         if params is not None
     }
+    fixed_move_params = {
+        f"cylinder{i}": params
+        for i, params in enumerate(move_params or [])
+        if params is not None
+    }
     lifted_controllers = create_lifted_controllers(
-        action_space, sim, fixed_place_params, base_clearance
+        action_space,
+        sim,
+        fixed_place_params,
+        base_clearance,
+        fixed_grasp_params,
+        carry_lift_z,
+        fixed_move_params,
     )
     for skill_name in magic_skills:
         key = _SKILL_CONTROLLER_KEYS[skill_name]

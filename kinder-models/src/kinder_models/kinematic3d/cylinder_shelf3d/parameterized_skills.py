@@ -660,12 +660,15 @@ class GroundMoveToPreGraspController(
         sim: ObjectCentricCylinderShelf3DEnv,
         base_clearance: float = 0.0,
         grasp_params: GraspParams | None = None,
+        move_params: Sequence[float] | None = None,
     ) -> None:
         """``base_clearance`` is the distance (m) the base must keep from the
         shelf and the cylinders along its planned path (see
         ``MotionPlanningHyperparameters.platform_clearance``). ``grasp_params``
         optionally overrides the grasp geometry per cylinder (see
-        ``_resolve_grasp_params``)."""
+        ``_resolve_grasp_params``). ``move_params`` fixes this cylinder's
+        ``(staging distance, approach rot)`` instead of sampling them —
+        cylinders inside boxes are only approachable from the open side."""
         super().__init__(objects)
         self._sim = sim
         self._joint_infos = sim.robot.arm.get_arm_joint_infos()[:7]
@@ -677,6 +680,13 @@ class GroundMoveToPreGraspController(
             platform_clearance=base_clearance,
             birrt_extend_num_interp=BASE_MOTION_EXTEND_NUM_INTERP,
         )
+        if move_params is not None and len(move_params) != 2:
+            raise ValueError(
+                f"move_params must be (distance, rot), got {list(move_params)}"
+            )
+        self._move_params = (
+            None if move_params is None else tuple(float(v) for v in move_params)
+        )
         self._current_params: np.ndarray | None = None
         self._current_plan: list[SE2Pose] | None = None
         self._current_arm_joint_plan: list[JointPositions] | None = None
@@ -685,8 +695,11 @@ class GroundMoveToPreGraspController(
         self._reached: bool = False
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
-        """Sample the base staging distance and the approach angle."""
+        """Sample the base staging distance and the approach angle, unless
+        ``move_params`` fixed them."""
         assert isinstance(x, CylinderShelf3DObjectCentricState)
+        if self._move_params is not None:
+            return np.array(self._move_params)
         distance = rng.uniform(*MOVE_TO_TARGET_DISTANCE_BOUNDS)  # type: ignore
         rot = rng.uniform(*MOVE_TO_TARGET_ROT_BOUNDS)
         return np.array([distance, rot])
@@ -1346,6 +1359,7 @@ def create_lifted_controllers(
     base_clearance: float = 0.0,
     grasp_params: GraspParams | None = None,
     carry_lift_z: float | None = None,
+    move_params: Mapping[str, Sequence[float]] | None = None,
 ) -> dict[str, LiftedParameterizedController]:
     """Create lifted parameterized controllers for CylinderShelf3D.
 
@@ -1359,18 +1373,26 @@ def create_lifted_controllers(
     ``carry_lift_z`` makes the grasp's stow lift the held cylinder until its
     bottom clears that height (see ``_plan_stow``) — required when cylinders
     start inside staging boxes, so the carry does not sweep low scene
-    structure.
+    structure. ``move_params`` maps a cylinder name to a fixed
+    ``(staging distance, approach rot)`` for MoveToPreGrasp.
     """
     del action_space
     fixed_place_params = dict(place_params or {})
     fixed_grasp_params = dict(grasp_params or {})
+    fixed_move_params = dict(move_params or {})
 
     # Create partial controller classes that include the sim
     class MoveToPreGraspController(GroundMoveToPreGraspController):
         """Controller for staging the base and reaching the pre-grasp pose."""
 
         def __init__(self, objects):
-            super().__init__(objects, sim, base_clearance, fixed_grasp_params)
+            super().__init__(
+                objects,
+                sim,
+                base_clearance,
+                fixed_grasp_params,
+                fixed_move_params.get(objects[1].name),
+            )
 
     class GraspController(GroundGraspController):
         """Controller for the last mile of the grasp."""

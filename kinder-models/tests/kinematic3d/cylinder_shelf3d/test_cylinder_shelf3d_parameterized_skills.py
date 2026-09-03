@@ -478,9 +478,9 @@ def test_real_restock_boxed_scene_full_rollout():
         # y offset -0.05 = the shallowest insertion the sampler allows: at a
         # 45-degree approach the wrist rises ~1:1 behind the gripper, so deep
         # insertions put the forearm at the compartment ceiling.
-        "cylinder0": (-0.15, -0.05, 0.80, 0),
+        "cylinder0": (-0.13, -0.05, 0.80, 0),
         "cylinder1": (0.0, -0.05, 0.80, 0),
-        "cylinder2": (0.15, -0.05, 0.80, 0),
+        "cylinder2": (0.13, -0.05, 0.80, 0),
         "cylinder3": (-0.13, -0.05, 0.80, 1),
         "cylinder4": (0.0, -0.05, 0.80, 1),
         "cylinder5": (0.13, -0.05, 0.80, 1),
