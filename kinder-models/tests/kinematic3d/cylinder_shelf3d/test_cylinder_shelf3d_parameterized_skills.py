@@ -471,7 +471,7 @@ def test_real_restock_boxed_scene_full_rollout():
         "cylinder2": (pitch, 0.03),
         "cylinder3": (pitch, 0.015),
         "cylinder4": (pitch, 0.05),
-        "cylinder5": (pitch, 0.03),
+        "cylinder5": (pitch, 0.015),
     }
     place_params = {
         # (x offset, y offset, base distance, board layer): talls -> layer 0.
@@ -496,13 +496,16 @@ def test_real_restock_boxed_scene_full_rollout():
     )
     robot = state.get_object_from_name("robot")
     shelf = state.get_object_from_name("shelf")
-    staging_distance = {
-        "cylinder0": 0.83,
-        "cylinder1": 0.88,
-        "cylinder2": 0.83,
-        "cylinder3": 0.72,
-        "cylinder4": 0.78,
-        "cylinder5": 0.78,
+    # (distance, rot): rot pi/2 parks the base south, heading at the cylinder;
+    # the shallow box is rotated 0.25, so its cylinders are approached along
+    # the box's own normal and the chassis aligns with it.
+    staging = {
+        "cylinder0": (0.83, np.pi / 2),
+        "cylinder1": (0.88, np.pi / 2),
+        "cylinder2": (0.83, np.pi / 2),
+        "cylinder3": (0.72, np.pi / 2 + 0.25),
+        "cylinder4": (0.78, np.pi / 2 + 0.25),
+        "cylinder5": (0.78, np.pi / 2 + 0.25),
     }
     rng = np.random.default_rng(0)
     # Shorts first (near row), then talls, mirroring a sensible restock order.
@@ -510,7 +513,7 @@ def test_real_restock_boxed_scene_full_rollout():
                  "cylinder0", "cylinder1", "cylinder2"):
         target = state.get_object_from_name(name)
         move = controllers["move_to_pre_grasp"].ground((robot, target))
-        move.reset(state, np.array([staging_distance[name], np.pi / 2]))
+        move.reset(state, np.array(staging[name]))
         state = _run_controller(env, move, state, max_steps=800)
         grasp = controllers["grasp"].ground((robot, target))
         grasp.reset(state, grasp.sample_parameters(state, rng))

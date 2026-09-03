@@ -243,11 +243,15 @@ def _real_restock_config_and_params():
     pitch45 = np.deg2rad(45)
     grasp_params = [
         (pitch45, 0.03), (pitch45, 0.05), (pitch45, 0.03),
-        (pitch45, 0.015), (pitch45, 0.05), (pitch45, 0.03),
+        (pitch45, 0.015), (pitch45, 0.05), (pitch45, 0.015),
     ]
+    # Staging rot pi/2 parks the base south of the cylinder, heading at it; the
+    # shallow box is set down rotated by 0.25, so its cylinders are approached
+    # along the box's own normal (pi/2 + 0.25) and the chassis aligns with it.
     move_params = [
         (0.83, np.pi / 2), (0.88, np.pi / 2), (0.83, np.pi / 2),
-        (0.72, np.pi / 2), (0.78, np.pi / 2), (0.78, np.pi / 2),
+        (0.72, np.pi / 2 + shallow_yaw), (0.78, np.pi / 2 + shallow_yaw),
+        (0.78, np.pi / 2 + shallow_yaw),
     ]
     place_params = [
         (-0.13, -0.05, 0.80, 0), (0.0, -0.05, 0.80, 0), (0.13, -0.05, 0.80, 0),
