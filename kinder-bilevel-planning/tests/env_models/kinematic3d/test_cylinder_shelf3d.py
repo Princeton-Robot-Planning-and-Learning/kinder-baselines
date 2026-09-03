@@ -1,14 +1,25 @@
 """Tests for cylinder_shelf3d.py."""
 
+import json
+import time
+from pathlib import Path
+
 import kinder
 import numpy as np
 import pytest
 from bilevel_planning.structs import RelationalAbstractState
+from kinder.envs.kinematic3d.cylinder_shelf3d import CylinderShelf3DEnv
 from kinder_models.structs import SkillCall
 from relational_structs import GroundAtom
 
+from kinder_bilevel_planning import restock_scene
 from kinder_bilevel_planning.agent import BilevelPlanningAgent
 from kinder_bilevel_planning.env_models import create_bilevel_planning_models
+from kinder_bilevel_planning.injection import (
+    place_params_from_ir,
+    run_injected_sesame,
+    skeleton_from_ir,
+)
 
 kinder.register_all_environments()
 
@@ -200,3 +211,92 @@ def test_cylinder_shelf3d_plans_with_base_clearance():
     agent.reset(obs, info)
     assert len(agent.plan()) > 0
     env.close()
+
+
+def _real_restock_config_and_params():
+    """The measured physical restock scene plus the fixed per-cylinder parameters a
+    high-level planner would inject (see test_injected_skeleton...)."""
+    config = restock_scene.real_restock_config()
+    grasp_params = restock_scene.real_restock_grasp_params()
+    move_params = restock_scene.real_restock_move_params()
+    y, d = restock_scene.PLACE_Y_OFFSET, restock_scene.PLACE_BASE_DISTANCE
+    place_params = [
+        (-0.13, y, d, 0), (0.0, y, d, 0), (0.13, y, d, 0),
+        (-0.13, y, d, 1), (0.0, y, d, 1), (0.13, y, d, 1),
+    ]
+    return config, grasp_params, move_params, place_params
+
+
+def test_injected_skeleton_boxed_scene():
+    """A fully specified intermediate representation — the skill skeleton plus fixed
+    per-cylinder move/grasp/place parameters — refines with one sample per step and no
+    abstract search, solving the boxed real-restock scene in a single pass."""
+    config, grasp_params, move_params, place_params = _real_restock_config_and_params()
+    env = CylinderShelf3DEnv(num_cylinders=6, config=config, allow_state_access=True)
+    env_models = create_bilevel_planning_models(
+        "cylinder_shelf3d",
+        env.observation_space,
+        env.action_space,
+        num_objects=6,
+        config=config,
+        place_params=place_params,
+        grasp_params=grasp_params,
+        move_params=move_params,
+        carry_lift_z=0.27,
+    )
+    obs, _ = env.reset(seed=0)
+    x0 = env_models.observation_to_state(obs)
+    skeleton = []
+    for name in ("cylinder3", "cylinder4", "cylinder5",
+                 "cylinder0", "cylinder1", "cylinder2"):
+        skeleton.append(("MoveToPreGrasp", ("robot", name)))
+        skeleton.append(("Grasp", ("robot", name)))
+        skeleton.append(("Place", ("robot", name, "shelf")))
+    start = time.monotonic()
+    plan, _ = run_injected_sesame(
+        env_models, x0, skeleton, samples_per_step=1, timeout=300.0
+    )
+    wall = time.monotonic() - start
+    assert plan is not None, "Injected skeleton failed to refine"
+    goal = env_models.goal_deriver(x0)
+    assert goal.check_state(plan.states[-1])
+    # The point of injection is speed: no search, one sample per step.
+    assert wall < 120.0, f"Injected refinement too slow: {wall:.1f}s"
+
+
+def test_injected_skeleton_from_alphatamp_ir():
+    """End-to-end across the repo seam: a plan_ir.json emitted by alphatamp's restock3d
+    deploy kit (checked in under fixtures/) drives planning in the boxed real-restock
+    scene. The IR supplies the decisions — pick order, board layer, placement x — and
+    this side supplies its own calibration for how to move (staging poses, grasp
+    geometry, insertion depth, base standoff)."""
+    ir = json.loads(
+        (Path(__file__).parent / "fixtures" / "plan_ir.json").read_text()
+    )
+    config, grasp_params, move_params, _ = _real_restock_config_and_params()
+    # The IR's object table must describe the same physical objects, in the same
+    # order, as this scene's cylinders.
+    for i, obj in enumerate(ir["objects"]):
+        assert obj["cylinder"] == f"cylinder{i}"
+        assert config.cylinder_heights[i] == pytest.approx(obj["height"])
+    place_params = place_params_from_ir(ir, y_offset=-0.05, base_distance=0.80)
+    env = CylinderShelf3DEnv(num_cylinders=6, config=config, allow_state_access=True)
+    env_models = create_bilevel_planning_models(
+        "cylinder_shelf3d",
+        env.observation_space,
+        env.action_space,
+        num_objects=6,
+        config=config,
+        place_params=place_params,
+        grasp_params=grasp_params,
+        move_params=move_params,
+        carry_lift_z=0.27,
+    )
+    obs, _ = env.reset(seed=0)
+    x0 = env_models.observation_to_state(obs)
+    plan, _ = run_injected_sesame(
+        env_models, x0, skeleton_from_ir(ir), samples_per_step=1, timeout=300.0
+    )
+    assert plan is not None, "IR-driven skeleton failed to refine"
+    goal = env_models.goal_deriver(x0)
+    assert goal.check_state(plan.states[-1])

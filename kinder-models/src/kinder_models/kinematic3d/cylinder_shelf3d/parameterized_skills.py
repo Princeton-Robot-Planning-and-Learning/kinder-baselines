@@ -124,6 +124,9 @@ PRE_GRASP_BACKOFF = 0.10
 # How close (m) the end effector must be to the pre-grasp position for the
 # robot to count as being at the pre-grasp pose.
 PRE_GRASP_POSITION_TOL = 0.03
+# How far the lift-then-tuck carry (see _plan_stow) may pull the held cylinder
+# back toward the base before stopping (it also stops at the first collision).
+_CARRY_TUCK_MAX = 0.45
 # The place approach's pre-place waypoint: backed off along the shelf
 # approach axis and lifted slightly, so the final segment slides the
 # cylinder in over the shelf layer.
@@ -147,14 +150,32 @@ _PLANAR_FREE_JOINT_INDICES = (0, 1, 3, 5)
 # gripper, which legitimately touches a held object.
 _ARM_BODY_LINK_MAX = 7
 
+# Per-cylinder grasp geometry: name -> (approach pitch, grasp depth below the
+# cylinder top). Cylinders staged inside walled boxes need a steeper approach
+# (e.g. 45 deg) and a per-object depth so the reach clears the box rim; the
+# defaults reproduce the original open-floor side grasp.
+GraspParams = Mapping[str, tuple[float, float]]
 
-def get_side_grasp_approach(approach_yaw: float) -> np.ndarray:
+
+def _resolve_grasp_params(
+    grasp_params: GraspParams | None, target_name: str
+) -> tuple[float, float]:
+    """(pitch, depth_below_top) for ``target_name``, defaulting to the constants."""
+    if grasp_params and target_name in grasp_params:
+        pitch, depth = grasp_params[target_name]
+        return float(pitch), float(depth)
+    return SIDE_GRASP_PITCH, GRASP_DEPTH_BELOW_TOP
+
+
+def get_side_grasp_approach(
+    approach_yaw: float, pitch: float = SIDE_GRASP_PITCH
+) -> np.ndarray:
     """Unit vector of the side-grasp approach axis for a world-frame yaw."""
     return np.array(
         [
-            np.cos(approach_yaw) * np.cos(SIDE_GRASP_PITCH),
-            np.sin(approach_yaw) * np.cos(SIDE_GRASP_PITCH),
-            -np.sin(SIDE_GRASP_PITCH),
+            np.cos(approach_yaw) * np.cos(pitch),
+            np.sin(approach_yaw) * np.cos(pitch),
+            -np.sin(pitch),
         ]
     )
 
@@ -338,7 +359,10 @@ def _interpolated_path_targets(
 
 # Controllers.
 def get_grasp_positions(
-    state: CylinderShelf3DObjectCentricState, target_name: str
+    state: CylinderShelf3DObjectCentricState,
+    target_name: str,
+    pitch: float = SIDE_GRASP_PITCH,
+    depth_below_top: float = GRASP_DEPTH_BELOW_TOP,
 ) -> tuple[np.ndarray, np.ndarray]:
     """(grasp position, pre-grasp position) of the side grasp on ``target_name``.
 
@@ -355,12 +379,12 @@ def get_grasp_positions(
     )
     target = state.get_object_from_name(target_name)
     half_height = state.get(target, "half_extent_z")
-    approach = get_side_grasp_approach(approach_yaw)
+    approach = get_side_grasp_approach(approach_yaw, pitch)
     grasp_point = np.array(
         [
             cylinder_pose.position[0],
             cylinder_pose.position[1],
-            cylinder_pose.position[2] + half_height - GRASP_DEPTH_BELOW_TOP,
+            cylinder_pose.position[2] + half_height - depth_below_top,
         ]
     )
     grasp_position = grasp_point - GRASP_AXIS_STANDOFF * approach
@@ -372,6 +396,7 @@ def is_at_pre_grasp(
     sim: ObjectCentricCylinderShelf3DEnv,
     state: CylinderShelf3DObjectCentricState,
     target_name: str,
+    grasp_params: GraspParams | None = None,
 ) -> bool:
     """Whether the (empty) gripper is within PRE_GRASP_POSITION_TOL of the pre-grasp
     position for ``target_name``.
@@ -383,7 +408,10 @@ def is_at_pre_grasp(
         return False
     sim.set_state(state)
     ee_position = np.array(sim.robot.arm.get_end_effector_pose().position)
-    _, pre_grasp_position = get_grasp_positions(state, target_name)
+    pitch, depth_below_top = _resolve_grasp_params(grasp_params, target_name)
+    _, pre_grasp_position = get_grasp_positions(
+        state, target_name, pitch, depth_below_top
+    )
     return bool(
         np.linalg.norm(ee_position - pre_grasp_position) < PRE_GRASP_POSITION_TOL
     )
@@ -393,6 +421,8 @@ def _plan_reach(
     sim: ObjectCentricCylinderShelf3DEnv,
     state: CylinderShelf3DObjectCentricState,
     target_name: str,
+    pitch: float = SIDE_GRASP_PITCH,
+    depth_below_top: float = GRASP_DEPTH_BELOW_TOP,
 ) -> tuple[list[JointPositions], int]:
     """Solve the planar reach from the retract posture to the grasp.
 
@@ -402,7 +432,9 @@ def _plan_reach(
     ``TrajectorySamplingFailure`` when the reach is infeasible.
     """
     sim.set_state(state)
-    grasp_position, pre_grasp_position = get_grasp_positions(state, target_name)
+    grasp_position, pre_grasp_position = get_grasp_positions(
+        state, target_name, pitch, depth_below_top
+    )
     # The reach starts from the retract posture: joints 3, 5, 7 keep their
     # retract values throughout, so the continuation must be seeded from
     # the retract configuration.
@@ -415,6 +447,7 @@ def _plan_reach(
         home_pitch,
         pre_grasp_position,
         grasp_position,
+        end_pitch=pitch,
     )
     return _plan_planar_reach(sim, home_joints, path_targets), num_leg_one - 1
 
@@ -423,6 +456,7 @@ def _plan_stow(
     sim: ObjectCentricCylinderShelf3DEnv,
     state: CylinderShelf3DObjectCentricState,
     reach_configurations: list[JointPositions],
+    carry_lift_z: float | None = None,
 ) -> list[JointPositions]:
     """Replay the reach in reverse while the held cylinder stays clear.
 
@@ -431,6 +465,17 @@ def _plan_stow(
     the arm body and the base: that configuration is the carrying pose.
     Continuing all the way to the retract posture would press the cylinder
     into the lower arm.
+
+    With ``carry_lift_z``, the stow is instead lift-then-tuck FROM THE GRASP
+    configuration: the end effector first rises straight up (same planar
+    continuation, pitch held) until the held cylinder's BOTTOM is at least
+    ``carry_lift_z``, then pulls straight back toward the base at that height
+    for as long as the arm and held cylinder stay collision-free — the last
+    good configuration is the carrying pose. The reversed reach is skipped:
+    it would first drag a box-grasped cylinder toward the box's front wall,
+    where the env's step-time collision check stalls the lift; and without
+    the tuck, the cylinder would ride at full arm extension and hang inside
+    the shelf's open front at the place standoff.
     """
     sim.set_state(state)
     grasped_object_id = sim._grasped_object_id  # pylint: disable=protected-access
@@ -440,6 +485,60 @@ def _plan_stow(
     assert grasped_object_id is not None
     assert grasped_object_transform is not None
     arm = sim.robot.arm
+    if carry_lift_z is not None:
+        grasp_config = list(reach_configurations[-1])
+        arm.set_joints(grasp_config)
+        ee = arm.get_end_effector_pose()
+        pitch = _approach_pitch(matrix_from_quat(ee.orientation))
+        held_pose = multiply_poses(ee, grasped_object_transform)
+        assert state.grasped_object is not None
+        held_half_z = state.get(
+            state.get_object_from_name(state.grasped_object), "half_extent_z"
+        )
+        rise = carry_lift_z - (held_pose.position[2] - held_half_z)
+        if rise <= 0:
+            return [grasp_config]
+        start = np.array(ee.position)
+        num_steps = max(2, int(np.ceil(rise / PLANAR_PATH_STEP)) + 1)
+        lift_targets = [
+            (start + np.array([0.0, 0.0, rise * k / (num_steps - 1)]), pitch)
+            for k in range(1, num_steps)
+        ]
+        extra_ids = (
+            sim._get_collision_object_ids()  # pylint: disable=protected-access
+            - {grasped_object_id}
+        )
+        lift_configs = _plan_planar_reach(
+            sim,
+            grasp_config,
+            lift_targets,
+            extra_collision_ids=extra_ids,
+            held_object_id=grasped_object_id,
+            held_object_transform=grasped_object_transform,
+        )
+        # Tuck: pull straight back toward the base at the lifted height, one
+        # step at a time, keeping every collision-free extension.
+        base_pose = sim.robot.base.get_pose()
+        arm.set_joints(lift_configs[-1])
+        lifted = np.array(arm.get_end_effector_pose().position)
+        back_yaw = np.arctan2(lifted[1] - base_pose.y, lifted[0] - base_pose.x)
+        back_dir = -np.array([np.cos(back_yaw), np.sin(back_yaw), 0.0])
+        configs = list(lift_configs)
+        for k in range(1, int(_CARRY_TUCK_MAX / PLANAR_PATH_STEP) + 1):
+            target = lifted + back_dir * (k * PLANAR_PATH_STEP)
+            try:
+                step_configs = _plan_planar_reach(
+                    sim,
+                    list(configs[-1]),
+                    [(target, pitch)],
+                    extra_collision_ids=extra_ids,
+                    held_object_id=grasped_object_id,
+                    held_object_transform=grasped_object_transform,
+                )
+            except TrajectorySamplingFailure:
+                break
+            configs.extend(step_configs)
+        return configs
     stow_configs: list[JointPositions] = []
     candidates = list(reversed(reach_configurations)) + [HOME_JOINT_POSITIONS.tolist()]
     for candidate in candidates:
@@ -462,6 +561,9 @@ def _predict_grasp_outcome(
     sim: ObjectCentricCylinderShelf3DEnv,
     x: CylinderShelf3DObjectCentricState,
     target_name: str,
+    pitch: float = SIDE_GRASP_PITCH,
+    depth_below_top: float = GRASP_DEPTH_BELOW_TOP,
+    carry_lift_z: float | None = None,
 ) -> ObjectCentricState:
     """Predict the state after grasping ``target_name`` from ``x``.
 
@@ -471,7 +573,7 @@ def _predict_grasp_outcome(
     carrying pose (the last collision-free configuration of the reversed
     reach).
     """
-    reach_plan, _ = _plan_reach(sim, x, target_name)
+    reach_plan, _ = _plan_reach(sim, x, target_name, pitch, depth_below_top)
     at_grasp = x.copy()
     _set_arm_joints(at_grasp, reach_plan[-1])
     sim.set_state(at_grasp)
@@ -481,7 +583,7 @@ def _predict_grasp_outcome(
     if grasped.grasped_object != target_name:
         raise TrajectorySamplingFailure("Grasp did not register at the reach")
 
-    stow_configs = _plan_stow(sim, grasped, reach_plan)
+    stow_configs = _plan_stow(sim, grasped, reach_plan, carry_lift_z)
     carry_joints = stow_configs[-1]
     grasp_transform = grasped.grasped_object_transform
     assert grasp_transform is not None
@@ -557,17 +659,33 @@ class GroundMoveToPreGraspController(
         objects: Sequence[Object],
         sim: ObjectCentricCylinderShelf3DEnv,
         base_clearance: float = 0.0,
+        grasp_params: GraspParams | None = None,
+        move_params: Sequence[float] | None = None,
     ) -> None:
         """``base_clearance`` is the distance (m) the base must keep from the
         shelf and the cylinders along its planned path (see
-        ``MotionPlanningHyperparameters.platform_clearance``)."""
+        ``MotionPlanningHyperparameters.platform_clearance``). ``grasp_params``
+        optionally overrides the grasp geometry per cylinder (see
+        ``_resolve_grasp_params``). ``move_params`` fixes this cylinder's
+        ``(staging distance, approach rot)`` instead of sampling them —
+        cylinders inside boxes are only approachable from the open side."""
         super().__init__(objects)
         self._sim = sim
         self._joint_infos = sim.robot.arm.get_arm_joint_infos()[:7]
         self._robot, self._target = objects
+        self._grasp_pitch, self._grasp_depth = _resolve_grasp_params(
+            grasp_params, self._target.name
+        )
         self._base_motion_hyperparameters = MotionPlanningHyperparameters(
             platform_clearance=base_clearance,
             birrt_extend_num_interp=BASE_MOTION_EXTEND_NUM_INTERP,
+        )
+        if move_params is not None and len(move_params) != 2:
+            raise ValueError(
+                f"move_params must be (distance, rot), got {list(move_params)}"
+            )
+        self._move_params = (
+            None if move_params is None else tuple(float(v) for v in move_params)
         )
         self._current_params: np.ndarray | None = None
         self._current_plan: list[SE2Pose] | None = None
@@ -577,8 +695,11 @@ class GroundMoveToPreGraspController(
         self._reached: bool = False
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
-        """Sample the base staging distance and the approach angle."""
+        """Sample the base staging distance and the approach angle, unless
+        ``move_params`` fixed them."""
         assert isinstance(x, CylinderShelf3DObjectCentricState)
+        if self._move_params is not None:
+            return np.array(self._move_params)
         distance = rng.uniform(*MOVE_TO_TARGET_DISTANCE_BOUNDS)  # type: ignore
         rot = rng.uniform(*MOVE_TO_TARGET_ROT_BOUNDS)
         return np.array([distance, rot])
@@ -615,7 +736,13 @@ class GroundMoveToPreGraspController(
                 self._sim.robot,
                 self._sim.robot.base.get_pose(),
                 target_base_pose,
-                collision_bodies=self._sim._get_collision_object_ids(),  # pylint: disable=protected-access
+                # Staging-box walls are excluded from BASE motion checks: the
+                # base's contact reports against low walls are unreliable
+                # (phantom contacts at range), and staging standoffs keep the
+                # chassis well clear of the boxes by construction. The arm-side
+                # reach still collision-checks the walls.
+                collision_bodies=self._sim._get_collision_object_ids()  # pylint: disable=protected-access
+                - set(getattr(self._sim, "_box_wall_ids", ())),
                 seed=0,  # for determinism
                 hyperparameters=self._base_motion_hyperparameters,
             )
@@ -644,7 +771,11 @@ class GroundMoveToPreGraspController(
             # Generate the reach plan (leg one only) if it doesn't exist yet.
             if self._current_arm_joint_plan is None:
                 reach_plan, pre_grasp_index = _plan_reach(
-                    self._sim, self._current_state, self._target.name
+                    self._sim,
+                    self._current_state,
+                    self._target.name,
+                    self._grasp_pitch,
+                    self._grasp_depth,
                 )
                 configurations = reach_plan[: pre_grasp_index + 1]
                 home_joints = HOME_JOINT_POSITIONS.tolist()
@@ -688,7 +819,9 @@ class GroundMoveToPreGraspController(
             self._sim._robot_or_held_object_collision_exists()  # pylint: disable=protected-access
         ):
             raise TrajectorySamplingFailure("Staged base pose is in collision")
-        reach_plan, pre_grasp_index = _plan_reach(self._sim, staged, self._target.name)
+        reach_plan, pre_grasp_index = _plan_reach(
+            self._sim, staged, self._target.name, self._grasp_pitch, self._grasp_depth
+        )
         predicted = staged.copy()
         _set_arm_joints(predicted, reach_plan[pre_grasp_index])
         self._sim.set_state(predicted)
@@ -715,11 +848,17 @@ class GroundGraspController(
         self,
         objects: Sequence[Object],
         sim: ObjectCentricCylinderShelf3DEnv,
+        grasp_params: GraspParams | None = None,
+        carry_lift_z: float | None = None,
     ) -> None:
         super().__init__(objects)
         self._sim = sim
         self._joint_infos = sim.robot.arm.get_arm_joint_infos()[:7]
         self._robot, self._target = objects
+        self._grasp_pitch, self._grasp_depth = _resolve_grasp_params(
+            grasp_params, self._target.name
+        )
+        self._carry_lift_z = carry_lift_z
         self._current_approach_plan: list[JointPositions] | None = None
         self._current_stow_plan: list[JointPositions] | None = None
         self._reach_configurations: list[JointPositions] | None = None
@@ -758,7 +897,11 @@ class GroundGraspController(
             # reach. The full reach is kept so the stow can replay it.
             if self._current_approach_plan is None:
                 reach_plan, pre_grasp_index = _plan_reach(
-                    self._sim, self._current_state, self._target.name
+                    self._sim,
+                    self._current_state,
+                    self._target.name,
+                    self._grasp_pitch,
+                    self._grasp_depth,
                 )
                 self._reach_configurations = reach_plan
                 self._current_approach_plan = _remap_joint_plan(
@@ -782,7 +925,10 @@ class GroundGraspController(
             if self._current_stow_plan is None:
                 assert self._reach_configurations is not None
                 stow_configs = _plan_stow(
-                    self._sim, self._current_state, self._reach_configurations
+                    self._sim,
+                    self._current_state,
+                    self._reach_configurations,
+                    self._carry_lift_z,
                 )
                 self._current_stow_plan = _remap_joint_plan(
                     self._sim, self._current_state, stow_configs
@@ -801,7 +947,14 @@ class GroundGraspController(
         """Predict the post-grasp state (holding, at the carrying pose) from ``x``."""
         del params
         assert isinstance(x, CylinderShelf3DObjectCentricState)
-        return _predict_grasp_outcome(self._sim, x, self._target.name)
+        return _predict_grasp_outcome(
+            self._sim,
+            x,
+            self._target.name,
+            self._grasp_pitch,
+            self._grasp_depth,
+            self._carry_lift_z,
+        )
 
 
 def _set_base_pose(state: ObjectCentricState, base_pose: SE2Pose) -> None:
@@ -853,9 +1006,13 @@ class GroundPlaceController(
         """``place_params`` fixes the placement instead of sampling it: ``(x, y)``
         fixes the offset on the shelf and leaves the base staging distance to
         the sampler; ``(x, y, base_distance)`` fixes all three, so the skill has
-        nothing left to sample. ``base_clearance`` is the distance (m) the base
-        must keep from the shelf and the other cylinders along its planned path
-        (see ``MotionPlanningHyperparameters.platform_clearance``)."""
+        nothing left to sample; ``(x, y, base_distance, layer)`` additionally
+        fixes WHICH present shelf board (index into
+        ``config.get_layer_openings()``, ascending) the cylinder lands on,
+        instead of the default lowest-board-that-fits. ``base_clearance`` is
+        the distance (m) the base must keep from the shelf and the other
+        cylinders along its planned path (see
+        ``MotionPlanningHyperparameters.platform_clearance``)."""
         super().__init__(objects)
         self._sim = sim
         self._joint_infos = sim.robot.arm.get_arm_joint_infos()[:7]
@@ -864,11 +1021,15 @@ class GroundPlaceController(
             platform_clearance=base_clearance,
             birrt_extend_num_interp=BASE_MOTION_EXTEND_NUM_INTERP,
         )
-        if place_params is not None and len(place_params) not in (2, 3):
+        if place_params is not None and len(place_params) not in (2, 3, 4):
             raise ValueError(
-                f"place_params must be (x, y) or (x, y, base_distance), got "
-                f"{list(place_params)}"
+                f"place_params must be (x, y), (x, y, base_distance) or "
+                f"(x, y, base_distance, layer), got {list(place_params)}"
             )
+        self._place_layer: int | None = None
+        if place_params is not None and len(place_params) == 4:
+            self._place_layer = int(place_params[3])
+            place_params = place_params[:3]
         self._place_params = (
             None if place_params is None else tuple(float(v) for v in place_params)
         )
@@ -892,7 +1053,7 @@ class GroundPlaceController(
             place_y_offset = rng.uniform(*PLACE_Y_OFFSET_BOUNDS)  # type: ignore
         else:
             place_x_offset, place_y_offset = self._place_params[:2]
-        if self._place_params is not None and len(self._place_params) == 3:
+        if self._place_params is not None and len(self._place_params) >= 3:
             base_distance = self._place_params[2]
         else:
             base_distance = rng.uniform(*PLACE_BASE_DISTANCE_BOUNDS)
@@ -944,7 +1105,12 @@ class GroundPlaceController(
                 self._sim.robot,
                 self._sim.robot.base.get_pose(),
                 target_base_pose,
-                collision_bodies=all_collision_ids - {grasped_object_id},
+                # Box walls excluded for the same reason as the pre-grasp base
+                # motion: unreliable base-vs-low-wall contacts; the held object
+                # and arm still check against them during the reach.
+                collision_bodies=all_collision_ids
+                - {grasped_object_id}
+                - set(getattr(self._sim, "_box_wall_ids", ())),
                 seed=0,  # for determinism
                 held_object=grasped_object_id,
                 base_link_to_held_obj=grasped_object_transform,
@@ -1009,14 +1175,29 @@ class GroundPlaceController(
                 # board omitted (see shelf_omitted_layers) a tall cylinder
                 # lands on the board below the merged opening.
                 cylinder_height = 2 * half_height
-                for surface_z, opening in self._sim.config.get_layer_openings():
-                    if opening >= cylinder_height + PLACE_VERTICAL_CLEARANCE:
-                        target_surface_z = surface_z
-                        break
+                openings = self._sim.config.get_layer_openings()
+                if self._place_layer is not None:
+                    if not 0 <= self._place_layer < len(openings):
+                        raise TrajectorySamplingFailure(
+                            f"Place layer {self._place_layer} out of range for "
+                            f"{len(openings)} present boards"
+                        )
+                    surface_z, opening = openings[self._place_layer]
+                    if opening < cylinder_height + PLACE_VERTICAL_CLEARANCE:
+                        raise TrajectorySamplingFailure(
+                            f"Shelf opening {self._place_layer} does not fit the "
+                            "cylinder"
+                        )
+                    target_surface_z = surface_z
                 else:
-                    raise TrajectorySamplingFailure(
-                        "No shelf opening fits the cylinder"
-                    )
+                    for surface_z, opening in openings:
+                        if opening >= cylinder_height + PLACE_VERTICAL_CLEARANCE:
+                            target_surface_z = surface_z
+                            break
+                    else:
+                        raise TrajectorySamplingFailure(
+                            "No shelf opening fits the cylinder"
+                        )
                 desired_object_position = (
                     target_surface_pose.position[0] + self._current_params[0],
                     target_surface_pose.position[1] - 0.05 + self._current_params[1],
@@ -1176,30 +1357,48 @@ def create_lifted_controllers(
     sim: ObjectCentricCylinderShelf3DEnv,
     place_params: Mapping[str, Sequence[float]] | None = None,
     base_clearance: float = 0.0,
+    grasp_params: GraspParams | None = None,
+    carry_lift_z: float | None = None,
+    move_params: Mapping[str, Sequence[float]] | None = None,
 ) -> dict[str, LiftedParameterizedController]:
     """Create lifted parameterized controllers for CylinderShelf3D.
 
-    ``place_params`` maps a cylinder name to its fixed placement, ``(x, y)``
-    or ``(x, y, base_distance)`` (see ``GroundPlaceController``); cylinders
-    not in the mapping get sampled placements. ``base_clearance`` is the
-    distance (m) the base keeps from the shelf and the cylinders along its
-    planned paths.
+    ``place_params`` maps a cylinder name to its fixed placement, ``(x, y)``,
+    ``(x, y, base_distance)`` or ``(x, y, base_distance, layer)`` (see
+    ``GroundPlaceController``); cylinders not in the mapping get sampled
+    placements. ``base_clearance`` is the distance (m) the base keeps from the
+    shelf and the cylinders along its planned paths. ``grasp_params``
+    optionally overrides the grasp geometry per cylinder with
+    ``(pitch, depth_below_top)`` (see ``_resolve_grasp_params``).
+    ``carry_lift_z`` makes the grasp's stow lift the held cylinder until its
+    bottom clears that height (see ``_plan_stow``) — required when cylinders
+    start inside staging boxes, so the carry does not sweep low scene
+    structure. ``move_params`` maps a cylinder name to a fixed
+    ``(staging distance, approach rot)`` for MoveToPreGrasp.
     """
     del action_space
     fixed_place_params = dict(place_params or {})
+    fixed_grasp_params = dict(grasp_params or {})
+    fixed_move_params = dict(move_params or {})
 
     # Create partial controller classes that include the sim
     class MoveToPreGraspController(GroundMoveToPreGraspController):
         """Controller for staging the base and reaching the pre-grasp pose."""
 
         def __init__(self, objects):
-            super().__init__(objects, sim, base_clearance)
+            super().__init__(
+                objects,
+                sim,
+                base_clearance,
+                fixed_grasp_params,
+                fixed_move_params.get(objects[1].name),
+            )
 
     class GraspController(GroundGraspController):
         """Controller for the last mile of the grasp."""
 
         def __init__(self, objects):
-            super().__init__(objects, sim)
+            super().__init__(objects, sim, fixed_grasp_params, carry_lift_z)
 
     class PlaceController(GroundPlaceController):
         """Controller for placing a cylinder."""

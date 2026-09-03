@@ -1,0 +1,231 @@
+{
+  "format": "restock3d-ir-v1",
+  "objects": [
+    {
+      "name": "obj_goal1",
+      "cylinder": "cylinder0",
+      "height": 0.29,
+      "radius": 0.0375
+    },
+    {
+      "name": "obj_goal2",
+      "cylinder": "cylinder1",
+      "height": 0.208,
+      "radius": 0.0375
+    },
+    {
+      "name": "obj_goal3",
+      "cylinder": "cylinder2",
+      "height": 0.233,
+      "radius": 0.0375
+    },
+    {
+      "name": "obj_goal4",
+      "cylinder": "cylinder3",
+      "height": 0.12,
+      "radius": 0.0375
+    },
+    {
+      "name": "obj_goal5",
+      "cylinder": "cylinder4",
+      "height": 0.125,
+      "radius": 0.035
+    },
+    {
+      "name": "obj_goal6",
+      "cylinder": "cylinder5",
+      "height": 0.1,
+      "radius": 0.0325
+    }
+  ],
+  "skeleton": [
+    [
+      "MoveToPreGrasp",
+      [
+        "robot",
+        "cylinder3"
+      ]
+    ],
+    [
+      "Grasp",
+      [
+        "robot",
+        "cylinder3"
+      ]
+    ],
+    [
+      "Place",
+      [
+        "robot",
+        "cylinder3",
+        "shelf"
+      ]
+    ],
+    [
+      "MoveToPreGrasp",
+      [
+        "robot",
+        "cylinder5"
+      ]
+    ],
+    [
+      "Grasp",
+      [
+        "robot",
+        "cylinder5"
+      ]
+    ],
+    [
+      "Place",
+      [
+        "robot",
+        "cylinder5",
+        "shelf"
+      ]
+    ],
+    [
+      "MoveToPreGrasp",
+      [
+        "robot",
+        "cylinder0"
+      ]
+    ],
+    [
+      "Grasp",
+      [
+        "robot",
+        "cylinder0"
+      ]
+    ],
+    [
+      "Place",
+      [
+        "robot",
+        "cylinder0",
+        "shelf"
+      ]
+    ],
+    [
+      "MoveToPreGrasp",
+      [
+        "robot",
+        "cylinder4"
+      ]
+    ],
+    [
+      "Grasp",
+      [
+        "robot",
+        "cylinder4"
+      ]
+    ],
+    [
+      "Place",
+      [
+        "robot",
+        "cylinder4",
+        "shelf"
+      ]
+    ],
+    [
+      "MoveToPreGrasp",
+      [
+        "robot",
+        "cylinder2"
+      ]
+    ],
+    [
+      "Grasp",
+      [
+        "robot",
+        "cylinder2"
+      ]
+    ],
+    [
+      "Place",
+      [
+        "robot",
+        "cylinder2",
+        "shelf"
+      ]
+    ],
+    [
+      "MoveToPreGrasp",
+      [
+        "robot",
+        "cylinder1"
+      ]
+    ],
+    [
+      "Grasp",
+      [
+        "robot",
+        "cylinder1"
+      ]
+    ],
+    [
+      "Place",
+      [
+        "robot",
+        "cylinder1",
+        "shelf"
+      ]
+    ]
+  ],
+  "placements": {
+    "cylinder3": {
+      "layer": 1,
+      "section": "short",
+      "x_offset": -0.182,
+      "y_offset": -0.0441
+    },
+    "cylinder5": {
+      "layer": 1,
+      "section": "short",
+      "x_offset": -0.0582,
+      "y_offset": -0.0456
+    },
+    "cylinder0": {
+      "layer": 0,
+      "section": "tall",
+      "x_offset": -0.1712,
+      "y_offset": -0.0551
+    },
+    "cylinder4": {
+      "layer": 1,
+      "section": "short",
+      "x_offset": 0.0709,
+      "y_offset": -0.0526
+    },
+    "cylinder2": {
+      "layer": 0,
+      "section": "tall",
+      "x_offset": -0.0419,
+      "y_offset": -0.0484
+    },
+    "cylinder1": {
+      "layer": 0,
+      "section": "tall",
+      "x_offset": 0.0957,
+      "y_offset": -0.0488
+    }
+  },
+  "warnings": [],
+  "meta": {
+    "scene": "scenes/lab_cylinders",
+    "checkpoint": "/Users/tom/alphatamp/experiments/spectre/restock3d_deploy/checkpoint/best.pt",
+    "winning_skeleton_idx": 225,
+    "attempts_to_first_success": 7,
+    "attempt_order": [
+      269,
+      155,
+      278,
+      143,
+      124,
+      3,
+      225
+    ],
+    "K_max": 300,
+    "r_cap_s": 600.0
+  }
+}
