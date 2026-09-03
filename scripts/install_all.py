@@ -14,12 +14,12 @@ from generate_topological_order import get_topological_order
 # kindergarden would break every package that depends on that package), so
 # the git pin lives here instead of in the pyprojects.
 #
-# kindergarden: pinned to the commit that adds the CylinderShelf3D env,
-# which is not yet in a PyPI release. Remove at the next kindergarden
-# release.
+# kindergarden: pinned to the merge of #173 (explicit board heights,
+# per-cylinder radii, staging boxes for the real restock scene), not yet in
+# a PyPI release. Remove at the next kindergarden release.
 PREINSTALL_REQUIREMENTS = [
     "kindergarden @ git+https://github.com/Princeton-Robot-Planning-and-Learning/"
-    "kindergarden.git@86c55a4e9a19f4f37cd7103d425ee88465042173",
+    "kindergarden.git@582aaeb6fd96d1d9a56b4cf02d0061b8e6ce6df5",
 ]
 
 
