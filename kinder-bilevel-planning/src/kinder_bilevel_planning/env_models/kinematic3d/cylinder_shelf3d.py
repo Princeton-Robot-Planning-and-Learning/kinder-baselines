@@ -221,7 +221,7 @@ def create_bilevel_planning_models(
                     np.isclose(
                         x.get(target, "pose_x") - x.get(fixture, "pose_x"),
                         0.0,
-                        atol=0.15,
+                        atol=0.20,
                     )
                     and np.isclose(
                         x.get(target, "pose_y") - x.get(fixture, "pose_y"),

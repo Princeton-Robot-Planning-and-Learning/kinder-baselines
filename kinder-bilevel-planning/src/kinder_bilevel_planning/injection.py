@@ -41,6 +41,43 @@ _U = TypeVar("_U", bound=Hashable)
 #: A serializable skeleton: ordered (operator name, argument object names) pairs.
 SkeletonSpec = Sequence[tuple[str, Sequence[str]]]
 
+#: The IR format this module can consume (emitted by alphatamp's restock3d deploy kit).
+RESTOCK_IR_FORMAT = "restock3d-ir-v1"
+
+
+def _check_ir_format(ir: dict) -> None:
+    if ir.get("format") != RESTOCK_IR_FORMAT:
+        raise ValueError(
+            f"Expected format {RESTOCK_IR_FORMAT!r}, got {ir.get('format')!r}"
+        )
+
+
+def skeleton_from_ir(ir: dict) -> list[tuple[str, tuple[str, ...]]]:
+    """The skeleton from a ``restock3d-ir-v1`` dict, for ``run_injected_sesame``."""
+    _check_ir_format(ir)
+    return [(op, tuple(args)) for op, args in ir["skeleton"]]
+
+
+def place_params_from_ir(
+    ir: dict, *, y_offset: float, base_distance: float
+) -> list[tuple[float, float, float, int]]:
+    """Per-cylinder ``(x, y, distance, layer)`` place parameters from the IR.
+
+    The IR contributes the planner's decisions: the board layer and the x-offset along
+    the shelf. The insertion depth (``y_offset``) and the base standoff
+    (``base_distance``) are this robot's calibration, so the caller supplies them; the
+    IR's own ``y_offset`` records where the emitting sim placed the object and is not
+    used here.
+    """
+    _check_ir_format(ir)
+    params = []
+    for i in range(len(ir["objects"])):
+        placement = ir["placements"][f"cylinder{i}"]
+        params.append(
+            (float(placement["x_offset"]), y_offset, base_distance, placement["layer"])
+        )
+    return params
+
 
 def ground_skeleton(
     env_models: SesameModels,
