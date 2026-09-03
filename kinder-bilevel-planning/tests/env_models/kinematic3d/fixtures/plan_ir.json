@@ -87,28 +87,6 @@
       "MoveToPreGrasp",
       [
         "robot",
-        "cylinder4"
-      ]
-    ],
-    [
-      "Grasp",
-      [
-        "robot",
-        "cylinder4"
-      ]
-    ],
-    [
-      "Place",
-      [
-        "robot",
-        "cylinder4",
-        "shelf"
-      ]
-    ],
-    [
-      "MoveToPreGrasp",
-      [
-        "robot",
         "cylinder0"
       ]
     ],
@@ -124,6 +102,28 @@
       [
         "robot",
         "cylinder0",
+        "shelf"
+      ]
+    ],
+    [
+      "MoveToPreGrasp",
+      [
+        "robot",
+        "cylinder4"
+      ]
+    ],
+    [
+      "Grasp",
+      [
+        "robot",
+        "cylinder4"
+      ]
+    ],
+    [
+      "Place",
+      [
+        "robot",
+        "cylinder4",
         "shelf"
       ]
     ],
@@ -176,160 +176,54 @@
     "cylinder3": {
       "layer": 1,
       "section": "short",
-      "x_offset": -0.1744,
-      "y_offset": -0.0413
+      "x_offset": -0.182,
+      "y_offset": -0.0441
     },
     "cylinder5": {
       "layer": 1,
       "section": "short",
-      "x_offset": -0.0423,
-      "y_offset": -0.0592
-    },
-    "cylinder4": {
-      "layer": 1,
-      "section": "short",
-      "x_offset": 0.0907,
-      "y_offset": -0.0471
+      "x_offset": -0.0582,
+      "y_offset": -0.0456
     },
     "cylinder0": {
       "layer": 0,
       "section": "tall",
-      "x_offset": -0.1814,
-      "y_offset": -0.0446
+      "x_offset": -0.1712,
+      "y_offset": -0.0551
+    },
+    "cylinder4": {
+      "layer": 1,
+      "section": "short",
+      "x_offset": 0.0709,
+      "y_offset": -0.0526
     },
     "cylinder2": {
       "layer": 0,
       "section": "tall",
-      "x_offset": -0.0453,
-      "y_offset": -0.0423
+      "x_offset": -0.0419,
+      "y_offset": -0.0484
     },
     "cylinder1": {
       "layer": 0,
       "section": "tall",
-      "x_offset": 0.0809,
-      "y_offset": -0.0463
+      "x_offset": 0.0957,
+      "y_offset": -0.0488
     }
   },
   "warnings": [],
   "meta": {
     "scene": "scenes/lab_cylinders",
     "checkpoint": "/Users/tom/alphatamp/experiments/spectre/restock3d_deploy/checkpoint/best.pt",
-    "winning_skeleton_idx": 223,
-    "attempts_to_first_success": 113,
+    "winning_skeleton_idx": 225,
+    "attempts_to_first_success": 7,
     "attempt_order": [
-      178,
-      197,
-      162,
-      264,
-      207,
-      2,
-      199,
-      15,
-      88,
-      124,
-      175,
-      208,
-      87,
-      46,
-      36,
-      25,
-      1,
-      106,
-      99,
-      43,
-      173,
-      252,
-      293,
-      285,
-      33,
-      172,
-      7,
-      44,
-      16,
-      120,
-      103,
-      37,
-      91,
-      154,
-      170,
-      139,
-      290,
-      141,
-      281,
-      245,
-      49,
-      296,
-      243,
-      190,
-      71,
-      145,
-      132,
-      157,
-      249,
-      193,
-      31,
-      118,
-      238,
-      18,
-      265,
-      94,
-      129,
       269,
-      113,
-      13,
-      242,
-      237,
-      200,
-      272,
-      102,
-      24,
-      83,
-      270,
-      114,
-      20,
-      158,
-      30,
-      55,
-      276,
-      142,
-      107,
-      117,
-      266,
-      101,
-      196,
-      112,
-      56,
-      271,
-      115,
-      119,
-      273,
-      256,
-      212,
-      130,
-      0,
-      204,
-      143,
-      156,
-      206,
-      136,
-      14,
-      74,
-      239,
-      135,
-      72,
-      127,
-      202,
-      259,
-      241,
-      188,
       155,
-      48,
-      209,
-      257,
-      211,
-      247,
-      236,
-      223
+      278,
+      143,
+      124,
+      3,
+      225
     ],
     "K_max": 300,
     "r_cap_s": 600.0
