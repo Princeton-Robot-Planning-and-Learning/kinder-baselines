@@ -8,14 +8,11 @@ import kinder
 import numpy as np
 import pytest
 from bilevel_planning.structs import RelationalAbstractState
-from kinder.envs.kinematic3d.cylinder_shelf3d import (
-    CylinderShelf3DEnv,
-    CylinderShelf3DEnvConfig,
-)
+from kinder.envs.kinematic3d.cylinder_shelf3d import CylinderShelf3DEnv
 from kinder_models.structs import SkillCall
-from pybullet_helpers.geometry import Pose, SE2Pose
 from relational_structs import GroundAtom
 
+from kinder_bilevel_planning import restock_scene
 from kinder_bilevel_planning.agent import BilevelPlanningAgent
 from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 from kinder_bilevel_planning.injection import (
@@ -219,54 +216,13 @@ def test_cylinder_shelf3d_plans_with_base_clearance():
 def _real_restock_config_and_params():
     """The measured physical restock scene plus the fixed per-cylinder parameters a
     high-level planner would inject (see test_injected_skeleton...)."""
-    board_half = 0.0127 / 2
-    deep_center = (0.9075, 1.49)
-    shallow_center, shallow_yaw = (0.40, 1.28), 0.25
-
-    def zigzag(center, yaw, pitch, dy):
-        out = []
-        for lx, ly in [(-pitch, -dy), (0.0, dy), (pitch, -dy)]:
-            c, s = np.cos(yaw), np.sin(yaw)
-            out.append((center[0] + c * lx - s * ly, center[1] + s * lx + c * ly))
-        return out
-
-    spots = zigzag(deep_center, 0.0, 0.13, 0.06) + zigzag(
-        shallow_center, shallow_yaw, 0.13, 0.07
-    )
-    config = CylinderShelf3DEnvConfig(
-        shelf_pose=Pose((1.63, 1.51, 0.0)),
-        shelf_layer_zs=(0.100 - board_half, 0.538 - board_half, 0.800 - board_half),
-        cylinder_heights=(0.29, 0.208, 0.233, 0.12, 0.125, 0.10),
-        cylinder_radii=(0.0375, 0.0375, 0.0375, 0.0375, 0.035, 0.0325),
-        boxes=(
-            (0.71, 1.105, 1.34125, 1.63875, 0.215),
-            (0.20, 0.60, 1.12, 1.44, 0.115, shallow_yaw),
-        ),
-        cylinder_init_regions=tuple((x, x, y, y) for x, y in spots),
-        robot_base_home_pose=SE2Pose(1.48, 0.67, 1.54),
-        robot_base_pose_lower_bound=SE2Pose(-0.2, -0.2, -np.pi),
-        robot_base_pose_upper_bound=SE2Pose(2.0, 2.0, np.pi),
-        x_lb=-0.2,
-        x_ub=2.0,
-        y_lb=-0.2,
-        y_ub=2.0,
-    )
-    pitch45 = np.deg2rad(45)
-    grasp_params = [
-        (pitch45, 0.03), (pitch45, 0.05), (pitch45, 0.03),
-        (pitch45, 0.015), (pitch45, 0.05), (pitch45, 0.015),
-    ]
-    # Staging rot pi/2 parks the base south of the cylinder, heading at it; the
-    # shallow box is set down rotated by 0.25, so its cylinders are approached
-    # along the box's own normal (pi/2 + 0.25) and the chassis aligns with it.
-    move_params = [
-        (0.83, np.pi / 2), (0.88, np.pi / 2), (0.83, np.pi / 2),
-        (0.72, np.pi / 2 + shallow_yaw), (0.78, np.pi / 2 + shallow_yaw),
-        (0.78, np.pi / 2 + shallow_yaw),
-    ]
+    config = restock_scene.real_restock_config()
+    grasp_params = restock_scene.real_restock_grasp_params()
+    move_params = restock_scene.real_restock_move_params()
+    y, d = restock_scene.PLACE_Y_OFFSET, restock_scene.PLACE_BASE_DISTANCE
     place_params = [
-        (-0.13, -0.05, 0.80, 0), (0.0, -0.05, 0.80, 0), (0.13, -0.05, 0.80, 0),
-        (-0.13, -0.05, 0.80, 1), (0.0, -0.05, 0.80, 1), (0.13, -0.05, 0.80, 1),
+        (-0.13, y, d, 0), (0.0, y, d, 0), (0.13, y, d, 0),
+        (-0.13, y, d, 1), (0.0, y, d, 1), (0.13, y, d, 1),
     ]
     return config, grasp_params, move_params, place_params
 
