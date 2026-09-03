@@ -16,7 +16,10 @@ dependencies = [
    "h5py",
    "flask-socketio",
    "opencv-python>=4.9.0",
-   "kindergarden>=0.2.4",
+   # Git-pinned: the real-restock scene needs CylinderShelf3D features merged in
+   # kindergarden #173 but not yet released. Move back to a plain version pin at
+   # the next kindergarden release.
+   "kindergarden @ git+https://github.com/Princeton-Robot-Planning-and-Learning/kindergarden.git@582aaeb6fd96d1d9a56b4cf02d0061b8e6ce6df5",
    "pybullet_helpers>=0.1.2",
    "relational_structs>=0.0.1",
    "bilevel_planning>=0.1.2",
