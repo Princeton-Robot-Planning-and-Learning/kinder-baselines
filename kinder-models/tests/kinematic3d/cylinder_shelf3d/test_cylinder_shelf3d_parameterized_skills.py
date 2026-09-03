@@ -13,7 +13,7 @@ from kinder.envs.kinematic3d.cylinder_shelf3d import (
     CylinderShelf3DEnvConfig,
     ObjectCentricCylinderShelf3DEnv,
 )
-from pybullet_helpers.geometry import SE2Pose
+from pybullet_helpers.geometry import Pose, SE2Pose
 from relational_structs.spaces import ObjectCentricBoxSpace
 
 from kinder_models.kinematic3d.cylinder_shelf3d.parameterized_skills import (
@@ -425,8 +425,6 @@ def _real_restock_config():
     spots = zigzag(deep_center, 0.0, 0.13, 0.06) + zigzag(
         shallow_center, shallow_yaw, 0.13, 0.07
     )
-    from pybullet_helpers.geometry import Pose
-
     return CylinderShelf3DEnvConfig(
         shelf_pose=Pose((1.63, 1.51, 0.0)),
         shelf_layer_zs=(
