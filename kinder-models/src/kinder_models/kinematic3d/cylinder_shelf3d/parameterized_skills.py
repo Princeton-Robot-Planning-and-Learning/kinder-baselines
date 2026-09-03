@@ -142,6 +142,14 @@ PLACE_INSERTION_STANDOFF = 0.11
 # descent leg (roughly the old diagonal approach's entry height, so the
 # reach retains its proven geometry; only the descent and insertion differ).
 PLACE_DESCENT_HEIGHT = 0.05
+# A single negligible base rotation emitted between the place approach's
+# descent and its level insertion. Downstream executors split trajectories
+# into base-only/arm-only segments, so this marker turns the insertion
+# (with its release and retreat) into its own arm segment that they can
+# gate separately — e.g. an operator confirmation while the arm holds at
+# the pre-place, right before the can enters the shelf. ~0.1 degree: far
+# below any staging tolerance, executed as an imperceptible twitch.
+_INSERTION_SEGMENT_TWITCH = 2e-3
 # Spacing of the continuation targets along the in-plane reach path.
 PLANAR_PATH_STEP = 0.025
 # Interpolation points the base motion planner collision-checks per RRT
@@ -1046,11 +1054,15 @@ class GroundPlaceController(
         )
         self._current_params: np.ndarray | None = None
         self._current_approach_plan: list[JointPositions] | None = None
+        self._current_insertion_plan: list[JointPositions] | None = None
+        self._insertion_configurations: list[JointPositions] | None = None
         self._current_retract_plan: list[JointPositions] | None = None
         self._approach_configurations: list[JointPositions] | None = None
         self._current_plan: list[SE2Pose] | None = None
         self._current_state: ObjectCentricState | None = None
         self._navigated: bool = False
+        self._staged: bool = False
+        self._marker_sent: bool = False
         self._approached: bool = False
         self._opened_gripper: bool = False
         self._lifted: bool = False
@@ -1157,7 +1169,7 @@ class GroundPlaceController(
 
             return action
 
-        if self._navigated and not self._approached:
+        if self._navigated and not self._staged:
             # Generate the planar approach plan if it doesn't exist yet.
             if self._current_approach_plan is None:
                 self._sim.set_state(self._current_state)
@@ -1269,19 +1281,10 @@ class GroundPlaceController(
                     pre_place_position,
                     end_pitch=place_pitch,
                 )
-                insertion = np.array(place_pose.position) - pre_place_position
-                num_insert = max(
-                    3, int(np.ceil(np.linalg.norm(insertion) / PLANAR_PATH_STEP))
-                )
-                for step in range(1, num_insert + 1):
-                    position = (
-                        pre_place_position + (step / num_insert) * insertion
-                    )
-                    path_targets.append((position, place_pitch))
                 extra_collision_ids = (
                     self._sim._get_collision_object_ids()  # pylint: disable=protected-access
                 ) - {grasped_object_id}
-                approach_plan = _plan_planar_reach(
+                staging_plan = _plan_planar_reach(
                     self._sim,
                     list(self._current_state.joint_positions),
                     path_targets,
@@ -1289,14 +1292,38 @@ class GroundPlaceController(
                     held_object_id=grasped_object_id,
                     held_object_transform=grasped_object_transform,
                 )
-                # Remember the approach so the retreat can replay it in
-                # reverse.
-                self._approach_configurations = approach_plan
+                # The level insertion is planned as its own leg (continuing
+                # from the staging plan's last configuration) and streamed
+                # as its own phase, separated from the staging by the
+                # segment-marker twitch below.
+                insertion = np.array(place_pose.position) - pre_place_position
+                num_insert = max(
+                    3, int(np.ceil(np.linalg.norm(insertion) / PLANAR_PATH_STEP))
+                )
+                insertion_targets = [
+                    (
+                        pre_place_position + (step / num_insert) * insertion,
+                        place_pitch,
+                    )
+                    for step in range(1, num_insert + 1)
+                ]
+                insertion_plan = _plan_planar_reach(
+                    self._sim,
+                    list(staging_plan[-1][:7]),
+                    insertion_targets,
+                    extra_collision_ids=extra_collision_ids,
+                    held_object_id=grasped_object_id,
+                    held_object_transform=grasped_object_transform,
+                )
+                self._insertion_configurations = insertion_plan
+                # Remember the whole approach so the retreat can replay it
+                # in reverse.
+                self._approach_configurations = staging_plan + insertion_plan
 
                 current_joints = extend_joints_to_include_fingers(
                     list(self._current_state.joint_positions)
                 )
-                joint_plan = [current_joints] + approach_plan
+                joint_plan = [current_joints] + staging_plan
 
                 # Remap the plan to ensure we stay within action limits.
                 joint_plan = remap_joint_position_plan_to_constant_distance(
@@ -1311,7 +1338,7 @@ class GroundPlaceController(
             assert self._current_approach_plan is not None
             target_joints = self._current_approach_plan.pop(0)
             if len(self._current_approach_plan) == 0:
-                self._approached = True
+                self._staged = True
             # Compute delta joint positions.
             delta_lst = get_jointwise_difference(
                 self._joint_infos,
@@ -1320,6 +1347,41 @@ class GroundPlaceController(
             )
 
             # Create action: [base_x, base_y, base_rot, joint1, ..., joint7, gripper].
+            action_lst = [0.0] * 3 + delta_lst + [0.0]
+            action = np.array(action_lst, dtype=np.float32)
+
+            return action
+
+        if self._staged and not self._marker_sent:
+            # The segment-marker twitch (see _INSERTION_SEGMENT_TWITCH): a
+            # base-only action between the staging and the insertion, so
+            # downstream base/arm segmenters put the insertion in its own
+            # arm segment.
+            self._marker_sent = True
+            action_lst = [0.0, 0.0, _INSERTION_SEGMENT_TWITCH] + [0.0] * 8
+            return np.array(action_lst, dtype=np.float32)
+
+        if self._marker_sent and not self._approached:
+            if self._current_insertion_plan is None:
+                assert self._insertion_configurations is not None
+                current_joints = extend_joints_to_include_fingers(
+                    list(self._current_state.joint_positions)
+                )
+                joint_plan = [current_joints] + self._insertion_configurations
+                joint_plan = remap_joint_position_plan_to_constant_distance(
+                    joint_plan,
+                    self._sim.robot.arm,
+                    max_distance=self._sim.config.max_action_mag / 2,
+                )
+                self._current_insertion_plan = joint_plan[1:]
+            target_joints = self._current_insertion_plan.pop(0)
+            if len(self._current_insertion_plan) == 0:
+                self._approached = True
+            delta_lst = get_jointwise_difference(
+                self._joint_infos,
+                target_joints[:7],
+                self._current_state.joint_positions,
+            )
             action_lst = [0.0] * 3 + delta_lst + [0.0]
             action = np.array(action_lst, dtype=np.float32)
 
