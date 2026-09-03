@@ -127,11 +127,21 @@ PRE_GRASP_POSITION_TOL = 0.03
 # How far the lift-then-tuck carry (see _plan_stow) may pull the held cylinder
 # back toward the base before stopping (it also stops at the first collision).
 _CARRY_TUCK_MAX = 0.45
-# The place approach's pre-place waypoint: backed off along the shelf
-# approach axis and lifted slightly, so the final segment slides the
-# cylinder in over the shelf layer.
-PRE_PLACE_BACKOFF = 0.10
-PRE_PLACE_LIFT = 0.02
+# The place approach's pre-place waypoint: at exactly the release height,
+# backed off horizontally along the approach heading so the held cylinder
+# clears the shelf's front face (0.15 m in front of the board centre; the
+# release pose is ~0.10 m behind it) before the insertion starts. The
+# insertion leg is then purely horizontal — a height mis-estimate cannot
+# drive the wrist (and its camera) down onto a board — and all descent
+# happens outside the shelf. 0.11 leaves the widest can ~2 cm outside the
+# front face; backing off further pulls the low pre-place close enough to
+# the body that the planar solve folds the elbow past its limit (the
+# default scene's sampled draws hit it before the real boxed scene does).
+PLACE_INSERTION_STANDOFF = 0.11
+# Height above the pre-place where the reach leg hands over to the vertical
+# descent leg (roughly the old diagonal approach's entry height, so the
+# reach retains its proven geometry; only the descent and insertion differ).
+PLACE_DESCENT_HEIGHT = 0.05
 # Spacing of the continuation targets along the in-plane reach path.
 PLANAR_PATH_STEP = 0.025
 # Interpolation points the base motion planner collision-checks per RRT
@@ -264,7 +274,8 @@ def _plan_planar_reach(
             for value, low, high in zip(solution, lower, upper)
         ):
             raise TrajectorySamplingFailure(
-                "Planar reach solution exceeds a joint limit"
+                f"Planar reach solution exceeds a joint limit at "
+                f"{np.round(position, 3)} pitch {pitch:.2f}"
             )
         full_joints = extend_joints_to_include_fingers(solution)
         arm.set_joints(full_joints)
@@ -1226,23 +1237,47 @@ class GroundPlaceController(
                 place_pitch = _approach_pitch(place_rotation)
                 approach_world = place_rotation[:, 2]
 
-                # Back off along the (near-horizontal) approach axis, plus
-                # a little extra height, for the pre-place waypoint.
+                # The pre-place waypoint sits at the release height, backed
+                # off along the approach heading's horizontal projection, so
+                # leg two of the reach is a level insertion (see
+                # PLACE_INSERTION_STANDOFF).
+                approach_flat = np.array(
+                    [approach_world[0], approach_world[1], 0.0]
+                )
+                approach_flat /= np.linalg.norm(approach_flat)
                 pre_place_position = (
                     np.array(place_pose.position)
-                    - PRE_PLACE_BACKOFF * approach_world
-                    + np.array([0.0, 0.0, PRE_PLACE_LIFT])
+                    - PLACE_INSERTION_STANDOFF * approach_flat
                 )
 
                 ee_start = self._sim.robot.arm.get_end_effector_pose()
                 start_pitch = _approach_pitch(matrix_from_quat(ee_start.orientation))
+                # Three legs: reach-and-pitch to a raised point over the
+                # pre-place, descend vertically to the pre-place (still
+                # outside the shelf), then insert level (see
+                # PLACE_INSERTION_STANDOFF). The reach leg ends above the
+                # pre-place because a fully pitched wrist at the pre-place's
+                # (low, mid-extension) position folds the elbow when
+                # approached diagonally from the carry posture.
+                descent_top = pre_place_position + np.array(
+                    [0.0, 0.0, PLACE_DESCENT_HEIGHT]
+                )
                 path_targets, _ = _interpolated_path_targets(
                     np.array(ee_start.position),
                     start_pitch,
+                    descent_top,
                     pre_place_position,
-                    np.array(place_pose.position),
                     end_pitch=place_pitch,
                 )
+                insertion = np.array(place_pose.position) - pre_place_position
+                num_insert = max(
+                    3, int(np.ceil(np.linalg.norm(insertion) / PLANAR_PATH_STEP))
+                )
+                for step in range(1, num_insert + 1):
+                    position = (
+                        pre_place_position + (step / num_insert) * insertion
+                    )
+                    path_targets.append((position, place_pitch))
                 extra_collision_ids = (
                     self._sim._get_collision_object_ids()  # pylint: disable=protected-access
                 ) - {grasped_object_id}
