@@ -127,11 +127,29 @@ PRE_GRASP_POSITION_TOL = 0.03
 # How far the lift-then-tuck carry (see _plan_stow) may pull the held cylinder
 # back toward the base before stopping (it also stops at the first collision).
 _CARRY_TUCK_MAX = 0.45
-# The place approach's pre-place waypoint: backed off along the shelf
-# approach axis and lifted slightly, so the final segment slides the
-# cylinder in over the shelf layer.
-PRE_PLACE_BACKOFF = 0.10
-PRE_PLACE_LIFT = 0.02
+# The place approach's pre-place waypoint: at exactly the release height,
+# backed off horizontally along the approach heading so the held cylinder
+# clears the shelf's front face (0.15 m in front of the board centre; the
+# release pose is ~0.10 m behind it) before the insertion starts. The
+# insertion leg is then purely horizontal — a height mis-estimate cannot
+# drive the wrist (and its camera) down onto a board — and all descent
+# happens outside the shelf. 0.11 leaves the widest can ~2 cm outside the
+# front face; backing off further pulls the low pre-place close enough to
+# the body that the planar solve folds the elbow past its limit (the
+# default scene's sampled draws hit it before the real boxed scene does).
+PLACE_INSERTION_STANDOFF = 0.11
+# Height above the pre-place where the reach leg hands over to the vertical
+# descent leg (roughly the old diagonal approach's entry height, so the
+# reach retains its proven geometry; only the descent and insertion differ).
+PLACE_DESCENT_HEIGHT = 0.05
+# A single negligible base rotation emitted between the place approach's
+# descent and its level insertion. Downstream executors split trajectories
+# into base-only/arm-only segments, so this marker turns the insertion
+# (with its release and retreat) into its own arm segment that they can
+# gate separately — e.g. an operator confirmation while the arm holds at
+# the pre-place, right before the can enters the shelf. ~0.1 degree: far
+# below any staging tolerance, executed as an imperceptible twitch.
+_INSERTION_SEGMENT_TWITCH = 2e-3
 # Spacing of the continuation targets along the in-plane reach path.
 PLANAR_PATH_STEP = 0.025
 # Interpolation points the base motion planner collision-checks per RRT
@@ -264,7 +282,8 @@ def _plan_planar_reach(
             for value, low, high in zip(solution, lower, upper)
         ):
             raise TrajectorySamplingFailure(
-                "Planar reach solution exceeds a joint limit"
+                f"Planar reach solution exceeds a joint limit at "
+                f"{np.round(position, 3)} pitch {pitch:.2f}"
             )
         full_joints = extend_joints_to_include_fingers(solution)
         arm.set_joints(full_joints)
@@ -1035,11 +1054,15 @@ class GroundPlaceController(
         )
         self._current_params: np.ndarray | None = None
         self._current_approach_plan: list[JointPositions] | None = None
+        self._current_insertion_plan: list[JointPositions] | None = None
+        self._insertion_configurations: list[JointPositions] | None = None
         self._current_retract_plan: list[JointPositions] | None = None
         self._approach_configurations: list[JointPositions] | None = None
         self._current_plan: list[SE2Pose] | None = None
         self._current_state: ObjectCentricState | None = None
         self._navigated: bool = False
+        self._staged: bool = False
+        self._marker_sent: bool = False
         self._approached: bool = False
         self._opened_gripper: bool = False
         self._lifted: bool = False
@@ -1146,7 +1169,7 @@ class GroundPlaceController(
 
             return action
 
-        if self._navigated and not self._approached:
+        if self._navigated and not self._staged:
             # Generate the planar approach plan if it doesn't exist yet.
             if self._current_approach_plan is None:
                 self._sim.set_state(self._current_state)
@@ -1226,27 +1249,42 @@ class GroundPlaceController(
                 place_pitch = _approach_pitch(place_rotation)
                 approach_world = place_rotation[:, 2]
 
-                # Back off along the (near-horizontal) approach axis, plus
-                # a little extra height, for the pre-place waypoint.
+                # The pre-place waypoint sits at the release height, backed
+                # off along the approach heading's horizontal projection, so
+                # leg two of the reach is a level insertion (see
+                # PLACE_INSERTION_STANDOFF).
+                approach_flat = np.array(
+                    [approach_world[0], approach_world[1], 0.0]
+                )
+                approach_flat /= np.linalg.norm(approach_flat)
                 pre_place_position = (
                     np.array(place_pose.position)
-                    - PRE_PLACE_BACKOFF * approach_world
-                    + np.array([0.0, 0.0, PRE_PLACE_LIFT])
+                    - PLACE_INSERTION_STANDOFF * approach_flat
                 )
 
                 ee_start = self._sim.robot.arm.get_end_effector_pose()
                 start_pitch = _approach_pitch(matrix_from_quat(ee_start.orientation))
+                # Three legs: reach-and-pitch to a raised point over the
+                # pre-place, descend vertically to the pre-place (still
+                # outside the shelf), then insert level (see
+                # PLACE_INSERTION_STANDOFF). The reach leg ends above the
+                # pre-place because a fully pitched wrist at the pre-place's
+                # (low, mid-extension) position folds the elbow when
+                # approached diagonally from the carry posture.
+                descent_top = pre_place_position + np.array(
+                    [0.0, 0.0, PLACE_DESCENT_HEIGHT]
+                )
                 path_targets, _ = _interpolated_path_targets(
                     np.array(ee_start.position),
                     start_pitch,
+                    descent_top,
                     pre_place_position,
-                    np.array(place_pose.position),
                     end_pitch=place_pitch,
                 )
                 extra_collision_ids = (
                     self._sim._get_collision_object_ids()  # pylint: disable=protected-access
                 ) - {grasped_object_id}
-                approach_plan = _plan_planar_reach(
+                staging_plan = _plan_planar_reach(
                     self._sim,
                     list(self._current_state.joint_positions),
                     path_targets,
@@ -1254,14 +1292,38 @@ class GroundPlaceController(
                     held_object_id=grasped_object_id,
                     held_object_transform=grasped_object_transform,
                 )
-                # Remember the approach so the retreat can replay it in
-                # reverse.
-                self._approach_configurations = approach_plan
+                # The level insertion is planned as its own leg (continuing
+                # from the staging plan's last configuration) and streamed
+                # as its own phase, separated from the staging by the
+                # segment-marker twitch below.
+                insertion = np.array(place_pose.position) - pre_place_position
+                num_insert = max(
+                    3, int(np.ceil(np.linalg.norm(insertion) / PLANAR_PATH_STEP))
+                )
+                insertion_targets = [
+                    (
+                        pre_place_position + (step / num_insert) * insertion,
+                        place_pitch,
+                    )
+                    for step in range(1, num_insert + 1)
+                ]
+                insertion_plan = _plan_planar_reach(
+                    self._sim,
+                    list(staging_plan[-1][:7]),
+                    insertion_targets,
+                    extra_collision_ids=extra_collision_ids,
+                    held_object_id=grasped_object_id,
+                    held_object_transform=grasped_object_transform,
+                )
+                self._insertion_configurations = insertion_plan
+                # Remember the whole approach so the retreat can replay it
+                # in reverse.
+                self._approach_configurations = staging_plan + insertion_plan
 
                 current_joints = extend_joints_to_include_fingers(
                     list(self._current_state.joint_positions)
                 )
-                joint_plan = [current_joints] + approach_plan
+                joint_plan = [current_joints] + staging_plan
 
                 # Remap the plan to ensure we stay within action limits.
                 joint_plan = remap_joint_position_plan_to_constant_distance(
@@ -1276,7 +1338,7 @@ class GroundPlaceController(
             assert self._current_approach_plan is not None
             target_joints = self._current_approach_plan.pop(0)
             if len(self._current_approach_plan) == 0:
-                self._approached = True
+                self._staged = True
             # Compute delta joint positions.
             delta_lst = get_jointwise_difference(
                 self._joint_infos,
@@ -1285,6 +1347,41 @@ class GroundPlaceController(
             )
 
             # Create action: [base_x, base_y, base_rot, joint1, ..., joint7, gripper].
+            action_lst = [0.0] * 3 + delta_lst + [0.0]
+            action = np.array(action_lst, dtype=np.float32)
+
+            return action
+
+        if self._staged and not self._marker_sent:
+            # The segment-marker twitch (see _INSERTION_SEGMENT_TWITCH): a
+            # base-only action between the staging and the insertion, so
+            # downstream base/arm segmenters put the insertion in its own
+            # arm segment.
+            self._marker_sent = True
+            action_lst = [0.0, 0.0, _INSERTION_SEGMENT_TWITCH] + [0.0] * 8
+            return np.array(action_lst, dtype=np.float32)
+
+        if self._marker_sent and not self._approached:
+            if self._current_insertion_plan is None:
+                assert self._insertion_configurations is not None
+                current_joints = extend_joints_to_include_fingers(
+                    list(self._current_state.joint_positions)
+                )
+                joint_plan = [current_joints] + self._insertion_configurations
+                joint_plan = remap_joint_position_plan_to_constant_distance(
+                    joint_plan,
+                    self._sim.robot.arm,
+                    max_distance=self._sim.config.max_action_mag / 2,
+                )
+                self._current_insertion_plan = joint_plan[1:]
+            target_joints = self._current_insertion_plan.pop(0)
+            if len(self._current_insertion_plan) == 0:
+                self._approached = True
+            delta_lst = get_jointwise_difference(
+                self._joint_infos,
+                target_joints[:7],
+                self._current_state.joint_positions,
+            )
             action_lst = [0.0] * 3 + delta_lst + [0.0]
             action = np.array(action_lst, dtype=np.float32)
 
