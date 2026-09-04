@@ -151,14 +151,14 @@ PLACE_RELEASE_FRACTION = 0.8
 # descent leg (roughly the old diagonal approach's entry height, so the
 # reach retains its proven geometry; only the descent and insertion differ).
 PLACE_DESCENT_HEIGHT = 0.05
-# A single negligible base rotation emitted between the place approach's
-# descent and its level insertion. Downstream executors split trajectories
-# into base-only/arm-only segments, so this marker turns the insertion
-# (with its release and retreat) into its own arm segment that they can
-# gate separately — e.g. an operator confirmation while the arm holds at
-# the pre-place, right before the can enters the shelf. ~0.1 degree: far
-# below any staging tolerance, executed as an imperceptible twitch.
-_INSERTION_SEGMENT_TWITCH = 2e-3
+# A single negligible base rotation emitted at phase boundaries the
+# downstream executors should see as their own segments: before the place's
+# level insertion, and before the grasp's final approach (so the grasp
+# segment starts exactly at the pre-grasp, where a wrist-camera correction
+# or operator gate can act). Executors split trajectories into
+# base-only/arm-only segments, so this marker forces the boundary.
+# ~0.1 degree: far below any staging tolerance, an imperceptible twitch.
+_SEGMENT_MARKER_TWITCH = 2e-3
 # Spacing of the continuation targets along the in-plane reach path.
 PLANAR_PATH_STEP = 0.025
 # Interpolation points the base motion planner collision-checks per RRT
@@ -891,6 +891,7 @@ class GroundGraspController(
         self._current_stow_plan: list[JointPositions] | None = None
         self._reach_configurations: list[JointPositions] | None = None
         self._current_state: ObjectCentricState | None = None
+        self._marker_sent: bool = False
         self._approached: bool = False
         self._closed_gripper: bool = False
         self._lifted: bool = False
@@ -907,6 +908,7 @@ class GroundGraspController(
         self._current_stow_plan = None
         self._reach_configurations = None
         self._current_state = x
+        self._marker_sent = False
         self._approached = False
         self._closed_gripper = False
         self._lifted = False
@@ -918,6 +920,14 @@ class GroundGraspController(
     def step(self) -> np.ndarray:
         assert self._current_state is not None
         assert isinstance(self._current_state, CylinderShelf3DObjectCentricState)
+
+        if not self._marker_sent:
+            # Segment-marker twitch (see _SEGMENT_MARKER_TWITCH): the grasp's
+            # approach + close + stow become their own arm segment starting
+            # at the pre-grasp pose.
+            self._marker_sent = True
+            action_lst = [0.0, 0.0, _SEGMENT_MARKER_TWITCH] + [0.0] * 8
+            return np.array(action_lst, dtype=np.float32)
 
         if not self._approached:
             # Generate the final approach if it doesn't exist yet: the
@@ -1364,12 +1374,12 @@ class GroundPlaceController(
             return action
 
         if self._staged and not self._marker_sent:
-            # The segment-marker twitch (see _INSERTION_SEGMENT_TWITCH): a
+            # The segment-marker twitch (see _SEGMENT_MARKER_TWITCH): a
             # base-only action between the staging and the insertion, so
             # downstream base/arm segmenters put the insertion in its own
             # arm segment.
             self._marker_sent = True
-            action_lst = [0.0, 0.0, _INSERTION_SEGMENT_TWITCH] + [0.0] * 8
+            action_lst = [0.0, 0.0, _SEGMENT_MARKER_TWITCH] + [0.0] * 8
             return np.array(action_lst, dtype=np.float32)
 
         if self._marker_sent and not self._approached:
