@@ -61,6 +61,11 @@ def real_restock_config() -> CylinderShelf3DEnvConfig:
         ),
         cylinder_init_regions=tuple((x, x, y, y) for x, y in spots),
         robot_base_home_pose=SE2Pose(1.48, 0.67, 1.54),
+        # A generous placement-registration distance: the place skill rides
+        # (and releases) the can PLACE_RELEASE_FRACTION of this above the
+        # board, and on the real robot a heavy jar's sag in the fingers plus
+        # arm droop under load eat a centimetre of that margin.
+        min_placement_dist=0.02,
         robot_base_pose_lower_bound=SE2Pose(-0.2, -0.2, -np.pi),
         robot_base_pose_upper_bound=SE2Pose(2.0, 2.0, np.pi),
         x_lb=-0.2,

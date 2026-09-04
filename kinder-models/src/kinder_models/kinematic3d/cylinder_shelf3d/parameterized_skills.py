@@ -138,6 +138,15 @@ _CARRY_TUCK_MAX = 0.45
 # the body that the planar solve folds the elbow past its limit (the
 # default scene's sampled draws hit it before the real boxed scene does).
 PLACE_INSERTION_STANDOFF = 0.11
+# The cylinder bottom rides this fraction of the env's min_placement_dist
+# above the board during the level insertion and at release (it drops the
+# difference when the gripper opens; the env registers the release as a
+# placement only within min_placement_dist of the board). Sim only needs a
+# few millimetres, but on the real robot a heavy jar sags in the fingers
+# and the arm droops under load, so a scene meant for real execution
+# should raise its config's min_placement_dist (the real restock scene
+# uses 0.02, riding ~1.6 cm) to keep the margin.
+PLACE_RELEASE_FRACTION = 0.8
 # Height above the pre-place where the reach leg hands over to the vertical
 # descent leg (roughly the old diagonal approach's entry height, so the
 # reach retains its proven geometry; only the descent and insertion differ).
@@ -1224,7 +1233,9 @@ class GroundPlaceController(
                 desired_object_position = (
                     target_surface_pose.position[0] + self._current_params[0],
                     target_surface_pose.position[1] - 0.05 + self._current_params[1],
-                    target_surface_z + half_height + 0.004,
+                    target_surface_z
+                    + half_height
+                    + PLACE_RELEASE_FRACTION * self._sim.config.min_placement_dist,
                 )
 
                 # The cylinder was grasped from an arbitrary angle around
