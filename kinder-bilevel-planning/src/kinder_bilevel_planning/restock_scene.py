@@ -30,10 +30,12 @@ PLACE_Y_OFFSET = -0.05
 PLACE_BASE_DISTANCE = 0.80
 CARRY_LIFT_Z = 0.27
 #: Per-cylinder height (m) the bottom rides above the board during the level
-#: insertion and at release. The shorts ride 3 cm higher than the base
-#: margin: the real side grasp lands high on them, so they hang lower than
-#: modelled and scraped the board at the base margin (observed 2026-09-05).
-PLACE_RELEASE_HEIGHTS = (0.016, 0.016, 0.016, 0.046, 0.046, 0.046)
+#: insertion and at release. The real side grasp lands ~3 cm high on the
+#: shorts (observed 2026-09-05), so they hang lower than modelled; the
+#: compensation splits 2 cm into a deeper commanded grasp (see
+#: real_restock_grasp_params) and 1 cm here — the level 15-degree wrist
+#: runs out of workspace above ~0.03 of ride on the upper board.
+PLACE_RELEASE_HEIGHTS = (0.016, 0.016, 0.016, 0.026, 0.026, 0.026)
 
 
 def _zigzag(
@@ -70,7 +72,7 @@ def real_restock_config() -> CylinderShelf3DEnvConfig:
         # gripper would open with the can "too far" above the board). Only
         # the place skill ever opens the gripper, so a loose threshold has
         # no other effect.
-        min_placement_dist=0.05,
+        min_placement_dist=0.03,
         robot_base_pose_lower_bound=SE2Pose(-0.2, -0.2, -np.pi),
         robot_base_pose_upper_bound=SE2Pose(2.0, 2.0, np.pi),
         x_lb=-0.2,
@@ -85,17 +87,19 @@ def real_restock_grasp_params() -> list[tuple[float, float]]:
 
     Tall depths sit 1 cm deeper than the original sweep (the real gripper
     rode too high on the cans, 2026-09-04). The floor shorts take the plain
-    side grasp at mid-can; their staging distance must be 0.83 (closer
-    stagings cannot reach the low grasp height — swept 2026-09-05)."""
+    side grasp, commanded 2 cm below mid-can because the real fingers land
+    ~2 cm high there (the rest of that error is compensated at the place;
+    see PLACE_RELEASE_HEIGHTS). Their staging distance must be 0.83 —
+    closer stagings cannot reach the low grasp height (swept 2026-09-05)."""
     pitch45 = np.deg2rad(45)
     pitch15 = np.deg2rad(15)
     return [
         (pitch45, 0.04),
         (pitch45, 0.06),
         (pitch45, 0.04),
-        (pitch15, 0.03),
-        (pitch15, 0.03),
-        (pitch15, 0.03),
+        (pitch15, 0.05),
+        (pitch15, 0.05),
+        (pitch15, 0.05),
     ]
 
 
