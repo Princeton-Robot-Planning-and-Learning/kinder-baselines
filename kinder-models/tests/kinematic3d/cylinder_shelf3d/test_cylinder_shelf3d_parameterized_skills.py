@@ -465,9 +465,9 @@ def test_real_restock_boxed_scene_full_rollout():
         "cylinder0": (pitch, 0.03),
         "cylinder1": (pitch, 0.05),
         "cylinder2": (pitch, 0.03),
-        "cylinder3": (side, 0.03),
-        "cylinder4": (side, 0.03),
-        "cylinder5": (side, 0.03),
+        "cylinder3": (side, 0.04),
+        "cylinder4": (side, 0.04),
+        "cylinder5": (side, 0.04),
     }
     place_params = {
         # (x offset, y offset, base distance, board layer): talls -> layer 0.

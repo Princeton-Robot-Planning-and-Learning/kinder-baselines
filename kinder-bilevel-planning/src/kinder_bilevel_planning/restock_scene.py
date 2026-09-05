@@ -98,9 +98,9 @@ def real_restock_grasp_params() -> list[tuple[float, float]]:
         (pitch45, 0.04),
         (pitch45, 0.06),
         (pitch45, 0.04),
-        (pitch15, 0.03),
-        (pitch15, 0.03),
-        (pitch15, 0.03),
+        (pitch15, 0.04),
+        (pitch15, 0.04),
+        (pitch15, 0.04),
     ]
 
 
