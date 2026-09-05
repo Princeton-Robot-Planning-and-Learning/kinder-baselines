@@ -124,6 +124,12 @@ PRE_GRASP_BACKOFF = 0.10
 # How close (m) the end effector must be to the pre-grasp position for the
 # robot to count as being at the pre-grasp pose.
 PRE_GRASP_POSITION_TOL = 0.03
+# Minimum height of the pre-grasp point above the rim of the box the target
+# stands in: the pre-grasp is where corrections may swing the gripper
+# laterally (and where staging error is largest), so it must sit clear of
+# the walls. The backoff along the pitched approach axis is extended as
+# needed to reach this height.
+PRE_GRASP_RIM_CLEARANCE = 0.03
 # How far the lift-then-tuck carry (see _plan_stow) may pull the held cylinder
 # back toward the base before stopping (it also stops at the first collision).
 _CARRY_TUCK_MAX = 0.45
@@ -386,18 +392,41 @@ def _interpolated_path_targets(
 
 
 # Controllers.
+def _box_rim_above(
+    boxes: Sequence[Sequence[float]], x: float, y: float
+) -> float | None:
+    """Rim height of the box whose footprint contains ``(x, y)``, if any.
+
+    Box entries are ``(x_lo, x_hi, y_lo, y_hi, height[, yaw])`` with the
+    optional yaw about the footprint centre (the env's ``boxes`` config).
+    """
+    for box in boxes:
+        x_lo, x_hi, y_lo, y_hi, height = box[:5]
+        yaw = box[5] if len(box) > 5 else 0.0
+        cx, cy = 0.5 * (x_lo + x_hi), 0.5 * (y_lo + y_hi)
+        cos_yaw, sin_yaw = np.cos(-yaw), np.sin(-yaw)
+        dx = cos_yaw * (x - cx) - sin_yaw * (y - cy)
+        dy = sin_yaw * (x - cx) + cos_yaw * (y - cy)
+        if abs(dx) <= 0.5 * (x_hi - x_lo) and abs(dy) <= 0.5 * (y_hi - y_lo):
+            return float(height)
+    return None
+
+
 def get_grasp_positions(
     state: CylinderShelf3DObjectCentricState,
     target_name: str,
     pitch: float = SIDE_GRASP_PITCH,
     depth_below_top: float = GRASP_DEPTH_BELOW_TOP,
+    boxes: Sequence[Sequence[float]] = (),
 ) -> tuple[np.ndarray, np.ndarray]:
     """(grasp position, pre-grasp position) of the side grasp on ``target_name``.
 
     The approach is aligned with the base heading toward the cylinder so the gripper
     reaches straight out from wherever the base is around it. The grasp position is
     where the end effector sits at the grasp; the pre-grasp position is
-    PRE_GRASP_BACKOFF behind it along the approach axis.
+    PRE_GRASP_BACKOFF behind it along the approach axis — extended when the target
+    stands in one of ``boxes``, so the pre-grasp clears the rim by
+    PRE_GRASP_RIM_CLEARANCE.
     """
     cylinder_pose = state.get_object_pose(target_name)
     base_pose = state.base_pose
@@ -416,7 +445,12 @@ def get_grasp_positions(
         ]
     )
     grasp_position = grasp_point - GRASP_AXIS_STANDOFF * approach
-    pre_grasp_position = grasp_position - PRE_GRASP_BACKOFF * approach
+    backoff = PRE_GRASP_BACKOFF
+    rim = _box_rim_above(boxes, grasp_point[0], grasp_point[1])
+    if rim is not None and approach[2] < -1e-3:
+        needed = (rim + PRE_GRASP_RIM_CLEARANCE - grasp_position[2]) / (-approach[2])
+        backoff = max(backoff, needed)
+    pre_grasp_position = grasp_position - backoff * approach
     return grasp_position, pre_grasp_position
 
 
@@ -438,7 +472,8 @@ def is_at_pre_grasp(
     ee_position = np.array(sim.robot.arm.get_end_effector_pose().position)
     pitch, depth_below_top = _resolve_grasp_params(grasp_params, target_name)
     _, pre_grasp_position = get_grasp_positions(
-        state, target_name, pitch, depth_below_top
+        state, target_name, pitch, depth_below_top,
+        boxes=getattr(sim.config, "boxes", ()) or (),
     )
     return bool(
         np.linalg.norm(ee_position - pre_grasp_position) < PRE_GRASP_POSITION_TOL
@@ -461,7 +496,8 @@ def _plan_reach(
     """
     sim.set_state(state)
     grasp_position, pre_grasp_position = get_grasp_positions(
-        state, target_name, pitch, depth_below_top
+        state, target_name, pitch, depth_below_top,
+        boxes=getattr(sim.config, "boxes", ()) or (),
     )
     # The reach starts from the retract posture: joints 3, 5, 7 keep their
     # retract values throughout, so the continuation must be seeded from
