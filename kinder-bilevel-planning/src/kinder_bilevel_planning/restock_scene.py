@@ -7,13 +7,13 @@ The in-repo tests and the robot-side consumer (prpl-tidybot) both build from her
 the emitting planner (alphatamp) stages the same layout in its own frame.
 
 Scene facts (2026-09): board surfaces 0.100/0.538/0.800 m; deep box (talls) inner
-0.395 x 0.2975 m, 0.215 tall, axis-aligned; shallow box (shorts) inner 0.40 x 0.32 m,
-0.115 tall, set down rotated by 0.25 rad; cans staged in zigzag rows inside the boxes.
+0.395 x 0.2975 m, 0.215 tall, axis-aligned; the three Campbell's-size shorts stand on
+the open floor (their old shallow box is retired) in the same zigzag spots.
 
-Calibration facts: every grasp pitches 45 degrees down (the box walls rule out side
-grasps); cans whose tops sit at or below their box rim need the shallow 0.015 pinch
-depth; staging rots follow each box's own normal so the chassis aligns with it; carries
-lift to 0.27 before tucking.
+Calibration facts: the talls pitch 45 degrees down (the deep box's walls rule out side
+grasps — and that steep wrist is what justifies them not fitting the upper openings);
+the floor shorts take the plain 15-degree side grasp, which also keeps the wrist low
+under the top opening at their place; carries lift to 0.27 before tucking.
 """
 
 import numpy as np
@@ -62,10 +62,7 @@ def real_restock_config() -> CylinderShelf3DEnvConfig:
         # taller/heavier shorts made shelf clearance and grip too tight).
         cylinder_heights=(0.29, 0.208, 0.233, 0.10, 0.10, 0.10),
         cylinder_radii=(0.0375, 0.0375, 0.0375, 0.0325, 0.0325, 0.0325),
-        boxes=(
-            (0.71, 1.105, 1.34125, 1.63875, 0.215),
-            (0.20, 0.60, 1.12, 1.44, 0.115, SHALLOW_BOX_YAW),
-        ),
+        boxes=((0.71, 1.105, 1.34125, 1.63875, 0.215),),
         cylinder_init_regions=tuple((x, x, y, y) for x, y in spots),
         robot_base_home_pose=SE2Pose(1.48, 0.67, 1.54),
         # The placement-registration distance must cover the largest
@@ -87,29 +84,30 @@ def real_restock_grasp_params() -> list[tuple[float, float]]:
     """Per-cylinder (pitch, depth_below_top).
 
     Tall depths sit 1 cm deeper than the original sweep (the real gripper
-    rode too high on the cans, 2026-09-04). The shorts are Campbell's-size
-    cans whose tops sit below the shallow box rim: in sim any grasp deeper
-    than 0.015 fouls the wrist on the rim during the reach or carry."""
+    rode too high on the cans, 2026-09-04). The floor shorts take the plain
+    side grasp at mid-can; their staging distance must be 0.83 (closer
+    stagings cannot reach the low grasp height — swept 2026-09-05)."""
     pitch45 = np.deg2rad(45)
+    pitch15 = np.deg2rad(15)
     return [
         (pitch45, 0.04),
         (pitch45, 0.06),
         (pitch45, 0.04),
-        (pitch45, 0.015),
-        (pitch45, 0.015),
-        (pitch45, 0.015),
+        (pitch15, 0.03),
+        (pitch15, 0.03),
+        (pitch15, 0.03),
     ]
 
 
 def real_restock_move_params() -> list[tuple[float, float]]:
-    """Per-cylinder staging (distance, rot). Rot pi/2 parks the base south of the
-    cylinder, heading at it; the shallow box's cylinders are approached along the
-    box's own normal so the chassis aligns with it."""
+    """Per-cylinder staging (distance, rot). Rot pi/2 parks the base south of
+    the cylinder, heading at it. The floor shorts stage at 0.83 like the
+    talls: the low side grasp is unreachable from closer in."""
     return [
         (0.83, np.pi / 2),
         (0.88, np.pi / 2),
         (0.83, np.pi / 2),
-        (0.72, np.pi / 2 + SHALLOW_BOX_YAW),
-        (0.78, np.pi / 2 + SHALLOW_BOX_YAW),
-        (0.78, np.pi / 2 + SHALLOW_BOX_YAW),
+        (0.83, np.pi / 2),
+        (0.83, np.pi / 2),
+        (0.83, np.pi / 2),
     ]
