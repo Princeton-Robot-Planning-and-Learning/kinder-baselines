@@ -62,11 +62,11 @@ def real_restock_config() -> CylinderShelf3DEnvConfig:
         # joint-space fixes. The ceilings shift with the boards, so opening
         # clearances are unchanged.
         shelf_layer_zs=(
-            # Bottom board back to the measured surface (no +5 cm hack): the
-            # model-place talls were dropping from too high, and net +2 cm was
-            # still 2 cm high. The demo-replayed shorts ignore these heights,
-            # so only the talls are affected.
-            0.100 + 0.00 - _BOARD_HALF,
+            # Bottom board net +1 cm over the measured surface: the model-place
+            # talls dropped from too high at +5/+2 cm and 1 cm too low at +0.
+            # The demo-replayed shorts ignore these heights, so only the talls
+            # are affected.
+            0.100 + 0.01 - _BOARD_HALF,
             0.538 + 0.05 - _BOARD_HALF,
             0.800 + 0.05 - _BOARD_HALF,
         ),
