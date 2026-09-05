@@ -50,9 +50,10 @@ def _zigzag(
 
 def real_restock_config() -> CylinderShelf3DEnvConfig:
     """The boxed real-lab scene (map frame), cans at their logged staging spots."""
-    spots = _zigzag(_DEEP_CENTER, 0.0, 0.13, 0.06) + _zigzag(
-        _SHALLOW_CENTER, SHALLOW_BOX_YAW, 0.13, 0.07
-    )
+    # Deep-box talls in a straight row at one depth (2026-09-05: the Lysol
+    # sat 12 cm behind the other two in the zigzag; aligned forward to match).
+    deep = [(_DEEP_CENTER[0] + dx, _DEEP_CENTER[1] - 0.04) for dx in (-0.13, 0.0, 0.13)]
+    spots = deep + _zigzag(_SHALLOW_CENTER, SHALLOW_BOX_YAW, 0.13, 0.07)
     return CylinderShelf3DEnvConfig(
         shelf_pose=Pose((1.63, 1.51, 0.0)),
         # DELIBERATE HACK (2026-09-05): the modelled boards sit 5 cm above

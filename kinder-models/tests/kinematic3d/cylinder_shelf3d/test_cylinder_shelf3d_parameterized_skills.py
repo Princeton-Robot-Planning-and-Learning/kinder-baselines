@@ -422,9 +422,8 @@ def _real_restock_config():
             out.append((center[0] + c * lx - s * ly, center[1] + s * lx + c * ly))
         return out
 
-    spots = zigzag(deep_center, 0.0, 0.13, 0.06) + zigzag(
-        shallow_center, shallow_yaw, 0.13, 0.07
-    )
+    deep = [(deep_center[0] + dx, deep_center[1] - 0.04) for dx in (-0.13, 0.0, 0.13)]
+    spots = deep + zigzag(shallow_center, shallow_yaw, 0.13, 0.07)
     return CylinderShelf3DEnvConfig(
         shelf_pose=Pose((1.63, 1.51, 0.0)),
         shelf_layer_zs=(
