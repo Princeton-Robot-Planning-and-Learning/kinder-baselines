@@ -55,10 +55,16 @@ def real_restock_config() -> CylinderShelf3DEnvConfig:
     )
     return CylinderShelf3DEnvConfig(
         shelf_pose=Pose((1.63, 1.51, 0.0)),
+        # DELIBERATE HACK (2026-09-05): the modelled boards sit 5 cm above
+        # the measured surfaces (0.100/0.538/0.800 by tape) so every place
+        # lands 5 cm higher on the real, unmoved shelf — blunt compensation
+        # for a persistent real-vs-model placement lowness that resisted
+        # joint-space fixes. The ceilings shift with the boards, so opening
+        # clearances are unchanged.
         shelf_layer_zs=(
-            0.100 - _BOARD_HALF,
-            0.538 - _BOARD_HALF,
-            0.800 - _BOARD_HALF,
+            0.100 + 0.05 - _BOARD_HALF,
+            0.538 + 0.05 - _BOARD_HALF,
+            0.800 + 0.05 - _BOARD_HALF,
         ),
         # The three shorts are all Campbell's-size cans (2026-09-05: the
         # taller/heavier shorts made shelf clearance and grip too tight).
