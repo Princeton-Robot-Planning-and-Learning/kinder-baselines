@@ -79,16 +79,20 @@ def real_restock_grasp_params() -> list[tuple[float, float]]:
     """Per-cylinder (pitch, depth_below_top).
 
     Depths sit 1 cm deeper than the original sweep (the real gripper rode
-    too high on the cans, 2026-09-04) except Campbell's: the shortest can's
-    top is below the shallow box rim, and in sim any grasp deeper than
-    0.015 fouls the wrist on the rim during the reach or carry."""
+    too high on the cans, 2026-09-04) with two exceptions. Campbell's: the
+    shortest can's top is below the shallow box rim, and in sim any grasp
+    deeper than 0.015 fouls the wrist on the rim during the reach or carry.
+    Skippy: the heavy jar slips down through the compliant grip during the
+    carry until its lid ridge catches the fingers, so it is gripped just
+    UNDER the ridge on purpose — slip is then arrested within millimetres
+    and the hang distance the placement assumes stays true."""
     pitch45 = np.deg2rad(45)
     return [
         (pitch45, 0.04),
         (pitch45, 0.06),
         (pitch45, 0.04),
         (pitch45, 0.025),
-        (pitch45, 0.06),
+        (pitch45, 0.03),
         (pitch45, 0.015),
     ]
 
