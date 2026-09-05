@@ -86,11 +86,11 @@ def real_restock_grasp_params() -> list[tuple[float, float]]:
     """Per-cylinder (pitch, depth_below_top).
 
     Tall depths sit 1 cm deeper than the original sweep (the real gripper
-    rode too high on the cans, 2026-09-04). The floor shorts take the plain
-    side grasp, commanded 3.5 cm below mid-can because the real fingers
-    land high there (the rest of that error is compensated at the place;
-    see PLACE_RELEASE_HEIGHTS; 0.07 is the swept ceiling if more sag
-    remains). Their staging distance must be 0.83 —
+    rode too high on the cans, 2026-09-04). The floor shorts grip just
+    below mid-can: with the executor's event-convergence integrator the
+    close lands where commanded, so the deep compensation depths that
+    fought the old premature close are retired. Their staging distance
+    must be 0.83 —
     closer stagings cannot reach the low grasp height (swept 2026-09-05)."""
     pitch45 = np.deg2rad(45)
     pitch15 = np.deg2rad(15)
@@ -98,9 +98,9 @@ def real_restock_grasp_params() -> list[tuple[float, float]]:
         (pitch45, 0.04),
         (pitch45, 0.06),
         (pitch45, 0.04),
-        (pitch15, 0.065),
-        (pitch15, 0.065),
-        (pitch15, 0.065),
+        (pitch15, 0.04),
+        (pitch15, 0.04),
+        (pitch15, 0.04),
     ]
 
 
