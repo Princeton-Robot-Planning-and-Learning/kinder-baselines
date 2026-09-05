@@ -61,6 +61,7 @@ def create_bilevel_planning_models(
     grasp_params: Sequence[Sequence[float] | None] | None = None,
     move_params: Sequence[Sequence[float] | None] | None = None,
     carry_lift_z: float | None = None,
+    place_release_heights: Sequence[float | None] | None = None,
 ) -> SesameModels:
     """Create the env models for cylinder shelf 3D.
 
@@ -299,6 +300,11 @@ def create_bilevel_planning_models(
         for i, params in enumerate(move_params or [])
         if params is not None
     }
+    fixed_release_heights = {
+        f"cylinder{i}": height
+        for i, height in enumerate(place_release_heights or [])
+        if height is not None
+    }
     lifted_controllers = create_lifted_controllers(
         action_space,
         sim,
@@ -307,6 +313,7 @@ def create_bilevel_planning_models(
         fixed_grasp_params,
         carry_lift_z,
         fixed_move_params,
+        place_release_heights=fixed_release_heights,
     )
     for skill_name in magic_skills:
         key = _SKILL_CONTROLLER_KEYS[skill_name]

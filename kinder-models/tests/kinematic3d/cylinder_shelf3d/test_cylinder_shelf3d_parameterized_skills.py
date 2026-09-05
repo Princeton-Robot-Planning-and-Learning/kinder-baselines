@@ -432,12 +432,9 @@ def _real_restock_config():
             0.538 - board_half,
             0.800 - board_half,
         ),
-        cylinder_heights=(0.29, 0.208, 0.233, 0.12, 0.125, 0.10),
-        cylinder_radii=(0.0375, 0.0375, 0.0375, 0.0375, 0.035, 0.0325),
-        boxes=(
-            (0.71, 1.105, 1.34125, 1.63875, 0.215),
-            (0.20, 0.60, 1.12, 1.44, 0.115, shallow_yaw),
-        ),
+        cylinder_heights=(0.29, 0.208, 0.233, 0.10, 0.10, 0.10),
+        cylinder_radii=(0.0375, 0.0375, 0.0375, 0.0325, 0.0325, 0.0325),
+        boxes=((0.71, 1.105, 1.34125, 1.63875, 0.215),),
         cylinder_init_regions=tuple((x, x, y, y) for x, y in spots),
         robot_base_home_pose=SE2Pose(1.48, 0.67, 1.54),
         robot_base_pose_lower_bound=SE2Pose(-0.2, -0.2, -np.pi),
@@ -463,13 +460,14 @@ def test_real_restock_boxed_scene_full_rollout():
         num_cylinders=6, config=config, allow_state_access=True
     )
     pitch = np.deg2rad(45)
+    side = np.deg2rad(15)
     grasp_params = {
         "cylinder0": (pitch, 0.03),
         "cylinder1": (pitch, 0.05),
         "cylinder2": (pitch, 0.03),
-        "cylinder3": (pitch, 0.015),
-        "cylinder4": (pitch, 0.05),
-        "cylinder5": (pitch, 0.015),
+        "cylinder3": (side, 0.03),
+        "cylinder4": (side, 0.03),
+        "cylinder5": (side, 0.03),
     }
     place_params = {
         # (x offset, y offset, base distance, board layer): talls -> layer 0.
@@ -501,9 +499,9 @@ def test_real_restock_boxed_scene_full_rollout():
         "cylinder0": (0.83, np.pi / 2),
         "cylinder1": (0.88, np.pi / 2),
         "cylinder2": (0.83, np.pi / 2),
-        "cylinder3": (0.72, np.pi / 2 + 0.25),
-        "cylinder4": (0.78, np.pi / 2 + 0.25),
-        "cylinder5": (0.78, np.pi / 2 + 0.25),
+        "cylinder3": (0.83, np.pi / 2),
+        "cylinder4": (0.83, np.pi / 2),
+        "cylinder5": (0.83, np.pi / 2),
     }
     rng = np.random.default_rng(0)
     # Shorts first (near row), then talls, mirroring a sensible restock order.

@@ -124,6 +124,12 @@ PRE_GRASP_BACKOFF = 0.10
 # How close (m) the end effector must be to the pre-grasp position for the
 # robot to count as being at the pre-grasp pose.
 PRE_GRASP_POSITION_TOL = 0.03
+# Minimum height of the pre-grasp point above the rim of the box the target
+# stands in: the pre-grasp is where corrections may swing the gripper
+# laterally (and where staging error is largest), so it must sit clear of
+# the walls. The backoff along the pitched approach axis is extended as
+# needed to reach this height.
+PRE_GRASP_RIM_CLEARANCE = 0.03
 # How far the lift-then-tuck carry (see _plan_stow) may pull the held cylinder
 # back toward the base before stopping (it also stops at the first collision).
 _CARRY_TUCK_MAX = 0.45
@@ -138,18 +144,27 @@ _CARRY_TUCK_MAX = 0.45
 # the body that the planar solve folds the elbow past its limit (the
 # default scene's sampled draws hit it before the real boxed scene does).
 PLACE_INSERTION_STANDOFF = 0.11
+# The cylinder bottom rides this fraction of the env's min_placement_dist
+# above the board during the level insertion and at release (it drops the
+# difference when the gripper opens; the env registers the release as a
+# placement only within min_placement_dist of the board). Sim only needs a
+# few millimetres, but on the real robot a heavy jar sags in the fingers
+# and the arm droops under load, so a scene meant for real execution
+# should raise its config's min_placement_dist (the real restock scene
+# uses 0.02, riding ~1.6 cm) to keep the margin.
+PLACE_RELEASE_FRACTION = 0.8
 # Height above the pre-place where the reach leg hands over to the vertical
 # descent leg (roughly the old diagonal approach's entry height, so the
 # reach retains its proven geometry; only the descent and insertion differ).
 PLACE_DESCENT_HEIGHT = 0.05
-# A single negligible base rotation emitted between the place approach's
-# descent and its level insertion. Downstream executors split trajectories
-# into base-only/arm-only segments, so this marker turns the insertion
-# (with its release and retreat) into its own arm segment that they can
-# gate separately — e.g. an operator confirmation while the arm holds at
-# the pre-place, right before the can enters the shelf. ~0.1 degree: far
-# below any staging tolerance, executed as an imperceptible twitch.
-_INSERTION_SEGMENT_TWITCH = 2e-3
+# A single negligible base rotation emitted at phase boundaries the
+# downstream executors should see as their own segments: before the place's
+# level insertion, and before the grasp's final approach (so the grasp
+# segment starts exactly at the pre-grasp, where a wrist-camera correction
+# or operator gate can act). Executors split trajectories into
+# base-only/arm-only segments, so this marker forces the boundary.
+# ~0.1 degree: far below any staging tolerance, an imperceptible twitch.
+_SEGMENT_MARKER_TWITCH = 2e-3
 # Spacing of the continuation targets along the in-plane reach path.
 PLANAR_PATH_STEP = 0.025
 # Interpolation points the base motion planner collision-checks per RRT
@@ -377,18 +392,41 @@ def _interpolated_path_targets(
 
 
 # Controllers.
+def _box_rim_above(
+    boxes: Sequence[Sequence[float]], x: float, y: float
+) -> float | None:
+    """Rim height of the box whose footprint contains ``(x, y)``, if any.
+
+    Box entries are ``(x_lo, x_hi, y_lo, y_hi, height[, yaw])`` with the
+    optional yaw about the footprint centre (the env's ``boxes`` config).
+    """
+    for box in boxes:
+        x_lo, x_hi, y_lo, y_hi, height = box[:5]
+        yaw = box[5] if len(box) > 5 else 0.0
+        cx, cy = 0.5 * (x_lo + x_hi), 0.5 * (y_lo + y_hi)
+        cos_yaw, sin_yaw = np.cos(-yaw), np.sin(-yaw)
+        dx = cos_yaw * (x - cx) - sin_yaw * (y - cy)
+        dy = sin_yaw * (x - cx) + cos_yaw * (y - cy)
+        if abs(dx) <= 0.5 * (x_hi - x_lo) and abs(dy) <= 0.5 * (y_hi - y_lo):
+            return float(height)
+    return None
+
+
 def get_grasp_positions(
     state: CylinderShelf3DObjectCentricState,
     target_name: str,
     pitch: float = SIDE_GRASP_PITCH,
     depth_below_top: float = GRASP_DEPTH_BELOW_TOP,
+    boxes: Sequence[Sequence[float]] = (),
 ) -> tuple[np.ndarray, np.ndarray]:
     """(grasp position, pre-grasp position) of the side grasp on ``target_name``.
 
     The approach is aligned with the base heading toward the cylinder so the gripper
     reaches straight out from wherever the base is around it. The grasp position is
     where the end effector sits at the grasp; the pre-grasp position is
-    PRE_GRASP_BACKOFF behind it along the approach axis.
+    PRE_GRASP_BACKOFF behind it along the approach axis — extended when the target
+    stands in one of ``boxes``, so the pre-grasp clears the rim by
+    PRE_GRASP_RIM_CLEARANCE.
     """
     cylinder_pose = state.get_object_pose(target_name)
     base_pose = state.base_pose
@@ -407,7 +445,12 @@ def get_grasp_positions(
         ]
     )
     grasp_position = grasp_point - GRASP_AXIS_STANDOFF * approach
-    pre_grasp_position = grasp_position - PRE_GRASP_BACKOFF * approach
+    backoff = PRE_GRASP_BACKOFF
+    rim = _box_rim_above(boxes, grasp_point[0], grasp_point[1])
+    if rim is not None and approach[2] < -1e-3:
+        needed = (rim + PRE_GRASP_RIM_CLEARANCE - grasp_position[2]) / (-approach[2])
+        backoff = max(backoff, needed)
+    pre_grasp_position = grasp_position - backoff * approach
     return grasp_position, pre_grasp_position
 
 
@@ -429,7 +472,11 @@ def is_at_pre_grasp(
     ee_position = np.array(sim.robot.arm.get_end_effector_pose().position)
     pitch, depth_below_top = _resolve_grasp_params(grasp_params, target_name)
     _, pre_grasp_position = get_grasp_positions(
-        state, target_name, pitch, depth_below_top
+        state,
+        target_name,
+        pitch,
+        depth_below_top,
+        boxes=getattr(sim.config, "boxes", ()) or (),
     )
     return bool(
         np.linalg.norm(ee_position - pre_grasp_position) < PRE_GRASP_POSITION_TOL
@@ -452,7 +499,11 @@ def _plan_reach(
     """
     sim.set_state(state)
     grasp_position, pre_grasp_position = get_grasp_positions(
-        state, target_name, pitch, depth_below_top
+        state,
+        target_name,
+        pitch,
+        depth_below_top,
+        boxes=getattr(sim.config, "boxes", ()) or (),
     )
     # The reach starts from the retract posture: joints 3, 5, 7 keep their
     # retract values throughout, so the continuation must be seeded from
@@ -882,6 +933,7 @@ class GroundGraspController(
         self._current_stow_plan: list[JointPositions] | None = None
         self._reach_configurations: list[JointPositions] | None = None
         self._current_state: ObjectCentricState | None = None
+        self._marker_sent: bool = False
         self._approached: bool = False
         self._closed_gripper: bool = False
         self._lifted: bool = False
@@ -898,6 +950,7 @@ class GroundGraspController(
         self._current_stow_plan = None
         self._reach_configurations = None
         self._current_state = x
+        self._marker_sent = False
         self._approached = False
         self._closed_gripper = False
         self._lifted = False
@@ -909,6 +962,14 @@ class GroundGraspController(
     def step(self) -> np.ndarray:
         assert self._current_state is not None
         assert isinstance(self._current_state, CylinderShelf3DObjectCentricState)
+
+        if not self._marker_sent:
+            # Segment-marker twitch (see _SEGMENT_MARKER_TWITCH): the grasp's
+            # approach + close + stow become their own arm segment starting
+            # at the pre-grasp pose.
+            self._marker_sent = True
+            action_lst = [0.0, 0.0, _SEGMENT_MARKER_TWITCH] + [0.0] * 8
+            return np.array(action_lst, dtype=np.float32)
 
         if not self._approached:
             # Generate the final approach if it doesn't exist yet: the
@@ -1021,6 +1082,7 @@ class GroundPlaceController(
         sim: ObjectCentricCylinderShelf3DEnv,
         place_params: Sequence[float] | None = None,
         base_clearance: float = 0.0,
+        release_height: float | None = None,
     ) -> None:
         """``place_params`` fixes the placement instead of sampling it: ``(x, y)``
         fixes the offset on the shelf and leaves the base staging distance to
@@ -1045,6 +1107,13 @@ class GroundPlaceController(
                 f"place_params must be (x, y), (x, y, base_distance) or "
                 f"(x, y, base_distance, layer), got {list(place_params)}"
             )
+        # Height of the cylinder bottom above the board during the level
+        # insertion and at release. The default rides
+        # PLACE_RELEASE_FRACTION of the env's placement-registration
+        # distance; a per-cylinder override calibrates for real-arm droop
+        # under the object's weight (a heavy jar sags the compliant arm by
+        # centimetres at full extension, so its insertion must ride higher).
+        self._release_height = release_height
         self._place_layer: int | None = None
         if place_params is not None and len(place_params) == 4:
             self._place_layer = int(place_params[3])
@@ -1224,7 +1293,14 @@ class GroundPlaceController(
                 desired_object_position = (
                     target_surface_pose.position[0] + self._current_params[0],
                     target_surface_pose.position[1] - 0.05 + self._current_params[1],
-                    target_surface_z + half_height + 0.004,
+                    target_surface_z
+                    + half_height
+                    + (
+                        self._release_height
+                        if self._release_height is not None
+                        else PLACE_RELEASE_FRACTION
+                        * self._sim.config.min_placement_dist
+                    ),
                 )
 
                 # The cylinder was grasped from an arbitrary angle around
@@ -1253,9 +1329,7 @@ class GroundPlaceController(
                 # off along the approach heading's horizontal projection, so
                 # leg two of the reach is a level insertion (see
                 # PLACE_INSERTION_STANDOFF).
-                approach_flat = np.array(
-                    [approach_world[0], approach_world[1], 0.0]
-                )
+                approach_flat = np.array([approach_world[0], approach_world[1], 0.0])
                 approach_flat /= np.linalg.norm(approach_flat)
                 pre_place_position = (
                     np.array(place_pose.position)
@@ -1353,12 +1427,12 @@ class GroundPlaceController(
             return action
 
         if self._staged and not self._marker_sent:
-            # The segment-marker twitch (see _INSERTION_SEGMENT_TWITCH): a
+            # The segment-marker twitch (see _SEGMENT_MARKER_TWITCH): a
             # base-only action between the staging and the insertion, so
             # downstream base/arm segmenters put the insertion in its own
             # arm segment.
             self._marker_sent = True
-            action_lst = [0.0, 0.0, _INSERTION_SEGMENT_TWITCH] + [0.0] * 8
+            action_lst = [0.0, 0.0, _SEGMENT_MARKER_TWITCH] + [0.0] * 8
             return np.array(action_lst, dtype=np.float32)
 
         if self._marker_sent and not self._approached:
@@ -1457,6 +1531,7 @@ def create_lifted_controllers(
     grasp_params: GraspParams | None = None,
     carry_lift_z: float | None = None,
     move_params: Mapping[str, Sequence[float]] | None = None,
+    place_release_heights: Mapping[str, float] | None = None,
 ) -> dict[str, LiftedParameterizedController]:
     """Create lifted parameterized controllers for CylinderShelf3D.
 
@@ -1472,11 +1547,15 @@ def create_lifted_controllers(
     start inside staging boxes, so the carry does not sweep low scene
     structure. ``move_params`` maps a cylinder name to a fixed
     ``(staging distance, approach rot)`` for MoveToPreGrasp.
+    ``place_release_heights`` maps a cylinder name to the height its bottom
+    rides above the board during the insertion (see
+    ``GroundPlaceController``): the droop calibration for heavy objects.
     """
     del action_space
     fixed_place_params = dict(place_params or {})
     fixed_grasp_params = dict(grasp_params or {})
     fixed_move_params = dict(move_params or {})
+    fixed_release_heights = dict(place_release_heights or {})
 
     # Create partial controller classes that include the sim
     class MoveToPreGraspController(GroundMoveToPreGraspController):
@@ -1502,7 +1581,11 @@ def create_lifted_controllers(
 
         def __init__(self, objects):
             super().__init__(
-                objects, sim, fixed_place_params.get(objects[1].name), base_clearance
+                objects,
+                sim,
+                fixed_place_params.get(objects[1].name),
+                base_clearance,
+                release_height=fixed_release_heights.get(objects[1].name),
             )
 
     # Create variables for lifted controllers
