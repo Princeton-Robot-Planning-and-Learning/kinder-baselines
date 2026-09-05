@@ -279,7 +279,7 @@ def test_injected_skeleton_from_alphatamp_ir():
     for i, obj in enumerate(ir["objects"]):
         assert obj["cylinder"] == f"cylinder{i}"
         assert config.cylinder_heights[i] == pytest.approx(obj["height"])
-    place_params = place_params_from_ir(ir, y_offset=-0.05, base_distance=0.80)
+    place_params = place_params_from_ir(ir, y_offset=-0.03, base_distance=0.80)
     env = CylinderShelf3DEnv(num_cylinders=6, config=config, allow_state_access=True)
     env_models = create_bilevel_planning_models(
         "cylinder_shelf3d",

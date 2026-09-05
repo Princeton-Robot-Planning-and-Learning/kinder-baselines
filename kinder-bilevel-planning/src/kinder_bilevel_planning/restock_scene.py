@@ -26,7 +26,7 @@ _SHALLOW_CENTER = (0.40, 1.28)
 SHALLOW_BOX_YAW = 0.25
 
 #: Fixed place-parameter calibration for this robot (see place_params_from_ir).
-PLACE_Y_OFFSET = -0.05
+PLACE_Y_OFFSET = -0.03
 PLACE_BASE_DISTANCE = 0.80
 CARRY_LIFT_Z = 0.27
 #: Per-cylinder height (m) the bottom rides above the board during the level
