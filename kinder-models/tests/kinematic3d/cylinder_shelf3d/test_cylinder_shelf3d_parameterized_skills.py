@@ -428,7 +428,7 @@ def _real_restock_config():
     return CylinderShelf3DEnvConfig(
         shelf_pose=Pose((1.63, 1.51, 0.0)),
         shelf_layer_zs=(
-            0.120 - board_half,
+            0.100 - board_half,
             0.588 - board_half,
             0.850 - board_half,
         ),
@@ -520,7 +520,7 @@ def test_real_restock_boxed_scene_full_rollout():
 
     # Talls rest on the bottom board, shorts on the middle one (surfaces
     # carry the scene's deliberate +5 cm model-vs-real offset).
-    for idx, surface in ((0, 0.120), (1, 0.120), (2, 0.120),
+    for idx, surface in ((0, 0.100), (1, 0.100), (2, 0.100),
                          (3, 0.588), (4, 0.588), (5, 0.588)):
         z = state.get(state.get_object_from_name(f"cylinder{idx}"), "pose_z")
         expected = surface + config.get_cylinder_height(idx) / 2
