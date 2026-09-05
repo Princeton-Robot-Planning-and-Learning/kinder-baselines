@@ -432,8 +432,8 @@ def _real_restock_config():
             0.538 - board_half,
             0.800 - board_half,
         ),
-        cylinder_heights=(0.29, 0.208, 0.233, 0.12, 0.125, 0.10),
-        cylinder_radii=(0.0375, 0.0375, 0.0375, 0.0375, 0.035, 0.0325),
+        cylinder_heights=(0.29, 0.208, 0.233, 0.10, 0.10, 0.10),
+        cylinder_radii=(0.0375, 0.0375, 0.0375, 0.0325, 0.0325, 0.0325),
         boxes=(
             (0.71, 1.105, 1.34125, 1.63875, 0.215),
             (0.20, 0.60, 1.12, 1.44, 0.115, shallow_yaw),
@@ -468,7 +468,7 @@ def test_real_restock_boxed_scene_full_rollout():
         "cylinder1": (pitch, 0.05),
         "cylinder2": (pitch, 0.03),
         "cylinder3": (pitch, 0.015),
-        "cylinder4": (pitch, 0.05),
+        "cylinder4": (pitch, 0.015),
         "cylinder5": (pitch, 0.015),
     }
     place_params = {

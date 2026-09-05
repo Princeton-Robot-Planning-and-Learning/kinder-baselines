@@ -30,10 +30,10 @@ PLACE_Y_OFFSET = -0.05
 PLACE_BASE_DISTANCE = 0.80
 CARRY_LIFT_Z = 0.27
 #: Per-cylinder height (m) the bottom rides above the board during the level
-#: insertion and at release. The compliant arm droops under load at the
-#: placement extension, so the heavy peanut-butter jar (c4) rides higher:
-#: droop brings it down to roughly the light cans' margin before release.
-PLACE_RELEASE_HEIGHTS = (0.016, 0.016, 0.016, 0.016, 0.045, 0.016)
+#: insertion and at release. All-light-cans scene: one uniform margin. (A
+#: heavy object would ride higher to compensate the compliant arm's droop
+#: under load — the retired peanut-butter jar used 0.045.)
+PLACE_RELEASE_HEIGHTS = (0.016, 0.016, 0.016, 0.016, 0.016, 0.016)
 
 
 def _zigzag(
@@ -58,8 +58,10 @@ def real_restock_config() -> CylinderShelf3DEnvConfig:
             0.538 - _BOARD_HALF,
             0.800 - _BOARD_HALF,
         ),
-        cylinder_heights=(0.29, 0.208, 0.233, 0.12, 0.125, 0.10),
-        cylinder_radii=(0.0375, 0.0375, 0.0375, 0.0375, 0.035, 0.0325),
+        # The three shorts are all Campbell's-size cans (2026-09-05: the
+        # taller/heavier shorts made shelf clearance and grip too tight).
+        cylinder_heights=(0.29, 0.208, 0.233, 0.10, 0.10, 0.10),
+        cylinder_radii=(0.0375, 0.0375, 0.0375, 0.0325, 0.0325, 0.0325),
         boxes=(
             (0.71, 1.105, 1.34125, 1.63875, 0.215),
             (0.20, 0.60, 1.12, 1.44, 0.115, SHALLOW_BOX_YAW),
@@ -69,9 +71,9 @@ def real_restock_config() -> CylinderShelf3DEnvConfig:
         # The placement-registration distance must cover the largest
         # PLACE_RELEASE_HEIGHTS entry, or the sim refuses that release (the
         # gripper would open with the can "too far" above the board). Only
-        # the place skill ever opens the gripper, so the loose threshold has
+        # the place skill ever opens the gripper, so a loose threshold has
         # no other effect.
-        min_placement_dist=0.05,
+        min_placement_dist=0.02,
         robot_base_pose_lower_bound=SE2Pose(-0.2, -0.2, -np.pi),
         robot_base_pose_upper_bound=SE2Pose(2.0, 2.0, np.pi),
         x_lb=-0.2,
@@ -84,21 +86,17 @@ def real_restock_config() -> CylinderShelf3DEnvConfig:
 def real_restock_grasp_params() -> list[tuple[float, float]]:
     """Per-cylinder (pitch, depth_below_top).
 
-    Depths sit 1 cm deeper than the original sweep (the real gripper rode
-    too high on the cans, 2026-09-04) with two exceptions. Campbell's: the
-    shortest can's top is below the shallow box rim, and in sim any grasp
-    deeper than 0.015 fouls the wrist on the rim during the reach or carry.
-    Skippy: the heavy jar slips down through the compliant grip during the
-    carry until its lid ridge catches the fingers, so it is gripped just
-    UNDER the ridge on purpose — slip is then arrested within millimetres
-    and the hang distance the placement assumes stays true."""
+    Tall depths sit 1 cm deeper than the original sweep (the real gripper
+    rode too high on the cans, 2026-09-04). The shorts are Campbell's-size
+    cans whose tops sit below the shallow box rim: in sim any grasp deeper
+    than 0.015 fouls the wrist on the rim during the reach or carry."""
     pitch45 = np.deg2rad(45)
     return [
         (pitch45, 0.04),
         (pitch45, 0.06),
         (pitch45, 0.04),
-        (pitch45, 0.025),
-        (pitch45, 0.03),
+        (pitch45, 0.015),
+        (pitch45, 0.015),
         (pitch45, 0.015),
     ]
 
