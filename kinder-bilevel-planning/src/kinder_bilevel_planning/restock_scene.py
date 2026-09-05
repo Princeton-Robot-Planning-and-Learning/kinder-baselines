@@ -30,10 +30,10 @@ PLACE_Y_OFFSET = -0.05
 PLACE_BASE_DISTANCE = 0.80
 CARRY_LIFT_Z = 0.27
 #: Per-cylinder height (m) the bottom rides above the board during the level
-#: insertion and at release. All-light-cans scene: one uniform margin. (A
-#: heavy object would ride higher to compensate the compliant arm's droop
-#: under load — the retired peanut-butter jar used 0.045.)
-PLACE_RELEASE_HEIGHTS = (0.016, 0.016, 0.016, 0.016, 0.016, 0.016)
+#: insertion and at release. The shorts ride 3 cm higher than the base
+#: margin: the real side grasp lands high on them, so they hang lower than
+#: modelled and scraped the board at the base margin (observed 2026-09-05).
+PLACE_RELEASE_HEIGHTS = (0.016, 0.016, 0.016, 0.046, 0.046, 0.046)
 
 
 def _zigzag(
@@ -70,7 +70,7 @@ def real_restock_config() -> CylinderShelf3DEnvConfig:
         # gripper would open with the can "too far" above the board). Only
         # the place skill ever opens the gripper, so a loose threshold has
         # no other effect.
-        min_placement_dist=0.02,
+        min_placement_dist=0.05,
         robot_base_pose_lower_bound=SE2Pose(-0.2, -0.2, -np.pi),
         robot_base_pose_upper_bound=SE2Pose(2.0, 2.0, np.pi),
         x_lb=-0.2,
