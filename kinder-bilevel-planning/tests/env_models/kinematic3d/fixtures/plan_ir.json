@@ -22,14 +22,14 @@
     {
       "name": "obj_goal4",
       "cylinder": "cylinder3",
-      "height": 0.12,
-      "radius": 0.0375
+      "height": 0.1,
+      "radius": 0.0325
     },
     {
       "name": "obj_goal5",
       "cylinder": "cylinder4",
-      "height": 0.125,
-      "radius": 0.035
+      "height": 0.1,
+      "radius": 0.0325
     },
     {
       "name": "obj_goal6",
@@ -176,13 +176,13 @@
     "cylinder3": {
       "layer": 1,
       "section": "short",
-      "x_offset": -0.182,
+      "x_offset": -0.1871,
       "y_offset": -0.0441
     },
     "cylinder5": {
       "layer": 1,
       "section": "short",
-      "x_offset": -0.0582,
+      "x_offset": -0.0683,
       "y_offset": -0.0456
     },
     "cylinder0": {
@@ -194,8 +194,8 @@
     "cylinder4": {
       "layer": 1,
       "section": "short",
-      "x_offset": 0.0709,
-      "y_offset": -0.0526
+      "x_offset": 0.0588,
+      "y_offset": -0.0511
     },
     "cylinder2": {
       "layer": 0,
