@@ -472,7 +472,10 @@ def is_at_pre_grasp(
     ee_position = np.array(sim.robot.arm.get_end_effector_pose().position)
     pitch, depth_below_top = _resolve_grasp_params(grasp_params, target_name)
     _, pre_grasp_position = get_grasp_positions(
-        state, target_name, pitch, depth_below_top,
+        state,
+        target_name,
+        pitch,
+        depth_below_top,
         boxes=getattr(sim.config, "boxes", ()) or (),
     )
     return bool(
@@ -496,7 +499,10 @@ def _plan_reach(
     """
     sim.set_state(state)
     grasp_position, pre_grasp_position = get_grasp_positions(
-        state, target_name, pitch, depth_below_top,
+        state,
+        target_name,
+        pitch,
+        depth_below_top,
         boxes=getattr(sim.config, "boxes", ()) or (),
     )
     # The reach starts from the retract posture: joints 3, 5, 7 keep their
@@ -1076,6 +1082,7 @@ class GroundPlaceController(
         sim: ObjectCentricCylinderShelf3DEnv,
         place_params: Sequence[float] | None = None,
         base_clearance: float = 0.0,
+        release_height: float | None = None,
     ) -> None:
         """``place_params`` fixes the placement instead of sampling it: ``(x, y)``
         fixes the offset on the shelf and leaves the base staging distance to
@@ -1100,6 +1107,13 @@ class GroundPlaceController(
                 f"place_params must be (x, y), (x, y, base_distance) or "
                 f"(x, y, base_distance, layer), got {list(place_params)}"
             )
+        # Height of the cylinder bottom above the board during the level
+        # insertion and at release. The default rides
+        # PLACE_RELEASE_FRACTION of the env's placement-registration
+        # distance; a per-cylinder override calibrates for real-arm droop
+        # under the object's weight (a heavy jar sags the compliant arm by
+        # centimetres at full extension, so its insertion must ride higher).
+        self._release_height = release_height
         self._place_layer: int | None = None
         if place_params is not None and len(place_params) == 4:
             self._place_layer = int(place_params[3])
@@ -1281,7 +1295,12 @@ class GroundPlaceController(
                     target_surface_pose.position[1] - 0.05 + self._current_params[1],
                     target_surface_z
                     + half_height
-                    + PLACE_RELEASE_FRACTION * self._sim.config.min_placement_dist,
+                    + (
+                        self._release_height
+                        if self._release_height is not None
+                        else PLACE_RELEASE_FRACTION
+                        * self._sim.config.min_placement_dist
+                    ),
                 )
 
                 # The cylinder was grasped from an arbitrary angle around
@@ -1310,9 +1329,7 @@ class GroundPlaceController(
                 # off along the approach heading's horizontal projection, so
                 # leg two of the reach is a level insertion (see
                 # PLACE_INSERTION_STANDOFF).
-                approach_flat = np.array(
-                    [approach_world[0], approach_world[1], 0.0]
-                )
+                approach_flat = np.array([approach_world[0], approach_world[1], 0.0])
                 approach_flat /= np.linalg.norm(approach_flat)
                 pre_place_position = (
                     np.array(place_pose.position)
@@ -1514,6 +1531,7 @@ def create_lifted_controllers(
     grasp_params: GraspParams | None = None,
     carry_lift_z: float | None = None,
     move_params: Mapping[str, Sequence[float]] | None = None,
+    place_release_heights: Mapping[str, float] | None = None,
 ) -> dict[str, LiftedParameterizedController]:
     """Create lifted parameterized controllers for CylinderShelf3D.
 
@@ -1529,11 +1547,15 @@ def create_lifted_controllers(
     start inside staging boxes, so the carry does not sweep low scene
     structure. ``move_params`` maps a cylinder name to a fixed
     ``(staging distance, approach rot)`` for MoveToPreGrasp.
+    ``place_release_heights`` maps a cylinder name to the height its bottom
+    rides above the board during the insertion (see
+    ``GroundPlaceController``): the droop calibration for heavy objects.
     """
     del action_space
     fixed_place_params = dict(place_params or {})
     fixed_grasp_params = dict(grasp_params or {})
     fixed_move_params = dict(move_params or {})
+    fixed_release_heights = dict(place_release_heights or {})
 
     # Create partial controller classes that include the sim
     class MoveToPreGraspController(GroundMoveToPreGraspController):
@@ -1559,7 +1581,11 @@ def create_lifted_controllers(
 
         def __init__(self, objects):
             super().__init__(
-                objects, sim, fixed_place_params.get(objects[1].name), base_clearance
+                objects,
+                sim,
+                fixed_place_params.get(objects[1].name),
+                base_clearance,
+                release_height=fixed_release_heights.get(objects[1].name),
             )
 
     # Create variables for lifted controllers

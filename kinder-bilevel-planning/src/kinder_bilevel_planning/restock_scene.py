@@ -29,6 +29,11 @@ SHALLOW_BOX_YAW = 0.25
 PLACE_Y_OFFSET = -0.05
 PLACE_BASE_DISTANCE = 0.80
 CARRY_LIFT_Z = 0.27
+#: Per-cylinder height (m) the bottom rides above the board during the level
+#: insertion and at release. The compliant arm droops under load at the
+#: placement extension, so the heavy peanut-butter jar (c4) rides higher:
+#: droop brings it down to roughly the light cans' margin before release.
+PLACE_RELEASE_HEIGHTS = (0.016, 0.016, 0.016, 0.016, 0.045, 0.016)
 
 
 def _zigzag(
@@ -61,11 +66,12 @@ def real_restock_config() -> CylinderShelf3DEnvConfig:
         ),
         cylinder_init_regions=tuple((x, x, y, y) for x, y in spots),
         robot_base_home_pose=SE2Pose(1.48, 0.67, 1.54),
-        # A generous placement-registration distance: the place skill rides
-        # (and releases) the can PLACE_RELEASE_FRACTION of this above the
-        # board, and on the real robot a heavy jar's sag in the fingers plus
-        # arm droop under load eat a centimetre of that margin.
-        min_placement_dist=0.02,
+        # The placement-registration distance must cover the largest
+        # PLACE_RELEASE_HEIGHTS entry, or the sim refuses that release (the
+        # gripper would open with the can "too far" above the board). Only
+        # the place skill ever opens the gripper, so the loose threshold has
+        # no other effect.
+        min_placement_dist=0.05,
         robot_base_pose_lower_bound=SE2Pose(-0.2, -0.2, -np.pi),
         robot_base_pose_upper_bound=SE2Pose(2.0, 2.0, np.pi),
         x_lb=-0.2,
