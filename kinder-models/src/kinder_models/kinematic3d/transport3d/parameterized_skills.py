@@ -39,7 +39,10 @@ from relational_structs import (
     Variable,
 )
 
-from kinder_models.kinematic3d.base_controllers import BasePlaceController
+from kinder_models.kinematic3d.base_controllers import (
+    BasePlaceController,
+    make_linf_arm_distance_fn,
+)
 from kinder_models.kinematic3d.constants import (
     GRIPPER_CLOSE_THRESHOLD,
     HOME_JOINT_POSITIONS,
@@ -71,6 +74,15 @@ class GroundPickController(
 ):
     """Controller for picking up an object."""
 
+    def _arm_remap_kwargs(self) -> dict:
+        """See BasePlaceController._arm_remap_kwargs -- same gate, same default."""
+        if getattr(self, "_use_linf_arm_remap", False):
+            return {
+                "max_distance": 0.9 * self._sim.config.max_action_mag,
+                "distance_fn": make_linf_arm_distance_fn(self._sim.robot.arm),
+            }
+        return {"max_distance": self._sim.config.max_action_mag / 2}
+
     def __init__(
         self,
         objects: Sequence[Object],
@@ -94,6 +106,7 @@ class GroundPickController(
         self._closed_gripper: bool = False
         self._lifted: bool = False
         self._last_gripper_state: float = 0.0
+        self._gripper_close_steps: int = 0
         self._target_pick_pose_world: Pose | None = None
         self._pre_pick_pose_world: Pose | None = None
         # Motion planning hyperparameters.
@@ -262,7 +275,7 @@ class GroundPickController(
                 joint_plan = remap_joint_position_plan_to_constant_distance(
                     joint_plan1 + joint_plan2,
                     self._sim.robot.arm,
-                    max_distance=self._sim.config.max_action_mag / 2,
+                    **self._arm_remap_kwargs(),
                 )
 
                 # Store the plan (excluding the first state which is the current state).
@@ -286,18 +299,24 @@ class GroundPickController(
             return action
 
         if self._pre_grasp and not self._closed_gripper:
-            if (
-                self._get_current_robot_gripper_pose() > GRIPPER_CLOSE_THRESHOLD
-                and np.isclose(
-                    self._get_current_robot_gripper_pose(),
-                    self._last_gripper_state,
-                    atol=0.02,
-                )
-            ):
+            finger_state = self._get_current_robot_gripper_pose()
+            stalled = self._gripper_close_steps > 0 and np.isclose(
+                finger_state,
+                self._last_gripper_state,
+                atol=0.02,
+            )
+            if stalled and finger_state > GRIPPER_CLOSE_THRESHOLD:
                 self._closed_gripper = True
+            elif stalled and self._gripper_close_steps >= 2:
+                # The environment leaves the fingers fully open when no object
+                # is in the grasp zone. Without surfacing that as a sampling
+                # failure, the controller emits the same close action forever
+                # and the episode can only time out.
+                raise TrajectorySamplingFailure("Grasp failed")
             action_lst = [0.0] * 10 + [-1.0]
             action = np.array(action_lst, dtype=np.float32)
-            self._last_gripper_state = self._get_current_robot_gripper_pose()
+            self._last_gripper_state = finger_state
+            self._gripper_close_steps += 1
             return action
 
         if self._closed_gripper and not self._lifted:
@@ -337,7 +356,7 @@ class GroundPickController(
                 joint_plan = remap_joint_position_plan_to_constant_distance(
                     joint_plan,
                     self._sim.robot.arm,
-                    max_distance=self._sim.config.max_action_mag / 2,
+                    **self._arm_remap_kwargs(),
                 )
 
                 # Store the plan (excluding the first state which is the current state).
@@ -475,7 +494,11 @@ class GroundPlaceController(BasePlaceController):
                 desired_object_pose, grasped_object_transform.invert()
             )
 
-            distance = 0.65
+            # Base stand-off for the place approach. Overridable by the caller
+            # (see kinder_ds_policies transport3d) so a blocked approach can be
+            # retried from a different side; defaults reproduce the original
+            # fixed behavior exactly.
+            distance = getattr(self, "_approach_distance", 0.65)
             pre_place_height = 0.03
 
             self._pre_place_pose_world = Pose(
@@ -494,7 +517,9 @@ class GroundPlaceController(BasePlaceController):
                 target_pose_temp_se2.rot,
             )
             target_base_pose = get_target_robot_pose_from_parameters(
-                self._target_place_pose_se2, distance, 0.0
+                self._target_place_pose_se2,
+                distance,
+                getattr(self, "_approach_rot", 0.0),
             )
 
             # Run base motion planning to the target pose.
