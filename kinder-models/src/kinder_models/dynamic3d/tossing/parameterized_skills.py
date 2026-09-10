@@ -1349,15 +1349,20 @@ class MoveToTossLocationAndTossController(
     # Leave room for the physical chassis on the launch side of the fixed barrier.
     LAUNCH_CLEARANCE_BOUNDS = (0.025, 0.055)
 
-    # TossController's two dials, opened up as sampled parameters. Narrowed from the
-    # originally-shipped (60, TOSS_MAX_VELOCITY) / (600, 840): measured directly
-    # (toss_param_probe4.py, isolated toss draws from a real post-pick state, 480
-    # draws across 16 seeds) that every scoring draw fell in speed_deg [117.5, 140.0]
-    # and release_ms [710.4, 836.1] -- the wide bounds spent the large majority of
-    # the sampler's budget on combinations that can never score. A few degrees/ms of
-    # margin below the measured minimums, since 480 draws is not exhaustive.
-    SPEED_BOUNDS = (np.deg2rad(115.0), TOSS_MAX_VELOCITY)
-    RELEASE_MS_BOUNDS = (700.0, 840.0)
+    # Coupled speed/release candidates for the farther simulated receiver. Faster
+    # swings need earlier release; sampling these independently wastes refinements.
+    # Every instance uses the same candidates, selected with the planner's RNG.
+    THROW_PROFILES = (
+        (190.0, 680.0),
+        (220.0, 590.0),
+        (230.0, 590.0),
+        (250.0, 550.0),
+        (280.0, 550.0),
+        (320.0, 520.0),
+        (360.0, 500.0),
+        (400.0, 480.0),
+    )
+    MAX_SWING_VELOCITY = np.deg2rad(400.0)
 
     def __init__(
         self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
@@ -1403,13 +1408,15 @@ class MoveToTossLocationAndTossController(
         launch_x -= rng.uniform(*self.LAUNCH_CLEARANCE_BOUNDS)
         receiver = x.get_object_from_name("bin_0")
         distance = x.get(receiver, "x") - launch_x
-        max_rotation = float(np.arcsin(0.5 * WAYPOINT_TOLERANCE / distance))
+        speed_degrees, release_ms = self.THROW_PROFILES[
+            rng.integers(len(self.THROW_PROFILES))
+        ]
         return np.array(
             [
                 distance,
-                rng.uniform(-max_rotation, max_rotation),
-                rng.uniform(*self.SPEED_BOUNDS),
-                rng.uniform(*self.RELEASE_MS_BOUNDS),
+                0.0,  # Aim along the receiver axis.
+                np.deg2rad(speed_degrees),
+                release_ms,
             ]
         )
 
@@ -1546,6 +1553,7 @@ class MoveToTossLocationAndTossController(
             windup_plan[-1],
             self._release_speed,
             self._gripper_release_ms,
+            max_velocity=self.MAX_SWING_VELOCITY,
         )
 
     def terminated(self) -> bool:
