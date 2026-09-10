@@ -1696,19 +1696,16 @@ def test_move_to_toss_location_and_toss_samples_four_parameters():
             ]
         )
         assert draws.shape == (50, 4)
-        assert np.max(np.abs(draws[:, 1])) < 0.1
+        assert np.all(draws[:, 1] == 0.0)
         assert np.ptp(draws[:, 0]) > 0
-        assert np.ptp(draws[:, 2]) > 0
-        assert np.ptp(draws[:, 3]) > 0
+        assert len(np.unique(draws[:, 2:], axis=0)) > 1
         receiver = state.get_object_from_name("bin_0")
         for distance, _, speed, release in draws:
             launch_x = state.get(receiver, "x") - distance
             assert launch_x + 0.275 < state.get(barrier, "x") - 0.03
-            assert controller.SPEED_BOUNDS[0] <= speed <= controller.SPEED_BOUNDS[1]
-            assert (
-                controller.RELEASE_MS_BOUNDS[0]
-                <= release
-                <= controller.RELEASE_MS_BOUNDS[1]
+            assert any(
+                np.isclose(speed, np.deg2rad(degrees)) and release == milliseconds
+                for degrees, milliseconds in controller.THROW_PROFILES
             )
     finally:
         sim.close()

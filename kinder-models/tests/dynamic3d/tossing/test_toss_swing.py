@@ -159,9 +159,26 @@ def test_toss_release_speed_clamps_the_effort_to_zero_and_one():
 
 
 def test_the_release_speeds_the_sampler_draws_are_never_clamped():
-    """SPEED_BOUNDS' top edge is the clamp point, so it must pass through."""
-    for speed in np.linspace(*MoveToTossLocationAndTossController.SPEED_BOUNDS, 25):
-        assert np.isclose(toss_profile_limits(speed)[0], speed)
+    """The simulation controller explicitly enables its higher-speed profiles."""
+    controller = MoveToTossLocationAndTossController
+    for speed_degrees, _ in controller.THROW_PROFILES:
+        speed = np.deg2rad(speed_degrees)
+        assert np.isclose(
+            toss_profile_limits(speed, max_velocity=controller.MAX_SWING_VELOCITY)[0],
+            speed,
+        )
+
+
+def test_simulated_swing_uses_explicit_higher_ceiling():
+    """A higher ceiling changes the trajectory, while the default stays capped."""
+    start = list(TOSS_WINDUP_ARM_CONFIGURATION) + [0.0] * 6
+    end = list(TOSS_RELEASE_ARM_CONFIGURATION) + [0.0] * 6
+    speed = np.deg2rad(280.0)
+    default = plan_toss_swing([end], start, speed, 550)
+    fast = plan_toss_swing([end], start, speed, 550, max_velocity=np.deg2rad(400.0))
+    assert len(fast.trajectory) < len(default.trajectory)
+    assert fast.release_step == default.release_step
+    assert fast.release_slice == default.release_slice
 
 
 def test_plan_toss_swing_is_unmoved_by_a_whole_turn_on_a_continuous_joint():
