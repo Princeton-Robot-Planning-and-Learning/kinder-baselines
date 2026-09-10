@@ -1,8 +1,11 @@
 """The tossing planner must see the same fixed obstacles as the simulator."""
 
+from typing import cast
+
 import kinder
 import numpy as np
 import pybullet as p
+from gymnasium import Env
 from kinder.envs.dynamic3d.envs import ObjectCentricTidyBot3DEnv, TidyBot3DEnv
 from kinder.envs.dynamic3d.object_types import (
     MujocoFixtureObjectType,
@@ -99,4 +102,4 @@ def test_fixed_tossing_obstacles_match_both_planning_scenes(monkeypatch) -> None
     finally:
         for planner in captured:
             planner.close()
-        env.close()
+        cast(Env, env).close()
