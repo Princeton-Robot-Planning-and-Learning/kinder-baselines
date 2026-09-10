@@ -10,6 +10,7 @@ TODO: only Tossing3D-o1 is supported; no operator says which cube a throw is aim
 from pathlib import Path
 
 import kinder
+import mujoco
 import numpy as np
 from bilevel_planning.structs import (
     LiftedSkill,
@@ -23,7 +24,8 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoObjectType,
     MujocoTidyBotRobotObjectType,
 )
-from kinder.envs.dynamic3d.objects.primitive_objects import Bin
+from kinder.envs.dynamic3d.objects.fixtures import FixedCuboid
+from kinder.envs.dynamic3d.objects.primitive_objects import Bin, Cuboid
 from kinder.envs.dynamic3d.robots.tidybot_robot_env import TidyBot3DRobotActionSpace
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     PyBulletSim,
@@ -119,7 +121,7 @@ def create_bilevel_planning_models(
     # Pick the cube up off the ground.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     cube = Variable("?cube", MujocoMovableObjectType)
-    barrier = Variable("?barrier", MujocoMovableObjectType)
+    barrier = Variable("?barrier", MujocoObjectType)
 
     PickCubeOperator = LiftedOperator(
         "pick_cube",
@@ -140,7 +142,7 @@ def create_bilevel_planning_models(
     # Drive to a pose to throw from, and throw.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     held = Variable("?held", MujocoMovableObjectType)
-    barrier = Variable("?barrier", MujocoMovableObjectType)
+    barrier = Variable("?barrier", MujocoObjectType)
 
     MoveToTossLocationAndTossOperator = LiftedOperator(
         "move_to_toss_location_and_toss",
@@ -172,9 +174,7 @@ def create_bilevel_planning_models(
     pybullet_sim.add_bin(
         name=BIN_NAME,
         pose=Pose(
-            tuple(
-                initial_state.get(bin_state_object, key) for key in ("x", "y", "z")
-            ),
+            tuple(initial_state.get(bin_state_object, key) for key in ("x", "y", "z")),
             tuple(
                 initial_state.get(bin_state_object, key)
                 for key in ("qx", "qy", "qz", "qw")
@@ -185,6 +185,39 @@ def create_bilevel_planning_models(
         height=bin_geometry.height,
         wall_thickness=bin_geometry.wall_thickness,
     )
+    for name, fixture in sim._fixtures_dict.items():  # pylint: disable=protected-access
+        if not isinstance(fixture, FixedCuboid) or not isinstance(
+            fixture.primitive, Cuboid
+        ):
+            continue
+        obj = initial_state.get_object_from_name(name)
+        pybullet_sim.add_box(
+            name=name,
+            pose=Pose(
+                tuple(initial_state.get(obj, key) for key in ("x", "y", "z")),
+                tuple(initial_state.get(obj, key) for key in ("qx", "qy", "qz", "qw")),
+            ),
+            dimensions=fixture.primitive.get_bounding_box_dimensions(),
+        )
+    # Task room geometry is static and deliberately independent of scene backgrounds.
+    robot_env = sim._robot_env  # pylint: disable=protected-access
+    assert robot_env is not None
+    model = robot_env.sim.model.mj_model
+    data = robot_env.sim.data.mj_data
+    for geom_id in range(model.ngeom):
+        if model.body(int(model.geom_bodyid[geom_id])).name != "tossing_room":
+            continue
+        if not (model.geom_contype[geom_id] or model.geom_conaffinity[geom_id]):
+            continue
+        assert model.geom_type[geom_id] == mujoco.mjtGeom.mjGEOM_BOX
+        quaternion = np.empty(4)
+        mujoco.mju_mat2Quat(quaternion, data.geom_xmat[geom_id])
+        pybullet_sim.add_box(
+            name=model.geom(geom_id).name,
+            pose=Pose(tuple(data.geom_xpos[geom_id]), tuple(quaternion[[1, 2, 3, 0]])),
+            dimensions=tuple(2 * model.geom_size[geom_id]),
+            state_object=False,
+        )
     controllers = create_lifted_controllers(
         action_space, sim.initial_constant_state, pybullet_sim=pybullet_sim
     )

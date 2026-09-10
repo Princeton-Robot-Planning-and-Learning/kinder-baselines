@@ -20,24 +20,6 @@ from kinder.envs.dynamic3d.object_types import (
 from kinder.envs.dynamic3d.robots.tidybot_robot_env import (
     TidyBot3DRobotActionSpace,
 )
-from prpl_utils.utils import get_signed_angle_distance
-from pybullet_helpers.geometry import Pose, Quaternion, multiply_poses
-from pybullet_helpers.inverse_kinematics import (
-    JointPositions,
-    inverse_kinematics,
-)
-from pybullet_helpers.motion_planning import (
-    remap_joint_position_plan_to_constant_distance,
-    run_motion_planning,
-)
-from relational_structs import (
-    Array,
-    Object,
-    ObjectCentricState,
-    Variable,
-)
-from spatialmath import SE2
-
 from kinder_models.dynamic3d.tossing.toss_swing import (
     TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
     TOSS_MAX_VELOCITY,
@@ -63,12 +45,30 @@ from kinder_models.dynamic3d.utils import (
     WORLD_Y_BOUNDS,
     PyBulletSim,
     _compute_per_joint_profile,
+    get_bounding_box,
     get_overhead_object_se2_pose,
     get_target_robot_pose_from_parameters,
     run_base_motion_planning,
     upright_grasp_rotations,
     wrap_arm_joint_difference,
 )
+from prpl_utils.utils import get_signed_angle_distance
+from pybullet_helpers.geometry import Pose, Quaternion, multiply_poses
+from pybullet_helpers.inverse_kinematics import (
+    JointPositions,
+    inverse_kinematics,
+)
+from pybullet_helpers.motion_planning import (
+    remap_joint_position_plan_to_constant_distance,
+    run_motion_planning,
+)
+from relational_structs import (
+    Array,
+    Object,
+    ObjectCentricState,
+    Variable,
+)
+from spatialmath import SE2
 
 logger = logging.getLogger(__name__)
 
@@ -894,6 +894,12 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             extend_xy_magnitude=extend_xy_magnitude,
             extend_rot_magnitude=extend_rot_magnitude,
             disable_collision_objects=[cube_to_pick_up.name],
+            bounding_boxes=(
+                self._pybullet_sim.bounding_boxes if self._pybullet_sim else None
+            ),
+            static_obstacles=(
+                self._pybullet_sim.static_base_obstacles if self._pybullet_sim else ()
+            ),
         )
 
     def _plan_motions(
@@ -1339,14 +1345,8 @@ class MoveToTossLocationAndTossController(
         # known-good starting pose instead of wherever the release left the arm.
         RETURN_HOME = enum.auto()
 
-    # Where a throw is possible; the upper part does not score.
-    TARGET_DISTANCE_BOUNDS = (1.25, 1.45)
-
-    # Widest rotation that stays within half of WAYPOINT_TOLERANCE at max standoff.
-    MAX_TARGET_ROTATION = float(
-        np.arcsin(0.5 * WAYPOINT_TOLERANCE / TARGET_DISTANCE_BOUNDS[1])
-    )
-    TARGET_ROTATION_BOUNDS = (-MAX_TARGET_ROTATION, MAX_TARGET_ROTATION)
+    # Leave room for the physical chassis on the launch side of the fixed barrier.
+    LAUNCH_CLEARANCE_BOUNDS = (0.025, 0.055)
 
     # TossController's two dials, opened up as sampled parameters. Narrowed from the
     # originally-shipped (60, TOSS_MAX_VELOCITY) / (600, 840): measured directly
@@ -1394,11 +1394,19 @@ class MoveToTossLocationAndTossController(
         )
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
-        del x  # not used
+        assert self._pybullet_sim is not None
+        robot, _, barrier = self.objects[:3]
+        barrier_width = self._pybullet_sim.bounding_boxes[barrier.name][0]
+        robot_width = get_bounding_box(x, robot)[0]
+        launch_x = x.get(barrier, "x") - (barrier_width + robot_width) / 2
+        launch_x -= rng.uniform(*self.LAUNCH_CLEARANCE_BOUNDS)
+        receiver = x.get_object_from_name("bin_0")
+        distance = x.get(receiver, "x") - launch_x
+        max_rotation = float(np.arcsin(0.5 * WAYPOINT_TOLERANCE / distance))
         return np.array(
             [
-                rng.uniform(*self.TARGET_DISTANCE_BOUNDS),
-                rng.uniform(*self.TARGET_ROTATION_BOUNDS),
+                distance,
+                rng.uniform(-max_rotation, max_rotation),
                 rng.uniform(*self.SPEED_BOUNDS),
                 rng.uniform(*self.RELEASE_MS_BOUNDS),
             ]
@@ -1460,6 +1468,12 @@ class MoveToTossLocationAndTossController(
             extend_xy_magnitude=extend_xy_magnitude,
             extend_rot_magnitude=extend_rot_magnitude,
             disable_collision_objects=disable_collision_objects,
+            bounding_boxes=(
+                self._pybullet_sim.bounding_boxes if self._pybullet_sim else None
+            ),
+            static_obstacles=(
+                self._pybullet_sim.static_base_obstacles if self._pybullet_sim else ()
+            ),
         )
         if base_motion_plan is None:
             logger.debug(
@@ -1747,7 +1761,7 @@ def create_lifted_controllers(
 
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     cube = Variable("?cube", MujocoMovableObjectType)
-    barrier = Variable("?barrier", MujocoMovableObjectType)
+    barrier = Variable("?barrier", MujocoObjectType)
 
     class PickCube(PickCubeController):
         """Inject the shared simulator and remaining movable collision context."""
@@ -1785,7 +1799,7 @@ def create_lifted_controllers(
 
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     held = Variable("?held", MujocoMovableObjectType)
-    barrier = Variable("?barrier", MujocoMovableObjectType)
+    barrier = Variable("?barrier", MujocoObjectType)
 
     LiftedMoveToTossLocationAndTossController: LiftedParameterizedController = (
         LiftedParameterizedController(
