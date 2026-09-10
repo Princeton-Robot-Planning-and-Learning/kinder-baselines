@@ -19,14 +19,6 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoObjectType,
     MujocoTidyBotRobotObjectType,
 )
-from pybullet_helpers.geometry import Quaternion
-from relational_structs import (
-    GroundAtom,
-    Object,
-    ObjectCentricState,
-    Predicate,
-)
-
 from kinder_models.dynamic3d.utils import (
     END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE,
     GRIPPER_GRASPING_THRESHOLD,
@@ -36,6 +28,13 @@ from kinder_models.dynamic3d.utils import (
     PyBulletSim,
     cube_tilt_from_upright,
 )
+from pybullet_helpers.geometry import Quaternion
+from relational_structs import (
+    GroundAtom,
+    Object,
+    ObjectCentricState,
+    Predicate,
+)
 
 # Upstream types cube, bin and barrier alike, so names state the type, not the subset.
 MovableInGoalRegion = Predicate("MovableInGoalRegion", [MujocoMovableObjectType])
@@ -43,7 +42,7 @@ OnGround = Predicate("OnGround", [MujocoObjectType])
 Holding = Predicate("Holding", [MujocoTidyBotRobotObjectType, MujocoMovableObjectType])
 HandEmpty = Predicate("HandEmpty", [MujocoTidyBotRobotObjectType])
 MovableIsDownX = Predicate(
-    "MovableIsDownX", [MujocoMovableObjectType, MujocoMovableObjectType]
+    "MovableIsDownX", [MujocoMovableObjectType, MujocoObjectType]
 )
 # The environment's inflated region, not the task JSON's "ranges".
 GOAL_REGION_NAME = "blocks_goal_region"
@@ -82,7 +81,7 @@ class Tossing3DStateAbstractor:
         movables = state.get_objects(MujocoMovableObjectType)
         all_mujoco_objects = set(fixtures) | set(movables)
         cubes = self._get_cubes(state)
-        barriers = [o for o in movables if o.name == BARRIER_NAME]
+        barriers = [o for o in fixtures + movables if o.name == BARRIER_NAME]
 
         if self._check_gripper_open(state, robot):
             atoms.add(GroundAtom(HandEmpty, [robot]))
