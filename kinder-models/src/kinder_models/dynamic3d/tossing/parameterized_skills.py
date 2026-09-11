@@ -1352,16 +1352,17 @@ class MoveToTossLocationAndTossController(
 
     # Coupled speed/release candidates for the farther simulated receiver. Faster
     # swings need earlier release; sampling these independently wastes refinements.
+    # Release times align with 10 Hz actions; no sub-step schedules are emitted.
     # Every instance uses the same candidates, selected with the planner's RNG.
     THROW_PROFILES = (
-        (190.0, 680.0),
-        (220.0, 590.0),
-        (230.0, 590.0),
-        (250.0, 550.0),
-        (280.0, 550.0),
-        (320.0, 520.0),
+        (190.0, 700.0),
+        (220.0, 600.0),
+        (230.0, 600.0),
+        (250.0, 600.0),
+        (280.0, 600.0),
+        (320.0, 500.0),
         (360.0, 500.0),
-        (400.0, 480.0),
+        (400.0, 500.0),
     )
     MAX_SWING_VELOCITY = np.deg2rad(400.0)
 
@@ -1436,6 +1437,8 @@ class MoveToTossLocationAndTossController(
         self._last_state = x
         self._release_speed = float(current_params[2])
         self._gripper_release_ms = int(round(float(current_params[3])))
+        if self._gripper_release_ms % int(round(_CONTROL_TIMESTEP * 1000)) != 0:
+            raise ValueError("gripper_release_ms must align with a control step")
         self._phase = self.MoveToTossLocationAndTossControllerPhase.BASE_MOTION
         self._windup_step_idx = 0
         self._swing = None

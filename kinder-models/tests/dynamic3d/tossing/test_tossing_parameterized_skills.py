@@ -11,7 +11,7 @@ import pytest
 from bilevel_planning.structs import GroundParameterizedController
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
-from kinder.envs.dynamic3d.envs import TidyBot3DEnv
+from kinder.envs.dynamic3d.envs import TidyBot3DConfig, TidyBot3DEnv
 from kinder.envs.dynamic3d.object_types import (
     MujocoMovableObjectType,
     MujocoObjectTypeFeatures,
@@ -1796,7 +1796,7 @@ def test_move_to_toss_location_and_toss_plans_every_phase_in_reset():
     controller = controllers["move_to_toss_location_and_toss"].ground(
         (robot, cube, barrier)
     )
-    controller.reset(state, np.array([1.30, 0.0, TOSS_MAX_VELOCITY, 720.0]))
+    controller.reset(state, np.array([1.30, 0.0, TOSS_MAX_VELOCITY, 700.0]))
     # Every phase is planned before the first action is asked for.
     # pylint: disable-next=protected-access
     assert controller._current_base_motion_plan is not None
@@ -1913,8 +1913,9 @@ def test_pick_cube_retrieves_from_bin_after_toss(tmp_path):
     )
     task_path = tmp_path / "bin-retrieval.json"
     task_path.write_text(json.dumps(config), encoding="utf-8")
-    env = kinder.make(
-        "kinder/Tossing3D-o1-v0",
+    env = TidyBot3DEnv(
+        num_objects=1,
+        config=TidyBot3DConfig(use_arm_velocities=True),
         render_mode="rgb_array",
         task_config_path=str(task_path),
     )
@@ -1944,7 +1945,7 @@ def test_pick_cube_retrieves_from_bin_after_toss(tmp_path):
                 "toss",
                 "move_to_toss_location_and_toss",
                 (robot, cube, barrier),
-                np.array([1.35, 0, np.deg2rad(130), 792]),
+                np.array([1.35, 0, np.deg2rad(130), 800]),
             ),
             ("retrieval", "pick_cube", (robot, cube, barrier), None),
         ):
