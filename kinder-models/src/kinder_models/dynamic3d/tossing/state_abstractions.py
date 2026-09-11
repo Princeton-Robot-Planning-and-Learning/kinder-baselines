@@ -19,6 +19,14 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoObjectType,
     MujocoTidyBotRobotObjectType,
 )
+from pybullet_helpers.geometry import Quaternion
+from relational_structs import (
+    GroundAtom,
+    Object,
+    ObjectCentricState,
+    Predicate,
+)
+
 from kinder_models.dynamic3d.utils import (
     END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE,
     GRIPPER_GRASPING_THRESHOLD,
@@ -27,13 +35,6 @@ from kinder_models.dynamic3d.utils import (
     ON_GROUND_TOLERANCE,
     PyBulletSim,
     cube_tilt_from_upright,
-)
-from pybullet_helpers.geometry import Quaternion
-from relational_structs import (
-    GroundAtom,
-    Object,
-    ObjectCentricState,
-    Predicate,
 )
 
 # Upstream types cube, bin and barrier alike, so names state the type, not the subset.

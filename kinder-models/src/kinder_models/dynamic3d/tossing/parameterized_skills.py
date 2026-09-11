@@ -20,6 +20,24 @@ from kinder.envs.dynamic3d.object_types import (
 from kinder.envs.dynamic3d.robots.tidybot_robot_env import (
     TidyBot3DRobotActionSpace,
 )
+from prpl_utils.utils import get_signed_angle_distance
+from pybullet_helpers.geometry import Pose, Quaternion, multiply_poses
+from pybullet_helpers.inverse_kinematics import (
+    JointPositions,
+    inverse_kinematics,
+)
+from pybullet_helpers.motion_planning import (
+    remap_joint_position_plan_to_constant_distance,
+    run_motion_planning,
+)
+from relational_structs import (
+    Array,
+    Object,
+    ObjectCentricState,
+    Variable,
+)
+from spatialmath import SE2
+
 from kinder_models.dynamic3d.tossing.toss_swing import (
     TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
     TOSS_MAX_VELOCITY,
@@ -52,23 +70,6 @@ from kinder_models.dynamic3d.utils import (
     upright_grasp_rotations,
     wrap_arm_joint_difference,
 )
-from prpl_utils.utils import get_signed_angle_distance
-from pybullet_helpers.geometry import Pose, Quaternion, multiply_poses
-from pybullet_helpers.inverse_kinematics import (
-    JointPositions,
-    inverse_kinematics,
-)
-from pybullet_helpers.motion_planning import (
-    remap_joint_position_plan_to_constant_distance,
-    run_motion_planning,
-)
-from relational_structs import (
-    Array,
-    Object,
-    ObjectCentricState,
-    Variable,
-)
-from spatialmath import SE2
 
 logger = logging.getLogger(__name__)
 
