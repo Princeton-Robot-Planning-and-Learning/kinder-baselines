@@ -7,6 +7,9 @@ so refinement backtracks over the throw alone.
 TODO: only Tossing3D-o1 is supported; no operator says which cube a throw is aimed at.
 """
 
+# MuJoCo exposes its API through a C extension.
+# pylint: disable=no-member
+
 from pathlib import Path
 
 import kinder
