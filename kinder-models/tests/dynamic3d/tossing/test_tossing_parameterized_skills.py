@@ -1693,13 +1693,17 @@ def test_move_to_toss_location_and_toss_samples_four_parameters():
         ]
     )
     assert draws.shape == (50, 4)
+    receiver = state.get_object_from_name("bin_0")
+    launch_x = state.get(receiver, "x") - draws[:, 0] * np.cos(draws[:, 1])
+    assert np.all(launch_x + 0.275 < state.get(barrier, "x"))
+    assert np.ptp(draws[:, 0]) > 0
+    assert np.ptp(draws[:, 1]) > 0
     for column, (low, high) in enumerate(
         [
-            MoveToTossLocationAndTossController.TARGET_DISTANCE_BOUNDS,
-            MoveToTossLocationAndTossController.TARGET_ROTATION_BOUNDS,
             MoveToTossLocationAndTossController.SPEED_BOUNDS,
             MoveToTossLocationAndTossController.RELEASE_MS_BOUNDS,
-        ]
+        ],
+        start=2,
     ):
         assert draws[:, column].min() >= low
         assert draws[:, column].max() <= high
