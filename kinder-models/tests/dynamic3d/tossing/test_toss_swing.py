@@ -240,3 +240,22 @@ def test_toss_swing_bounds_position_error_even_when_tracking_lags():
     assert np.all(np.abs(action[:, :10]) <= np.float32(0.1))
     assert np.all(action[:25, 10] == 1.0)
     assert np.all(action[25:, 10] == 0.0)
+
+
+def test_room_profiles_emit_only_declared_action_vectors():
+    """Every shipped profile releases on a 10 Hz boundary, without a schedule."""
+    start = list(TOSS_WINDUP_ARM_CONFIGURATION)
+    target = list(TOSS_RELEASE_ARM_CONFIGURATION)
+    for speed, release_ms in MoveToTossLocationAndTossController.THROW_PROFILES:
+        swing = plan_toss_swing(
+            [target],
+            start,
+            np.deg2rad(speed),
+            int(release_ms),
+            max_velocity=MoveToTossLocationAndTossController.MAX_SWING_VELOCITY,
+        )
+        assert swing.release_slice == 0
+        action = toss_swing_action(swing, swing.release_step, start, 1.0, False)
+        assert action.shape == (18,)
+        assert np.all(np.abs(action[:10]) <= np.float32(0.1))
+        assert action[10] == 0.0
