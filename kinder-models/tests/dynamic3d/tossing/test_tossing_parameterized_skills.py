@@ -1671,45 +1671,48 @@ def test_pick_cube_never_unwinds_a_joint_by_a_whole_turn():
 
 
 def test_move_to_toss_location_and_toss_samples_four_parameters():
-    """Standoff, rotation, release speed and release millisecond, all in bounds."""
-    num_cubes = 1
-    env = kinder.make(
-        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
-    )
+    """Launch stays behind the barrier while throw parameters vary."""
+    env = kinder.make("kinder/Tossing3D-o1-v0", num_objects=1)
     obs, _ = env.reset(seed=125)
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
-    controllers = create_lifted_controllers(env.action_space)
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
     barrier = state.get_object_from_name("cuboid_barrier")
-    controller = controllers["move_to_toss_location_and_toss"].ground(
-        (robot, cube, barrier)
-    )
-    draws = np.array(
-        [
-            controller.sample_parameters(state, np.random.default_rng(seed))
-            for seed in range(50)
-        ]
-    )
-    assert draws.shape == (50, 4)
-    receiver = state.get_object_from_name("bin_0")
-    launch_x = state.get(receiver, "x") - draws[:, 0] * np.cos(draws[:, 1])
-    assert np.all(launch_x + 0.275 < state.get(barrier, "x"))
-    assert np.ptp(draws[:, 0]) > 0
-    assert np.ptp(draws[:, 1]) > 0
-    for column, (low, high) in enumerate(
-        [
-            MoveToTossLocationAndTossController.SPEED_BOUNDS,
-            MoveToTossLocationAndTossController.RELEASE_MS_BOUNDS,
-        ],
-        start=2,
-    ):
-        assert draws[:, column].min() >= low
-        assert draws[:, column].max() <= high
-        # A sampler, not a constant, in every component.
-        assert draws[:, column].min() < draws[:, column].max()
-    env.close()
+    sim = PyBulletSim(state)
+    try:
+        sim.add_box(
+            name=barrier.name,
+            pose=Pose((1.3, 0.0, 0.1)),
+            dimensions=(0.06, 10.0, 0.2),
+        )
+        controller = MoveToTossLocationAndTossController(
+            [robot, cube, barrier], pybullet_sim=sim
+        )
+        draws = np.array(
+            [
+                controller.sample_parameters(state, np.random.default_rng(seed))
+                for seed in range(50)
+            ]
+        )
+        assert draws.shape == (50, 4)
+        assert np.max(np.abs(draws[:, 1])) < 0.1
+        assert np.ptp(draws[:, 0]) > 0
+        assert np.ptp(draws[:, 2]) > 0
+        assert np.ptp(draws[:, 3]) > 0
+        receiver = state.get_object_from_name("bin_0")
+        for distance, _, speed, release in draws:
+            launch_x = state.get(receiver, "x") - distance
+            assert launch_x + 0.275 < state.get(barrier, "x") - 0.03
+            assert controller.SPEED_BOUNDS[0] <= speed <= controller.SPEED_BOUNDS[1]
+            assert (
+                controller.RELEASE_MS_BOUNDS[0]
+                <= release
+                <= controller.RELEASE_MS_BOUNDS[1]
+            )
+    finally:
+        sim.close()
+        env.close()
 
 
 def test_open_gripper_commands_open_until_the_gripper_reads_open():
