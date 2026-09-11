@@ -4,7 +4,7 @@ MovableIsDownX records that one movable is at lower x than another -- in practic
 side of cuboid_barrier (x ~ 1.3) a cube is on, so an operator model can express that a
 toss past it is irreversible.
 
-TODO: only Tossing3D-o1 is supported; no operator says which cube a throw is aimed at.
+Each cube has separate holding, barrier-side and goal predicates.
 """
 
 import numpy as np
@@ -60,11 +60,6 @@ class Tossing3DStateAbstractor:
     def __init__(self, sim: ObjectCentricTidyBot3DEnv) -> None:
         """Initialize the state abstractor."""
         initial_state, _ = sim.reset()
-        cubes = self._get_cubes(initial_state)
-        assert len(cubes) == 1, (
-            f"only Tossing3D-o1 is supported, got {len(cubes)} cubes; see this "
-            "module's TODO for what o2 would need"
-        )
         self._pybullet_sim = PyBulletSim(initial_state, rendering=False)
         self._robot_name = sim.robot_name
         self._sim = sim
