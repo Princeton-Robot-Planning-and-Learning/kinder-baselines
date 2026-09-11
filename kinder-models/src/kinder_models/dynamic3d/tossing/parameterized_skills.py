@@ -44,6 +44,7 @@ from kinder_models.dynamic3d.tossing.toss_swing import (
     TOSS_RELEASE_ARM_CONFIGURATION,
     TOSS_WINDUP_ARM_CONFIGURATION,
     TossSwing,
+    bound_tossing_action,
     plan_toss_swing,
     toss_swing_action,
 )
@@ -171,7 +172,7 @@ class MoveToTargetGroundController(
         action[1] = dy
         action[2] = drot
         action[-1] = self._get_current_robot_gripper_pose()
-        return action
+        return bound_tossing_action(action)
 
     def observe(self, x: ObjectCentricState) -> None:
         self._last_state = x
@@ -340,7 +341,7 @@ class MoveArmToConfController(GroundParameterizedController[ObjectCentricState, 
         action[10] = gripper_pose
 
         self._step_idx += 1
-        return action
+        return bound_tossing_action(action)
 
     def observe(self, x: ObjectCentricState) -> None:
         self._last_state = x
@@ -409,7 +410,7 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
         x: ObjectCentricState,
         params: Any,
         release_speed: float = TOSS_MAX_VELOCITY,
-        gripper_release_ms: int = TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
+        gripper_release_ms: int = 700,
     ) -> None:
         """Plan the swing, and fix the millisecond the gripper opens on.
 
@@ -418,6 +419,11 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
         the swing's duration: a value at or past the end means the gripper never opens
         and the cube is never thrown.
         """
+        # Public actions run at 10 Hz. Keep sub-step schedules in the low-level
+        # swing helper; the controller's default is the nearest boundary to 720 ms.
+        control_step_ms = int(round(_CONTROL_TIMESTEP * 1000))
+        if gripper_release_ms % control_step_ms != 0:
+            raise ValueError("gripper_release_ms must align with a control step")
         # Initialize the PyBullet interface if this is the first time ever.
         if self._pybullet_sim is None:
             self._pybullet_sim = PyBulletSim(x)
@@ -454,12 +460,7 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
         return self._step_idx >= len(self._swing.trajectory)
 
     def step(self) -> Array:
-        """The swing's command for one control step, opening the gripper mid-step.
-
-        The usual (18,) action, except on the step the release falls inside, which
-        returns a (TOSS_SLICES_PER_CONTROL_STEP, 18) schedule so gripper_release_ms
-        means the millisecond it names rather than the next step boundary.
-        """
+        """Return one bounded 18D control action, opening on a step boundary."""
         assert self._swing is not None
         action = toss_swing_action(
             self._swing,
@@ -471,7 +472,7 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
         if self._step_idx == self._swing.release_step:
             self._has_released = True
         self._step_idx += 1
-        return action
+        return bound_tossing_action(action)
 
     def observe(self, x: ObjectCentricState) -> None:
         self._last_state = x
@@ -633,7 +634,7 @@ class MoveArmToEndEffectorController(
         action[10] = gripper_pose
 
         self._step_idx += 1
-        return action
+        return bound_tossing_action(action)
 
     def observe(self, x: ObjectCentricState) -> None:
         self._last_state = x
@@ -695,7 +696,7 @@ class CloseGripperController(GroundParameterizedController[ObjectCentricState, A
         self.last_gripper_state = self._get_current_gripper_pose()
         action = np.zeros(11, dtype=np.float32)
         action[-1] = 1
-        return action
+        return bound_tossing_action(action)
 
     def observe(self, x: ObjectCentricState) -> None:
         self._last_state = x
@@ -742,7 +743,7 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
         self.last_gripper_state = self._get_current_gripper_pose()
         action = np.zeros(11, dtype=np.float32)
         action[-1] = 0
-        return action
+        return bound_tossing_action(action)
 
     def observe(self, x: ObjectCentricState) -> None:
         self._last_state = x
@@ -790,7 +791,7 @@ class NoOpController(GroundParameterizedController[ObjectCentricState, Array]):
     def step(self) -> Array:
         action = np.zeros(11, dtype=np.float32)
         action[-1] = self._get_current_gripper_pose()
-        return action
+        return bound_tossing_action(action)
 
     def observe(self, x: ObjectCentricState) -> None:
         self._last_state = x
@@ -1135,7 +1136,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             return self._step_base_motion()
         action = np.zeros(11, dtype=np.float32)
         action[-1] = 0
-        return action
+        return bound_tossing_action(action)
 
     def _step_base_motion(self) -> Array:
         base_plan = self.plans[self.PickCubeControllerPhase.BASE_MOTION]
@@ -1165,7 +1166,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         action[1] = dy
         action[2] = drot
         action[-1] = self._get_current_robot_gripper_pose()
-        return action
+        return bound_tossing_action(action)
 
     def _step_trajectory_phase(
         self,
@@ -1199,7 +1200,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 self.current_phase = next_phase
             else:
                 self._lifted = True
-        return action
+        return bound_tossing_action(action)
 
     def _step_close_gripper(self) -> Array:
         if self._get_current_robot_gripper_pose() > 0.2 and np.isclose(
@@ -1212,7 +1213,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         action = np.zeros(11, dtype=np.float32)
         action[-1] = 1
         self._last_gripper_state = self._get_current_robot_gripper_pose()
-        return action
+        return bound_tossing_action(action)
 
     def observe(self, x: ObjectCentricState) -> None:
         self._last_state = x
@@ -1595,7 +1596,7 @@ class MoveToTossLocationAndTossController(
         action[1] = next_pose.y - robot_pose.y
         action[2] = get_signed_angle_distance(next_pose.theta(), robot_pose.theta())
         action[-1] = self._get_current_robot_gripper_pose()
-        return action
+        return bound_tossing_action(action)
 
     def _action_windup(self) -> Array:
         action = np.zeros(18, dtype=np.float32)
@@ -1617,7 +1618,7 @@ class MoveToTossLocationAndTossController(
         self._windup_step_idx += 1
         if self._windup_step_idx >= len(self._windup_trajectory):
             self._phase = self.MoveToTossLocationAndTossControllerPhase.SWING
-        return action
+        return bound_tossing_action(action)
 
     def _action_swing(self) -> Array:
         assert self._swing is not None
@@ -1636,7 +1637,7 @@ class MoveToTossLocationAndTossController(
                 "MoveToTossLocationAndToss: swing done -- entering RETURN_HOME"
             )
             self._phase = self.MoveToTossLocationAndTossControllerPhase.RETURN_HOME
-        return action
+        return bound_tossing_action(action)
 
     def _action_return_home(self) -> Array:
         # wrap_arm_joint_difference, not a raw subtraction: the retract target holds
@@ -1650,7 +1651,7 @@ class MoveToTossLocationAndTossController(
         action = np.zeros(18, dtype=np.float32)
         action[3:10] = kp * wrap_arm_joint_difference(target - curr)
         action[10] = self._get_current_robot_gripper_pose()
-        return action
+        return bound_tossing_action(action)
 
     def _get_current_robot_pose(self) -> SE2:
         assert self._last_state is not None
