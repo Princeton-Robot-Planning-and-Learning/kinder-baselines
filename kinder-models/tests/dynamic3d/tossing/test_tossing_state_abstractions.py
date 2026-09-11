@@ -152,13 +152,17 @@ def test_the_goal_is_every_cube_in_the_goal_region():
     env.close()
 
 
-def test_the_abstractor_rejects_the_two_cube_variant():
-    """O2 is out of scope: no operator says which cube a throw is aimed at."""
+def test_the_abstractor_requires_both_cubes_in_the_goal():
+    """The two-cube goal contains a separate atom for each cube."""
     kinder.register_all_environments()
     env = kinder.make("kinder/Tossing3D-o2-v0", render_mode="rgb_array")
     sim = env.unwrapped._object_centric_env  # pylint: disable=protected-access
-    with pytest.raises(AssertionError, match="only Tossing3D-o1 is supported"):
-        Tossing3DStateAbstractor(sim)
+    abstractor = Tossing3DStateAbstractor(sim)
+    state, _ = sim.reset(seed=3)
+    cubes = [state.get_object_from_name(f"cube_{i}") for i in range(2)]
+    goal = abstractor.goal_deriver(state)
+    assert goal.atoms == {GroundAtom(MovableInGoalRegion, [cube]) for cube in cubes}
+    assert not goal.check_state(state)
     env.close()
 
 
