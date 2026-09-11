@@ -1131,7 +1131,8 @@ def test_pick_toss():
     cube = state.get_object_from_name("bin_0")
     object_parameters = (robot, cube)
     controller = lifted_controller.ground(object_parameters)
-    target_distance = 1.35
+    # Keep the test launch pose on the reachable side of the fixed barrier.
+    target_distance = state.get(cube, "x") - 0.9
     target_rotation = 0.0
     params = np.array([target_distance, target_rotation])
 
@@ -1264,7 +1265,8 @@ def test_pick_ground_toss():
     cube = state.get_object_from_name("bin_0")
     object_parameters = (robot, cube)
     controller = lifted_controller.ground(object_parameters)
-    target_distance = 1.35
+    # Keep the test launch pose on the reachable side of the fixed barrier.
+    target_distance = state.get(cube, "x") - 0.9
     target_rotation = 0.0
     params = np.array([target_distance, target_rotation])
 
@@ -1463,7 +1465,8 @@ def test_toss_schedules_its_release_at_the_requested_millisecond():
     move = tossing["move_to_target"].ground(
         (robot, state.get_object_from_name("bin_0"))
     )
-    _run(move, np.array([1.35, 0.0]), disable_collision_objects=["cube_0"])
+    distance = state.get(state.get_object_from_name("bin_0"), "x") - 0.9
+    _run(move, np.array([distance, 0.0]), disable_collision_objects=["cube_0"])
 
     robot = _get_robot_from_state(state)
     _run(tossing["move_arm_to_conf"].ground((robot,)), TOSS_WINDUP_ARM_CONFIGURATION)
