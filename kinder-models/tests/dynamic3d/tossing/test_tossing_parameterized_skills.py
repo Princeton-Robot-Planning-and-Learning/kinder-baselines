@@ -42,6 +42,7 @@ from kinder_models.dynamic3d.tossing.toss_swing import (
     TOSS_RELEASE_ARM_CONFIGURATION,
     TOSS_SLICES_PER_CONTROL_STEP,
     TOSS_WINDUP_ARM_CONFIGURATION,
+    bound_tossing_action,
     toss_profile_limits,
 )
 from kinder_models.dynamic3d.utils import (
@@ -1042,7 +1043,7 @@ def test_pick_toss():
     controller.reset(state, params)
     for _ in range(200):
         action = controller.step()
-        obs, _, _, _, _ = env.step(action)
+        obs, _, _, _, _ = env.step(bound_tossing_action(action))
         next_state = env.observation_space.devectorize(obs)
         controller.observe(next_state)
         state = next_state
@@ -1074,7 +1075,7 @@ def test_pick_toss():
     controller.reset(state, params)
     for _ in range(200):
         action = controller.step()
-        obs, _, _, _, _ = env.step(action)
+        obs, _, _, _, _ = env.step(bound_tossing_action(action))
         next_state = env.observation_space.devectorize(obs)
         controller.observe(next_state)
         state = next_state
@@ -1094,7 +1095,7 @@ def test_pick_toss():
     controller.reset(state)
     for _ in range(20):
         action = controller.step()
-        obs, _, _, _, _ = env.step(action)
+        obs, _, _, _, _ = env.step(bound_tossing_action(action))
         next_state = env.observation_space.devectorize(obs)
         controller.observe(next_state)
         state = next_state
@@ -1115,7 +1116,7 @@ def test_pick_toss():
     controller.reset(state, params)
     for _ in range(200):
         action = controller.step()
-        obs, _, _, _, _ = env.step(action)
+        obs, _, _, _, _ = env.step(bound_tossing_action(action))
         next_state = env.observation_space.devectorize(obs)
         controller.observe(next_state)
         state = next_state
@@ -1131,7 +1132,7 @@ def test_pick_toss():
     cube = state.get_object_from_name("bin_0")
     object_parameters = (robot, cube)
     controller = lifted_controller.ground(object_parameters)
-    # Keep the test launch pose on the reachable side of the fixed barrier.
+    # The fixed barrier requires the robot to stay on its original side.
     target_distance = state.get(cube, "x") - 0.9
     target_rotation = 0.0
     params = np.array([target_distance, target_rotation])
@@ -1140,7 +1141,7 @@ def test_pick_toss():
     controller.reset(state, params, disable_collision_objects=["cube_0"])
     for _ in range(200):
         action = controller.step()
-        obs, _, _, _, _ = env.step(action)
+        obs, _, _, _, _ = env.step(bound_tossing_action(action))
         next_state = env.observation_space.devectorize(obs)
         controller.observe(next_state)
         state = next_state
@@ -1161,7 +1162,7 @@ def test_pick_toss():
     controller.reset(state, params)
     for _ in range(200):
         action = controller.step()
-        obs, _, _, _, _ = env.step(action)
+        obs, _, _, _, _ = env.step(bound_tossing_action(action))
         next_state = env.observation_space.devectorize(obs)
         controller.observe(next_state)
         state = next_state
@@ -1182,7 +1183,7 @@ def test_pick_toss():
     controller.reset(state, params)
     for _ in range(200):
         action = controller.step()
-        obs, _, _, _, _ = env.step(action)
+        obs, _, _, _, _ = env.step(bound_tossing_action(action))
         next_state = env.observation_space.devectorize(obs)
         controller.observe(next_state)
         state = next_state
@@ -1249,7 +1250,7 @@ def test_pick_ground_toss():
     controller.reset(state, params)
     for _ in range(400):
         action = controller.step()
-        obs, _, _, _, _ = env.step(action)
+        obs, _, _, _, _ = env.step(bound_tossing_action(action))
         next_state = env.observation_space.devectorize(obs)
         controller.observe(next_state)
         state = next_state
@@ -1265,7 +1266,7 @@ def test_pick_ground_toss():
     cube = state.get_object_from_name("bin_0")
     object_parameters = (robot, cube)
     controller = lifted_controller.ground(object_parameters)
-    # Keep the test launch pose on the reachable side of the fixed barrier.
+    # The fixed barrier requires the robot to stay on its original side.
     target_distance = state.get(cube, "x") - 0.9
     target_rotation = 0.0
     params = np.array([target_distance, target_rotation])
@@ -1274,7 +1275,7 @@ def test_pick_ground_toss():
     controller.reset(state, params, disable_collision_objects=["cube_0"])
     for _ in range(200):
         action = controller.step()
-        obs, _, _, _, _ = env.step(action)
+        obs, _, _, _, _ = env.step(bound_tossing_action(action))
         next_state = env.observation_space.devectorize(obs)
         controller.observe(next_state)
         state = next_state
@@ -1295,7 +1296,7 @@ def test_pick_ground_toss():
     controller.reset(state, params)
     for _ in range(200):
         action = controller.step()
-        obs, _, _, _, _ = env.step(action)
+        obs, _, _, _, _ = env.step(bound_tossing_action(action))
         next_state = env.observation_space.devectorize(obs)
         controller.observe(next_state)
         state = next_state
@@ -1316,7 +1317,7 @@ def test_pick_ground_toss():
     controller.reset(state, params)
     for _ in range(200):
         action = controller.step()
-        obs, _, _, _, _ = env.step(action)
+        obs, _, _, _, _ = env.step(bound_tossing_action(action))
         next_state = env.observation_space.devectorize(obs)
         controller.observe(next_state)
         state = next_state
@@ -1424,77 +1425,18 @@ def test_a_release_ms_past_the_swing_never_opens_the_gripper():
     assert late_step >= len(trajectory)
 
 
-def test_toss_schedules_its_release_at_the_requested_millisecond():
-    """End to end: exactly one action of a real toss is a control schedule.
-
-    That schedule has to reach the simulator and land on the millisecond asked for
-    rather than the next control-step boundary. Every other action is a plain (18,).
-    """
-    requested_ms = 812  # deliberately not a multiple of 100
-    expected_step, expected_slice = divmod(requested_ms, TOSS_SLICES_PER_CONTROL_STEP)
-
-    env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", scene_bg=False)
-    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+def test_public_toss_rejects_substep_release_schedules():
+    """The public controller emits vectors from the declared 10 Hz action space."""
+    env = kinder.make("kinder/Tossing3D-o1-v0", scene_bg=False)
     obs, _ = env.reset(seed=125)
     state = env.observation_space.devectorize(obs)
-    shelf = shelf_skills.create_lifted_controllers(env.action_space)
-    tossing = create_lifted_controllers(env.action_space)
-
-    def _run(controller, params, **reset_kwargs):
-        """Drive one controller to termination, returning the actions it emitted."""
-        nonlocal state
-        controller.reset(state, params, **reset_kwargs)
-        emitted = []
-        for _ in range(400):
-            action = controller.step()
-            emitted.append(np.array(action, copy=True))
-            observation, _, _, _, _ = env.step(action)
-            state = env.observation_space.devectorize(observation)
-            controller.observe(state)
-            if controller.terminated():
-                return emitted
-        assert False, "Controller did not terminate"
-
-    # The cube has to be *in* the gripper, or the release is a no-op: an empty hand
-    # commands 0.0 both sides of the release.
     robot = _get_robot_from_state(state)
-    pick = shelf["pick_shelf"].ground((robot, state.get_object_from_name("cube_0")))
-    _run(pick, pick.sample_parameters(state, np.random.default_rng(123)))
-
-    robot = _get_robot_from_state(state)
-    move = tossing["move_to_target"].ground(
-        (robot, state.get_object_from_name("bin_0"))
-    )
-    distance = state.get(state.get_object_from_name("bin_0"), "x") - 0.9
-    _run(move, np.array([distance, 0.0]), disable_collision_objects=["cube_0"])
-
-    robot = _get_robot_from_state(state)
-    _run(tossing["move_arm_to_conf"].ground((robot,)), TOSS_WINDUP_ARM_CONFIGURATION)
-
-    robot = _get_robot_from_state(state)
-    toss = tossing["toss"].ground((robot,))
-    actions = _run(
-        toss, TOSS_RELEASE_ARM_CONFIGURATION, gripper_release_ms=requested_ms
-    )
-
-    scheduled = [i for i, action in enumerate(actions) if action.ndim == 2]
-    assert scheduled == [expected_step]
-    schedule = actions[expected_step]
-    # A schedule covers the whole control period, so release is located by index.
-    assert schedule.shape == (TOSS_SLICES_PER_CONTROL_STEP, 18)
-    assert np.all(schedule[:expected_slice, 10] == schedule[0, 10])
-    assert schedule[0, 10] > 0.0
-    assert np.all(schedule[expected_slice:, 10] == 0.0)
-
-    # Only the gripper column varies; the arm is commanded identically across slices.
-    columns = [c for c in range(18) if c != 10]
-    assert np.all(schedule[:, columns] == schedule[0, columns])
-
-    # Everything before the release still holds the cube, everything after is open.
-    assert all(action[10] > 0.0 for action in actions[:expected_step])
-    assert all(action[10] == 0.0 for action in actions[expected_step + 1 :])
-
-    env.close()
+    toss = create_lifted_controllers(env.action_space)["toss"].ground((robot,))
+    try:
+        with pytest.raises(ValueError, match="align with a control step"):
+            toss.reset(state, TOSS_RELEASE_ARM_CONFIGURATION, gripper_release_ms=812)
+    finally:
+        env.close()
 
 
 def test_pick_cube_takes_no_continuous_parameters():
@@ -1733,8 +1675,8 @@ def test_open_gripper_commands_open_until_the_gripper_reads_open():
     controller.reset(shut)
     assert not controller.terminated()
     action = controller.step()
-    assert action.shape == (11,)
-    assert action[-1] == 0
+    assert action.shape == (18,)
+    assert action[10] == 0
 
     opened = state.copy()
     opened.set(robot, "pos_gripper", 0.0)
@@ -1764,7 +1706,7 @@ def test_no_op_controller_terminates_immediately_and_holds_the_gripper_command()
     controller.reset(open_gripper)
     assert controller.terminated()
     action = controller.step()
-    assert action.shape == (11,)
+    assert action.shape == (18,)
     assert np.all(action == 0)
 
     closed_gripper = state.copy()
@@ -1772,8 +1714,8 @@ def test_no_op_controller_terminates_immediately_and_holds_the_gripper_command()
     controller.reset(closed_gripper)
     assert controller.terminated()
     action = controller.step()
-    assert action[:-1].tolist() == [0.0] * (action.shape[0] - 1)
-    assert action[-1] == GRASP_CLOSE_THRESHOLD
+    assert np.delete(action, 10).tolist() == [0.0] * (action.shape[0] - 1)
+    assert action[10] == GRASP_CLOSE_THRESHOLD
     env.close()
 
 

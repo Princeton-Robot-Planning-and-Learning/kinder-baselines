@@ -1,6 +1,7 @@
 """Tests for toss_swing.py."""
 
 import numpy as np
+from kinder.envs.dynamic3d.robots.tidybot_robot_env import TidyBotRobotEnv
 
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     MoveToTossLocationAndTossController,
@@ -13,6 +14,7 @@ from kinder_models.dynamic3d.tossing.toss_swing import (
     TOSS_RELEASE_ARM_CONFIGURATION,
     TOSS_SLICES_PER_CONTROL_STEP,
     TOSS_WINDUP_ARM_CONFIGURATION,
+    bound_tossing_action,
     plan_toss_swing,
     toss_profile_limits,
     toss_swing_action,
@@ -200,3 +202,41 @@ def test_plan_toss_swing_is_unmoved_by_a_whole_turn_on_a_continuous_joint():
     assert np.allclose(wrapped.direction, plain.direction)
     assert wrapped.release_step == plain.release_step
     assert wrapped.release_slice == plain.release_slice
+
+
+def test_bounded_tossing_action_preserves_pd_torque_and_gripper_schedule():
+    """Position limits must not silently weaken a planned throw or alter release."""
+    rng = np.random.default_rng(12)
+    action = rng.normal(size=(100, 18)).astype(np.float32)
+    action[:, 10] = np.arange(100) < 45
+    original = action.copy()
+    velocity = rng.normal(size=(100, 7))
+    bounded = bound_tossing_action(action)
+    kp, kd = TidyBotRobotEnv.ARM_KP, TidyBotRobotEnv.ARM_KD
+    expected_torque = kp * action[:, 3:10] + kd * (action[:, 11:18] - velocity)
+    actual_torque = kp * bounded[:, 3:10] + kd * (bounded[:, 11:18] - velocity)
+    assert np.allclose(actual_torque, expected_torque, atol=1e-4)
+    assert np.all(np.abs(bounded[:, :10]) <= np.float32(0.1))
+    assert np.array_equal(bounded[:, 10], action[:, 10])
+    assert np.array_equal(action, original)
+
+
+def test_bounded_tossing_action_pads_setup_without_moving_the_gripper_index():
+    """Open, close, and base-only actions use the same 18D interface as swings."""
+    action = np.zeros(11, dtype=np.float32)
+    action[0] = 0.05
+    action[10] = 1.0
+    bounded = bound_tossing_action(action)
+    assert bounded.shape == (18,)
+    assert np.array_equal(bounded[:11], action)
+    assert np.array_equal(bounded[11:], np.zeros(7))
+
+
+def test_toss_swing_bounds_position_error_even_when_tracking_lags():
+    """The authoritative helper bounds every row, including a timed release."""
+    swing = _straight_swing(release_ms=725)
+    action = toss_swing_action(swing, swing.release_step, [0.0] * 13, 1.0, False)
+    assert action.shape == (100, 18)
+    assert np.all(np.abs(action[:, :10]) <= np.float32(0.1))
+    assert np.all(action[:25, 10] == 1.0)
+    assert np.all(action[25:, 10] == 0.0)
