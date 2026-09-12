@@ -1,0 +1,9 @@
+# Used to refer to the family of environments, e.g., with different numbers of objects.
+env_name: "franka_pickplace3d"
+
+# Passed into kinder.make() to create the environment.
+make_kwargs:
+  id: "kinder/FrankaPickPlace3D-o1-v0"
+
+# Passed into create_domain_specific_policy() to create the policy.
+policy_kwargs: {}
