@@ -1615,6 +1615,63 @@ def test_pick_cube_never_unwinds_a_joint_by_a_whole_turn():
     env.close()
 
 
+@pytest.mark.parametrize(
+    ("robot_values", "cube_values", "bin_xyz"),
+    [
+        (
+            (-0.0279723, 0.0288277, -0.0777655, 0.0, -0.3490659, 3.1415927,
+             -2.5481806, 0.0, -0.8726646, 1.5707963, 0.0),
+            (0.5677592, -0.2490022, 0.0200937, 0.9788500, 0.0, 0.0, 0.2045794),
+            (-2.0916207, -1.9016471, -0.0003950),
+        ),
+    ],
+)
+def test_pick_cube_terminates_from_observed_practice_failure_states(
+    robot_values, cube_values, bin_xyz
+):
+    """Regression states captured immediately before two 400-tick failures."""
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0",
+        render_mode="rgb_array",
+        num_objects=1,
+        allow_state_access=True,
+    )
+    obs, _ = env.reset(seed=125)
+    state = env.observation_space.devectorize(obs)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    bin_obj = state.get_object_from_name("bin_0")
+    robot_names = (
+        "pos_base_x", "pos_base_y", "pos_base_rot", "pos_arm_joint1",
+        "pos_arm_joint2", "pos_arm_joint3", "pos_arm_joint4", "pos_arm_joint5",
+        "pos_arm_joint6", "pos_arm_joint7", "pos_gripper",
+    )
+    for name, value in zip(robot_names, robot_values, strict=True):
+        state.set(robot, name, value)
+    for name, value in zip(("x", "y", "z", "qx", "qy", "qz", "qw"), cube_values, strict=True):
+        state.set(cube, name, value)
+    for name, value in zip(("x", "y", "z"), bin_xyz, strict=True):
+        state.set(bin_obj, name, value)
+    env.unwrapped.set_state(env.observation_space.vectorize(state))
+    state = env.observation_space.devectorize(env.unwrapped.get_state())
+    scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    sim = _create_bin_aware_sim(state, scene)
+    controller = create_lifted_controllers(
+        env.action_space, state, pybullet_sim=sim
+    )["pick_cube"].ground((robot, cube, barrier))
+    controller.reset(state, None)
+    for _ in range(400):
+        obs, _, _, _, _ = env.step(controller.step())
+        state = env.observation_space.devectorize(obs)
+        controller.observe(state)
+        if controller.terminated():
+            break
+    assert controller.terminated()
+    assert state.get(cube, "z") > 0.1
+    env.close()
+
+
 def test_move_to_toss_location_and_toss_samples_four_parameters():
     """Launch stays behind the barrier while throw parameters vary."""
     env = kinder.make("kinder/Tossing3D-o1-v0", num_objects=1)
