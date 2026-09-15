@@ -1268,10 +1268,14 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
     def _robot_is_close_to_conf(
         self, conf: JointPositions, atol: float = WAYPOINT_TOLERANCE
     ) -> bool:
-        current_conf = self._get_current_robot_arm_conf()
-        assert self._pybullet_sim is not None
-        dist = self._pybullet_sim.get_joint_distance(current_conf, conf)
-        return dist < atol
+        current = np.asarray(self._get_current_robot_arm_conf()[:7])
+        target = np.asarray(conf[:7])
+        # `step()` commands this same wrapped, per-joint error. Using PyBullet's
+        # aggregate configuration distance here can reject a waypoint even though
+        # every commanded joint is already inside the tolerance, leaving the
+        # controller indefinitely applying tiny corrections to the same waypoint.
+        error = wrap_arm_joint_difference(target - current)
+        return bool(np.max(np.abs(error)) < atol)
 
     def _robot_gripper_is_open(
         self, atol: float = GRIPPER_OPEN_COMMAND_TOLERANCE
