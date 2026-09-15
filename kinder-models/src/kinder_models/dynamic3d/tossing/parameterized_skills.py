@@ -72,6 +72,15 @@ from kinder_models.dynamic3d.utils import (
 
 logger = logging.getLogger(__name__)
 
+# The generic transform's 1 cm approach offset is marginal for the Tossing3D cube:
+# small base/IK tracking errors let the fingertips brush or push the cube while the
+# gripper closes around empty space. A 3 cm offset centres the 5 cm cube between the
+# fingers. This remains PickCube-specific so other Dynamic3D grasp controllers retain
+# their calibrated transform.
+PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT = Pose(
+    (-0.005, 0.0, 0.03), (0.707, 0.707, 0.0, 0.0)
+)
+
 # Per-joint motion between consecutive control steps below which the arm counts as
 # stopped. A stand-in for joint velocity, which the state does not expose for the arm.
 # Measured floor: the proportional controller's tail creeps at ~2.6e-3 rad/step and never
@@ -954,7 +963,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             grasp_quat,
         )
         target_hover_end_effector_pose = multiply_poses(
-            target_hover_end_effector_pose, GRASP_TRANSFORM_TO_OBJECT
+            target_hover_end_effector_pose, PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT
         )  # Offset by the intended grasp location
         target_hover_joints = inverse_kinematics(
             self._pybullet_sim.robot, target_hover_end_effector_pose, set_joints=False
@@ -980,7 +989,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             grasp_quat,
         )
         target_around_cube_end_effector_pose = multiply_poses(
-            target_around_cube_end_effector_pose, GRASP_TRANSFORM_TO_OBJECT
+            target_around_cube_end_effector_pose, PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT
         )  # Offset by the intended grasp location
         target_around_joints = inverse_kinematics(
             self._pybullet_sim.robot,
@@ -1014,7 +1023,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             cube_to_pick_up.name
         ]  # For collision detection
         self._pybullet_sim.base_link_to_held_obj = (
-            GRASP_TRANSFORM_TO_OBJECT.invert()
+            PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT.invert()
         )  # For Motion planning so it knows to avoid bonking the cube on things
         lift_plan = run_motion_planning(
             self._pybullet_sim.robot,
