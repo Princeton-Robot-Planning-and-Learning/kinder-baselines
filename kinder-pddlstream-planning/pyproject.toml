@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 dependencies = [
    "numpy",
    "pillow",
-   "kindergarden>=0.1.0",
+   "kindergarden>=0.2.5",
    "kinder_models>=0.1.0",
    "pybullet_helpers>=0.0.1",
    # Pinned to a full SHA, not a tag: pip only reuses its cached VCS wheel for
