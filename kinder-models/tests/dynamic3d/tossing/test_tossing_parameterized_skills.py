@@ -1734,6 +1734,37 @@ def test_pick_cube_terminates_from_observed_practice_failure_states(
     env.close()
 
 
+@pytest.mark.parametrize("seed", range(10))
+def test_pick_cube_succeeds_across_reset_seed_sweep(seed):
+    """Exercise varied base, cube, bin, and cube-orientation reset samples."""
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1
+    )
+    obs, _ = env.reset(seed=seed)
+    state = env.observation_space.devectorize(obs)
+    robot = _get_robot_from_state(state)
+    cube = state.get_object_from_name("cube_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    sim = _create_bin_aware_sim(state, scene)
+    try:
+        controller = create_lifted_controllers(
+            env.action_space, state, pybullet_sim=sim
+        )["pick_cube"].ground((robot, cube, barrier))
+        controller.reset(state, None)
+        for _ in range(400):
+            obs, _, _, _, _ = env.step(controller.step())
+            state = env.observation_space.devectorize(obs)
+            controller.observe(state)
+            if controller.terminated():
+                break
+        assert controller.terminated()
+        assert state.get(cube, "z") > 0.1
+    finally:
+        sim.close()
+        env.close()
+
+
 def test_move_to_toss_location_and_toss_samples_four_parameters():
     """Standoff, rotation, release speed and release millisecond, all in bounds."""
     num_cubes = 1
