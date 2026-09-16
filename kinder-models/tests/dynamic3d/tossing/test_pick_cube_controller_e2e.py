@@ -49,10 +49,108 @@ _ROBOT_FEATURES = (
 )
 _CUBE_POSE_FEATURES = ("x", "y", "z", "qx", "qy", "qz", "qw")
 
-# States captured immediately before the two false-successful PickCube executions in
-# terminal-reward-fixed-v3-cost-3e-4-seed0-20260915. In both, the old controller
-# completed its lift trajectory but left the cube on the floor.
+# Outside the intended grasp coverage: missed tosses against the bin wall may
+# require a human reset. Collision checking must reject these before execution.
+_INFEASIBLE_WALL_GRASPS = (
+    (
+        (
+            -0.698426995,
+            -1.889215958,
+            3.150197574,
+            0.001627074,
+            -0.330695789,
+            3.139703063,
+            -2.535009853,
+            0.000244449,
+            -0.882603461,
+            1.568244506,
+            0.0,
+        ),
+        (
+            -1.898246760,
+            -1.905228951,
+            0.024892245,
+            -0.004186846,
+            0.707094386,
+            0.004186846,
+            0.707094386,
+        ),
+        (-2.091620684, -1.901647091, -0.000107755),
+    ),
+    (
+        (
+            -0.749110930,
+            -1.205785164,
+            3.146857610,
+            -0.000288908,
+            -0.330315597,
+            3.142389715,
+            -2.536415654,
+            -0.000527563,
+            -0.880430267,
+            1.573213837,
+            0.0,
+        ),
+        (-2.000954782, -1.218251737, 0.024892245, 0.0, 0.999378470, -0.035251578, 0.0),
+        (-2.178002577, -1.213747918, -0.000107755),
+    ),
+)
+
+# Feasible controller-entry states from the September 15 and 16 planning runs.
+# Before the fixes, execution finished with the cube still on the floor.
 _OBSERVED_FAILURES = (
+    # Controller-entry states of failed picks 2 and 9 in the verified-pick
+    # seed-0 rerun (2026-09-16). The reset cube has not yet fallen to the floor.
+    (
+        (
+            -0.0279723215,
+            0.0288276784,
+            -0.0777655246,
+            0.0,
+            -0.3490659055,
+            3.1415926554,
+            -2.5481806005,
+            0.0,
+            -0.8726646315,
+            1.5707963268,
+            0.0,
+        ),
+        (
+            0.5677592158,
+            -0.2490022033,
+            0.0661099702,
+            0.9788499685,
+            0.0,
+            0.0,
+            0.2045794200,
+        ),
+        (-2.0916206837, -1.9016470909, 0.0025526281),
+    ),
+    (
+        (
+            0.0636342324,
+            -0.4683418699,
+            0.4120710306,
+            -0.0014911572,
+            -0.3196624506,
+            3.1436012656,
+            -2.5338299766,
+            -0.0249035012,
+            -0.8611035094,
+            1.5943182739,
+            0.0,
+        ),
+        (
+            0.7399140000,
+            -0.2429455370,
+            0.0731230602,
+            0.9722070101,
+            0.0,
+            0.0,
+            0.2341228939,
+        ),
+        (-1.8231077194, 0.8255638480, 0.0241436101),
+    ),
     (
         (
             -0.7409365849,
@@ -184,17 +282,17 @@ def _run_pick(env, state: ObjectCentricState, *, max_steps: int = 400) -> None:
         assert live_contacts, "Lifted cube has no live MuJoCo gripper contact"
         replay_contacts = scene.get_gripper_object_contacts(cube.name, state=state)
         assert replay_contacts, "Holding contact disappeared when evaluating state"
-        assert GroundAtom(Holding, [robot, cube]) in abstractor.state_abstractor(state).atoms
+        assert (
+            GroundAtom(Holding, [robot, cube])
+            in abstractor.state_abstractor(state).atoms
+        )
     finally:
         sim.close()
         abstractor._pybullet_sim.close()  # pylint: disable=protected-access
 
 
-@pytest.mark.parametrize("robot_values,cube_values,bin_xyz", _OBSERVED_FAILURES)
-def test_pick_cube_recovers_observed_false_successes(
-    robot_values, cube_values, bin_xyz
-):
-    """Regress the exact controller failures observed in the planning experiment."""
+def _run_recorded_pick(robot_values, cube_values, bin_xyz):
+    """Restore a recorded placement and execute the real controller."""
     env = _make_env()
     try:
         obs, _ = env.reset(seed=125)
@@ -208,6 +306,21 @@ def test_pick_cube_recovers_observed_false_successes(
         _run_pick(env, state)
     finally:
         env.close()
+
+
+@pytest.mark.parametrize("robot_values,cube_values,bin_xyz", _OBSERVED_FAILURES)
+def test_pick_cube_recovers_observed_false_successes(
+    robot_values, cube_values, bin_xyz
+):
+    """Regress feasible controller failures observed in the planning experiment."""
+    _run_recorded_pick(robot_values, cube_values, bin_xyz)
+
+
+@pytest.mark.parametrize("robot_values,cube_values,bin_xyz", _INFEASIBLE_WALL_GRASPS)
+def test_pick_cube_rejects_wall_obstructed_grasps(robot_values, cube_values, bin_xyz):
+    """Outside coverage, preserve collision rejection so a human can reset."""
+    with pytest.raises(ValueError, match="No collision-free cube grasp"):
+        _run_recorded_pick(robot_values, cube_values, bin_xyz)
 
 
 def test_pick_cube_dense_declared_initial_state_lattice():
@@ -241,5 +354,30 @@ def test_pick_cube_dense_declared_initial_state_lattice():
             except (AssertionError, ValueError) as error:
                 failures.append((float(x), float(y), float(yaw_degrees), str(error)))
         assert not failures, f"{len(failures)}/125 failed: {failures[:10]}"
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize("height", np.linspace(0.025, 0.105, 9))
+def test_pick_cube_after_unsettled_reset(height):
+    """Grasp a reset cube that falls before descent, across placement and cube faces.
+
+    Nine release heights at 1 cm spacing, each at nine x/y placements. Alternate
+    resting faces and yaw to exercise orientation-equivalent grasps as well.
+    """
+    env = _make_env()
+    try:
+        obs, _ = env.reset(seed=125)
+        baseline = env.observation_space.devectorize(obs)
+        for i, (x, y) in enumerate(
+            itertools.product((0.5, 0.625, 0.75), (-0.25, 0.0, 0.25))
+        ):
+            state = baseline.copy()
+            cube = state.get_object_from_name("cube_0")
+            quaternion = Rotation.from_euler(
+                "xyz", (90 * (i % 4), 0, -45 + 45 * (i % 3)), degrees=True
+            ).as_quat()
+            _set_values(state, cube, _CUBE_POSE_FEATURES, (x, y, height, *quaternion))
+            _run_pick(env, state)
     finally:
         env.close()
