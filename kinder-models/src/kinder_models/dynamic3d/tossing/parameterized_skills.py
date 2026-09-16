@@ -1819,7 +1819,7 @@ def create_lifted_controllers(
 
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     cube = Variable("?cube", MujocoMovableObjectType)
-    barrier = Variable("?barrier", MujocoMovableObjectType)
+    barrier = Variable("?barrier", MujocoObjectType)
 
     class PickCube(PickCubeController):
         """Inject the shared simulator and remaining movable collision context."""
@@ -1857,7 +1857,7 @@ def create_lifted_controllers(
 
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     held = Variable("?held", MujocoMovableObjectType)
-    barrier = Variable("?barrier", MujocoMovableObjectType)
+    barrier = Variable("?barrier", MujocoObjectType)
 
     LiftedMoveToTossLocationAndTossController: LiftedParameterizedController = (
         LiftedParameterizedController(

@@ -46,7 +46,7 @@ OnGround = Predicate("OnGround", [MujocoObjectType])
 Holding = Predicate("Holding", [MujocoTidyBotRobotObjectType, MujocoMovableObjectType])
 HandEmpty = Predicate("HandEmpty", [MujocoTidyBotRobotObjectType])
 MovableIsDownX = Predicate(
-    "MovableIsDownX", [MujocoMovableObjectType, MujocoMovableObjectType]
+    "MovableIsDownX", [MujocoMovableObjectType, MujocoObjectType]
 )
 # The environment's inflated region, not the task JSON's "ranges".
 GOAL_REGION_NAME = "blocks_goal_region"
@@ -106,7 +106,7 @@ class Tossing3DStateAbstractor:
         movables = state.get_objects(MujocoMovableObjectType)
         all_mujoco_objects = set(fixtures) | set(movables)
         cubes = self._get_cubes(state)
-        barriers = [o for o in movables if o.name == BARRIER_NAME]
+        barriers = [o for o in state if o.name == BARRIER_NAME]
 
         if self._check_gripper_open(state, robot):
             atoms.add(GroundAtom(HandEmpty, [robot]))
