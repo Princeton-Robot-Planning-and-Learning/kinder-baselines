@@ -12,7 +12,15 @@ os.environ["PYOPENGL_PLATFORM"] = "egl"
 import kinder
 import numpy as np
 import pytest
-from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
+from kinder.envs.dynamic3d.object_types import (
+    MujocoStaticColliderType,
+    MujocoTidyBotRobotObjectType,
+)
+from pybullet_helpers.geometry import Pose, get_pose
+from relational_structs import GroundAtom, ObjectCentricState
+from scipy.spatial.transform import Rotation
+from spatialmath import SE2
+
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     create_lifted_controllers,
 )
@@ -25,10 +33,8 @@ from kinder_models.dynamic3d.utils import (
     GRIPPER_GRASPING_THRESHOLD,
     MINIMUM_HOLDING_HEIGHT,
     PyBulletSim,
+    run_base_motion_planning,
 )
-from pybullet_helpers.geometry import Pose
-from relational_structs import GroundAtom, ObjectCentricState
-from scipy.spatial.transform import Rotation
 
 kinder.register_all_environments()
 os.environ["MUJOCO_GL"] = "egl"
@@ -260,7 +266,11 @@ def _run_pick(env, state: ObjectCentricState, *, max_steps: int = 400) -> None:
             controller.observe(state)
             if controller.terminated():
                 break
-        assert controller.terminated(), f"stuck in {controller.current_phase.name}"
+        assert controller.terminated(), (
+            f"stuck in {controller.current_phase.name}; "
+            f"base={controller._get_current_robot_pose()}; "
+            f"remaining={controller.plans[controller.PickCubeControllerPhase.BASE_MOTION]}"
+        )
         # Termination is not enough: hold the terminal command long enough to expose a
         # cube that was merely knocked upward or only momentarily pinched.
         for _ in range(10):
@@ -291,7 +301,7 @@ def _run_pick(env, state: ObjectCentricState, *, max_steps: int = 400) -> None:
         abstractor._pybullet_sim.close()  # pylint: disable=protected-access
 
 
-def _run_recorded_pick(robot_values, cube_values, bin_xyz):
+def _run_recorded_pick(robot_values, cube_values, bin_xyz, *, max_steps=400):
     """Restore a recorded placement and execute the real controller."""
     env = _make_env()
     try:
@@ -303,17 +313,70 @@ def _run_recorded_pick(robot_values, cube_values, bin_xyz):
         _set_values(state, robot, _ROBOT_FEATURES, robot_values)
         _set_values(state, cube, _CUBE_POSE_FEATURES, cube_values)
         _set_values(state, bin_obj, ("x", "y", "z"), bin_xyz)
-        _run_pick(env, state)
+        _run_pick(env, state, max_steps=max_steps)
     finally:
         env.close()
 
 
-@pytest.mark.parametrize("robot_values,cube_values,bin_xyz", _OBSERVED_FAILURES)
+@pytest.mark.parametrize(
+    "robot_values,cube_values,bin_xyz",
+    [_OBSERVED_FAILURES[i] for i in (0, 1, 3)],
+)
 def test_pick_cube_recovers_observed_false_successes(
     robot_values, cube_values, bin_xyz
 ):
     """Regress feasible controller failures observed in the planning experiment."""
     _run_recorded_pick(robot_values, cube_values, bin_xyz)
+
+
+def test_pick_cube_rejects_outside_room_grasp_before_execution():
+    """The old cube at (-1.88, -1.91) is outside the new diagonal room wall.
+
+    Keep this historical failure: reject the plan before executing any step, rather than
+    asserting a physically impossible pickup or silently consuming the step cap.
+    """
+    with pytest.raises(ValueError, match="No collision-free cube grasp"):
+        _run_recorded_pick(*_OBSERVED_FAILURES[2], max_steps=0)
+
+
+def test_room_colliders_reach_navigation_and_arm_planning():
+    """Both planners consume simulator geometry, with no test-injected walls."""
+    env = _make_env()
+    try:
+        obs, _ = env.reset(seed=125)
+        state = env.observation_space.devectorize(obs)
+        colliders = state.get_objects(MujocoStaticColliderType)
+        assert len(colliders) >= 7  # Six room walls and the fixed barrier.
+        sim = PyBulletSim(state)
+        try:
+            assert len(sim._static_colliders) == len(colliders)
+            assert set(sim._static_colliders.values()) <= sim.get_collision_bodies()
+            for obj in colliders:
+                pose = get_pose(sim._static_colliders[obj.name], sim._physics_client_id)
+                np.testing.assert_allclose(
+                    pose.position, [state.get(obj, k) for k in ("x", "y", "z")]
+                )
+                expected = Rotation.from_quat(
+                    [state.get(obj, k) for k in ("qx", "qy", "qz", "qw")]
+                )
+                np.testing.assert_allclose(
+                    Rotation.from_quat(pose.orientation).as_matrix(),
+                    expected.as_matrix(),
+                    atol=1e-6,
+                )
+        finally:
+            sim.close()
+        kwargs = dict(state=state, x_bounds=(-2, 4), y_bounds=(-3, 3), seed=0)
+        assert (
+            run_base_motion_planning(target_base_pose=SE2(-1.33, -1.9, 0), **kwargs)
+            is None
+        )
+        assert (
+            run_base_motion_planning(target_base_pose=SE2(0.1, 0.4, 0), **kwargs)
+            is not None
+        )
+    finally:
+        env.close()
 
 
 @pytest.mark.parametrize("robot_values,cube_values,bin_xyz", _INFEASIBLE_WALL_GRASPS)
