@@ -16,6 +16,10 @@ from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     create_lifted_controllers,
 )
+from kinder_models.dynamic3d.tossing.state_abstractions import (
+    Holding,
+    Tossing3DStateAbstractor,
+)
 from kinder_models.dynamic3d.utils import (
     END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE,
     GRIPPER_GRASPING_THRESHOLD,
@@ -23,10 +27,12 @@ from kinder_models.dynamic3d.utils import (
     PyBulletSim,
 )
 from pybullet_helpers.geometry import Pose
-from relational_structs import ObjectCentricState
+from relational_structs import GroundAtom, ObjectCentricState
 from scipy.spatial.transform import Rotation
 
 kinder.register_all_environments()
+os.environ["MUJOCO_GL"] = "egl"
+os.environ["PYOPENGL_PLATFORM"] = "egl"
 
 _ROBOT_FEATURES = (
     "pos_base_x",
@@ -134,6 +140,10 @@ def _create_bin_aware_sim(state: ObjectCentricState, scene) -> PyBulletSim:
 
 def _run_pick(env, state: ObjectCentricState, *, max_steps: int = 400) -> None:
     """Execute a real MuJoCo pick and require physical, predicate-level success."""
+    scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    # Construction initializes the abstraction simulator and resets the scene. Do it
+    # before restoring the test state, never after executing the physical grasp.
+    abstractor = Tossing3DStateAbstractor(scene)
     env.unwrapped.set_state(env.observation_space.vectorize(state))
     state = env.observation_space.devectorize(env.unwrapped.get_state())
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
@@ -170,8 +180,14 @@ def _run_pick(env, state: ObjectCentricState, *, max_steps: int = 400) -> None:
         assert all(
             delta < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE for delta in ee_delta
         ), f"lifted cube escaped the gripper after the stability hold: ee_delta={ee_delta}"
+        live_contacts = scene.get_gripper_object_contacts(cube.name)
+        assert live_contacts, "Lifted cube has no live MuJoCo gripper contact"
+        replay_contacts = scene.get_gripper_object_contacts(cube.name, state=state)
+        assert replay_contacts, "Holding contact disappeared when evaluating state"
+        assert GroundAtom(Holding, [robot, cube]) in abstractor.state_abstractor(state).atoms
     finally:
         sim.close()
+        abstractor._pybullet_sim.close()  # pylint: disable=protected-access
 
 
 @pytest.mark.parametrize("robot_values,cube_values,bin_xyz", _OBSERVED_FAILURES)
