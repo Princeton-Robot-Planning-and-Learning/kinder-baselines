@@ -1131,7 +1131,8 @@ def test_pick_toss():
     cube = state.get_object_from_name("bin_0")
     object_parameters = (robot, cube)
     controller = lifted_controller.ground(object_parameters)
-    target_distance = 1.35
+    # Keep the test launch pose on the reachable side of the fixed barrier.
+    target_distance = state.get(cube, "x") - 0.9
     target_rotation = 0.0
     params = np.array([target_distance, target_rotation])
 
@@ -1264,7 +1265,8 @@ def test_pick_ground_toss():
     cube = state.get_object_from_name("bin_0")
     object_parameters = (robot, cube)
     controller = lifted_controller.ground(object_parameters)
-    target_distance = 1.35
+    # Keep the test launch pose on the reachable side of the fixed barrier.
+    target_distance = state.get(cube, "x") - 0.9
     target_rotation = 0.0
     params = np.array([target_distance, target_rotation])
 
@@ -1463,7 +1465,8 @@ def test_toss_schedules_its_release_at_the_requested_millisecond():
     move = tossing["move_to_target"].ground(
         (robot, state.get_object_from_name("bin_0"))
     )
-    _run(move, np.array([1.35, 0.0]), disable_collision_objects=["cube_0"])
+    distance = state.get(state.get_object_from_name("bin_0"), "x") - 0.9
+    _run(move, np.array([distance, 0.0]), disable_collision_objects=["cube_0"])
 
     robot = _get_robot_from_state(state)
     _run(tossing["move_arm_to_conf"].ground((robot,)), TOSS_WINDUP_ARM_CONFIGURATION)
@@ -1671,41 +1674,45 @@ def test_pick_cube_never_unwinds_a_joint_by_a_whole_turn():
 
 
 def test_move_to_toss_location_and_toss_samples_four_parameters():
-    """Standoff, rotation, release speed and release millisecond, all in bounds."""
-    num_cubes = 1
-    env = kinder.make(
-        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
-    )
+    """Launch stays behind the barrier while throw parameters vary."""
+    env = kinder.make("kinder/Tossing3D-o1-v0", num_objects=1)
     obs, _ = env.reset(seed=125)
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
-    controllers = create_lifted_controllers(env.action_space)
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
     barrier = state.get_object_from_name("cuboid_barrier")
-    controller = controllers["move_to_toss_location_and_toss"].ground(
-        (robot, cube, barrier)
-    )
-    draws = np.array(
-        [
-            controller.sample_parameters(state, np.random.default_rng(seed))
-            for seed in range(50)
-        ]
-    )
-    assert draws.shape == (50, 4)
-    for column, (low, high) in enumerate(
-        [
-            MoveToTossLocationAndTossController.TARGET_DISTANCE_BOUNDS,
-            MoveToTossLocationAndTossController.TARGET_ROTATION_BOUNDS,
-            MoveToTossLocationAndTossController.SPEED_BOUNDS,
-            MoveToTossLocationAndTossController.RELEASE_MS_BOUNDS,
-        ]
-    ):
-        assert draws[:, column].min() >= low
-        assert draws[:, column].max() <= high
-        # A sampler, not a constant, in every component.
-        assert draws[:, column].min() < draws[:, column].max()
-    env.close()
+    sim = PyBulletSim(state)
+    try:
+        sim.add_box(
+            name=barrier.name,
+            pose=Pose((1.3, 0.0, 0.1)),
+            dimensions=(0.06, 10.0, 0.2),
+        )
+        controller = MoveToTossLocationAndTossController(
+            [robot, cube, barrier], pybullet_sim=sim
+        )
+        draws = np.array(
+            [
+                controller.sample_parameters(state, np.random.default_rng(seed))
+                for seed in range(50)
+            ]
+        )
+        assert draws.shape == (50, 4)
+        assert np.all(draws[:, 1] == 0.0)
+        assert np.ptp(draws[:, 0]) > 0
+        assert len(np.unique(draws[:, 2:], axis=0)) > 1
+        receiver = state.get_object_from_name("bin_0")
+        for distance, _, speed, release in draws:
+            launch_x = state.get(receiver, "x") - distance
+            assert launch_x + 0.275 < state.get(barrier, "x") - 0.03
+            assert any(
+                np.isclose(speed, np.deg2rad(degrees)) and release == milliseconds
+                for degrees, milliseconds in controller.THROW_PROFILES
+            )
+    finally:
+        sim.close()
+        env.close()
 
 
 def test_open_gripper_commands_open_until_the_gripper_reads_open():

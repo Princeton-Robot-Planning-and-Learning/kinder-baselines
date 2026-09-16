@@ -164,7 +164,10 @@ def get_bounding_box(
     raise NotImplementedError
 
 
-def get_overhead_kinematic2ds(state: ObjectCentricState) -> dict[str, Geom2D]:
+def get_overhead_kinematic2ds(
+    state: ObjectCentricState,
+    bounding_boxes: dict[str, tuple[float, float, float]] | None = None,
+) -> dict[str, Geom2D]:
     """Get a mapping from object name to Geom2D from an overhead perspective."""
     geoms: dict[str, Geom2D] = {}
     for obj in state:
@@ -179,7 +182,10 @@ def get_overhead_kinematic2ds(state: ObjectCentricState) -> dict[str, Geom2D]:
             pose = get_overhead_object_se2_pose(state, obj)
         else:
             raise NotImplementedError
-        width, height, _ = get_bounding_box(state, obj)
+        if bounding_boxes is not None and obj.name in bounding_boxes:
+            width, height, _ = bounding_boxes[obj.name]
+        else:
+            width, height, _ = get_bounding_box(state, obj)
         geom = Rectangle.from_center(
             pose.x, pose.y, width, height, rotation_about_center=pose.theta()
         )
@@ -236,6 +242,8 @@ def run_base_motion_planning(
     num_iters: int = 100,
     smooth_amt: int = 50,
     disable_collision_objects: list[str] | None = None,
+    bounding_boxes: dict[str, tuple[float, float, float]] | None = None,
+    static_obstacles: Iterable[Geom2D] = (),
 ) -> list[SE2] | None:
     """Run motion planning for the robot base."""
     rng = np.random.default_rng(seed)
@@ -249,8 +257,9 @@ def run_base_motion_planning(
     # Drawers are MujocoObjectType, but get_overhead_kinematic2ds() cannot build a
     # Geom2D for one, so they are absent from geoms and would KeyError below.
     obstacles = [o for o in obstacles if not o.is_instance(MujocoDrawerObjectType)]
-    geoms = get_overhead_kinematic2ds(state)
+    geoms = get_overhead_kinematic2ds(state, bounding_boxes)
     obstacle_geoms: set[Geom2D] = {geoms[o.name] for o in obstacles}
+    obstacle_geoms.update(static_obstacles)
 
     # Set up the RRT methods.
     def sample_fn(_: SE2) -> SE2:
@@ -491,6 +500,10 @@ class PyBulletSim:
 
         # Create all the cubes.
         self._bins: dict[str, int] = {}
+        self._boxes: dict[str, int] = {}
+        self._static_boxes: dict[str, int] = {}
+        self._static_base_obstacles: list[Geom2D] = []
+        self._bounding_boxes: dict[str, tuple[float, float, float]] = {}
         self._cubes: dict[str, int] = {}
         for cube_name in initial_state.get_object_names():
             if "cube" in cube_name:
@@ -573,8 +586,67 @@ class PyBulletSim:
             baseOrientation=pose.orientation,
             physicsClientId=self._physics_client_id,
         )
+        self._bounding_boxes[name] = (length, width, height)
         self._bins[name] = body
         return body
+
+    @property
+    def bounding_boxes(self) -> dict[str, tuple[float, float, float]]:
+        """Actual dimensions of explicitly registered planning obstacles."""
+        return dict(self._bounding_boxes)
+
+    def add_box(
+        self,
+        *,
+        name: str,
+        pose: Pose,
+        dimensions: tuple[float, float, float],
+        state_object: bool = True,
+    ) -> int:
+        """Opt in a fixed cuboid obstacle, centered at its primitive origin."""
+        if name in self._boxes or name in self._static_boxes or name in self._bins:
+            raise ValueError(f"Obstacle {name} is already in the collision model")
+        if any(d <= 0 for d in dimensions):
+            raise ValueError("Box dimensions must be positive")
+        shape = p.createCollisionShape(
+            p.GEOM_BOX,
+            halfExtents=[d / 2 for d in dimensions],
+            physicsClientId=self._physics_client_id,
+        )
+        body = p.createMultiBody(
+            baseMass=0,
+            baseCollisionShapeIndex=shape,
+            basePosition=pose.position,
+            baseOrientation=pose.orientation,
+            physicsClientId=self._physics_client_id,
+        )
+        if state_object:
+            self._boxes[name] = body
+            self._bounding_boxes[name] = dimensions
+        else:
+            self._static_boxes[name] = body
+            rotation = Rotation.from_quat(pose.orientation).as_matrix()
+            horizontal = np.flatnonzero(np.abs(rotation[2]) < 1e-6)
+            if len(horizontal) != 2:
+                raise ValueError("Static base obstacles must have a vertical box axis")
+            first, second = horizontal
+            self._static_base_obstacles.append(
+                Rectangle.from_center(
+                    pose.position[0],
+                    pose.position[1],
+                    dimensions[first],
+                    dimensions[second],
+                    rotation_about_center=float(
+                        np.arctan2(rotation[1, first], rotation[0, first])
+                    ),
+                )
+            )
+        return body
+
+    @property
+    def static_base_obstacles(self) -> tuple[Geom2D, ...]:
+        """Task-owned static geometry that has no observation object."""
+        return tuple(self._static_base_obstacles)
 
     def has_bin(self, name: str) -> bool:
         """Whether this bin has collision geometry in the planning scene."""
@@ -642,7 +714,7 @@ class PyBulletSim:
                 )
                 set_pose(self._cubes[cube_name], cube_pose, self._physics_client_id)
 
-        for name, body in self._bins.items():
+        for name, body in (self._bins | self._boxes).items():
             obj = x.get_object_from_name(name)
             pose = Pose(
                 tuple(x.get(obj, f) for f in ("x", "y", "z")),
@@ -691,6 +763,8 @@ class PyBulletSim:
         collision_bodies: set[int] = set()
         collision_bodies.update(self._cubes.values())
         collision_bodies.update(self._bins.values())
+        collision_bodies.update(self._boxes.values())
+        collision_bodies.update(self._static_boxes.values())
         if self._cupboard1_shelf_id is not None:
             collision_bodies.add(self._cupboard1_shelf_id)
         if held_object is not None:
