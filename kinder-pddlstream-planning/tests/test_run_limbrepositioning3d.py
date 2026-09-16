@@ -1,6 +1,7 @@
 """Tests for the PDDLStream LimbRepositioning3D integration."""
 
 import itertools
+from functools import partial
 
 import numpy as np
 import pybullet as p
@@ -16,6 +17,7 @@ from pybullet_helpers.inverse_kinematics import (
 from kinder_pddlstream_planning.limbrepositioning3d.run import (
     _VARIANT_OVERRIDES,
     LIMB_NAME,
+    _logged_gen_fn,
     build_stream_context,
     create_env,
     reset_to_start,
@@ -26,7 +28,6 @@ from kinder_pddlstream_planning.limbrepositioning3d.stream import (
     DEFAULT_GRASP_SLIDE,
     GRASP_ROLLS,
     GRASP_SLIDE_FRACTIONS,
-    NUM_SAMPLED_GRASPS,
     LimbConf,
     MPCConfig,
     PredictiveSamplingMPC,
@@ -36,9 +37,11 @@ from kinder_pddlstream_planning.limbrepositioning3d.stream import (
     check_robot_torque_limits,
     plan_base_motion,
     plan_grasp_motion,
+    sample_base_pose,
     sample_grasp,
 )
 from kinder_pddlstream_planning.limbrepositioning3d.utils import (
+    StreamLog,
     advance_corrected,
     arm_in_collision,
     base_in_collision,
@@ -80,6 +83,15 @@ def _confs(ctx):
         LimbConf(tuple(scene.limb_init_joint_positions)),
         LimbConf(tuple(scene.limb_goal_joint_positions)),
     )
+
+
+def _grasp_motion(ctx, grasp, init_conf, goal_conf):
+    """The first base pose for `grasp`, and the arm path onto the grasp from there."""
+    (base_conf,) = next(sample_base_pose(ctx, LIMB_NAME, grasp, init_conf, goal_conf))
+    trajectory, state = next(
+        plan_grasp_motion(ctx, LIMB_NAME, grasp, base_conf, init_conf)
+    )
+    return base_conf, trajectory, state
 
 
 def test_the_sweep_applies_the_per_variant_overrides():
@@ -156,21 +168,21 @@ def test_sampled_base_poses_reach_the_whole_motion(limb_env):
     (grasp,) = next(sample_grasp(ctx, LIMB_NAME))
     candidates = list(
         itertools.islice(
-            plan_grasp_motion(ctx, LIMB_NAME, grasp, init_conf, goal_conf), 2
+            sample_base_pose(ctx, LIMB_NAME, grasp, init_conf, goal_conf), 2
         )
     )
     assert candidates, "no base pose reaches the whole motion"
 
     release_grasp(sim)
     try:
-        for base_conf, _, _ in candidates:
+        for (base_conf,) in candidates:
             sim.robot.set_base(base_conf)
             seed = list(ctx.retract_joints)
             for waypoint in np.linspace(
                 np.asarray(init_conf.positions), np.asarray(goal_conf.positions), 9
             ):
                 sim.limb.set_joints(list(waypoint))
-                target = multiply_poses(sim.limb.get_end_effector_pose(), grasp)
+                target = multiply_poses(sim.limb.get_end_effector_pose(), grasp.pose)
                 sim.robot.arm.set_joints(seed)
                 seed = inverse_kinematics(
                     sim.robot.arm, target, validate=True, set_joints=False
@@ -188,7 +200,7 @@ def test_controllability_is_measured_at_the_ik_solution(limb_env):
     try:
         sim.robot.set_base(ctx.grasp_base_pose)
         seed = list(ctx.retract_joints)
-        solution = grasp_ik(ctx, grasp, init_conf.positions, seed)
+        solution = grasp_ik(ctx, grasp.pose, init_conf.positions, seed)
         assert solution is not None
 
         # The trap this test exists for: solving does not move the arm onto the answer.
@@ -214,35 +226,60 @@ def test_controllability_is_measured_at_the_ik_solution(limb_env):
         reset_to_start(ctx)
 
 
-def test_grasp_stream_offers_every_slide_both_ways_up(limb_env):
-    """Every slide is offered rolled and unrolled, shuffled rather than ranked."""
+def test_grasp_stream_is_endless_and_slides_along_the_limb(limb_env):
+    """The default slide comes first both ways up, then random slides without end."""
     sim, ctx = limb_env
-    grasps = [g for (g,) in sample_grasp(ctx, LIMB_NAME)]
-    assert len(grasps) == (1 + NUM_SAMPLED_GRASPS) * len(GRASP_ROLLS)
+    grasps = [g for (g,) in itertools.islice(sample_grasp(ctx, LIMB_NAME), 40)]
+    assert len(grasps) == 40
     nominal = sim.scene.grasp_transform
     low, high = GRASP_SLIDE_FRACTIONS
-    slides = []
-    flipped = 0
     for grasp in grasps:
-        offset = np.subtract(grasp.position, nominal.position)
+        offset = np.subtract(grasp.pose.position, nominal.position)
         along = float(offset @ ctx.grasp_slide_axis)
         # The slide runs up the limb and nowhere else; only the roll moves the tool.
         assert np.allclose(offset - along * ctx.grasp_slide_axis, 0.0, atol=1e-6)
-        flipped += not np.allclose(grasp.orientation, nominal.orientation)
-        slides.append(along)
-    assert flipped == len(grasps) // 2
-    assert sum(np.isclose(s, DEFAULT_GRASP_SLIDE) for s in slides) == len(GRASP_ROLLS)
-    sampled = [s for s in slides if not np.isclose(s, DEFAULT_GRASP_SLIDE)]
-    assert len(sampled) == NUM_SAMPLED_GRASPS * len(GRASP_ROLLS)
+        assert np.isclose(along, grasp.slide)
+        flipped = not np.allclose(grasp.pose.orientation, nominal.orientation)
+        assert flipped == (grasp.roll != GRASP_ROLLS[0])
+    default = grasps[: len(GRASP_ROLLS)]
+    assert all(np.isclose(g.slide, DEFAULT_GRASP_SLIDE) for g in default)
+    assert {g.roll for g in default} == set(GRASP_ROLLS)
+    sampled = grasps[len(GRASP_ROLLS) :]
     assert all(
-        low * ctx.grasp_slide_span <= s <= high * ctx.grasp_slide_span for s in sampled
+        low * ctx.grasp_slide_span <= g.slide <= high * ctx.grasp_slide_span
+        for g in sampled
     )
-    # Built as consecutive roll pairs per slide, so an unshuffled yield would keep them
-    # adjacent throughout.
-    paired = [
-        np.isclose(slides[i], slides[i + 1]) for i in range(0, len(slides) - 1, 2)
+    assert {g.roll for g in sampled} == set(GRASP_ROLLS)
+
+
+def test_stream_calls_are_logged_with_the_outputs_they_consumed(limb_env):
+    """A base pose's log record points back at the grasp call that produced it."""
+    _, ctx = limb_env
+    init_conf, goal_conf = _confs(ctx)
+    ctx.log = StreamLog()
+    try:
+        grasps = _logged_gen_fn(ctx, "sample-grasp", partial(sample_grasp, ctx))
+        (grasp,) = next(grasps(LIMB_NAME))
+        bases = _logged_gen_fn(ctx, "sample-base-pose", partial(sample_base_pose, ctx))
+        (base_conf,) = next(bases(LIMB_NAME, grasp, init_conf, goal_conf))
+        grasp_call, base_call = ctx.log.records
+        assert base_call["inputs"][1] == grasp_call["outputs"][0]
+        assert base_call["outputs"] == [ctx.log.ref(base_conf)]
+        assert "saturation" in base_call and "rejected" in base_call
+    finally:
+        reset_to_start(ctx)
+
+
+def test_each_stream_draws_from_its_own_generator(limb_env):
+    """Seeded alike, the grasp and base draws would move in lockstep."""
+    _, ctx = limb_env
+    # pylint: disable=protected-access
+    draws = [
+        rng.bit_generator.state["state"]
+        for rng in (ctx._grasp_rng, ctx._base_rng, ctx._ik_rng)
     ]
-    assert not all(paired), "grasps came out in construction order, not shuffled"
+    assert len({str(d) for d in draws}) == 3
+    assert ctx.spawn_rng().random() != ctx.spawn_rng().random()
 
 
 def test_grasp_motion_ends_on_the_limb(limb_env):
@@ -253,9 +290,7 @@ def test_grasp_motion_ends_on_the_limb(limb_env):
     sim, ctx = limb_env
     init_conf, goal_conf = _confs(ctx)
     (grasp,) = next(sample_grasp(ctx, LIMB_NAME))
-    base_conf, trajectory, state = next(
-        plan_grasp_motion(ctx, LIMB_NAME, grasp, init_conf, goal_conf)
-    )
+    base_conf, trajectory, state = _grasp_motion(ctx, grasp, init_conf, goal_conf)
 
     assert state.base_pose == base_conf
     assert list(state.limb_positions) == list(init_conf.positions)
@@ -269,7 +304,7 @@ def test_grasp_motion_ends_on_the_limb(limb_env):
         error = np.linalg.norm(
             np.subtract(
                 sim.robot.arm.get_end_effector_pose().position,
-                multiply_poses(sim.limb.get_end_effector_pose(), grasp).position,
+                multiply_poses(sim.limb.get_end_effector_pose(), grasp.pose).position,
             )
         )
         assert error < 1e-3
@@ -282,9 +317,7 @@ def test_base_motion_connects_its_endpoints(limb_env):
     _, ctx = limb_env
     init_conf, goal_conf = _confs(ctx)
     (grasp,) = next(sample_grasp(ctx, LIMB_NAME))
-    base_conf, _, _ = next(
-        plan_grasp_motion(ctx, LIMB_NAME, grasp, init_conf, goal_conf)
-    )
+    base_conf, _, _ = _grasp_motion(ctx, grasp, init_conf, goal_conf)
     (base_plan,) = next(plan_base_motion(ctx, ctx.start_base_pose, base_conf))
 
     assert len(base_plan) >= 2
@@ -307,7 +340,7 @@ def test_state_restore_round_trips_through_the_grasp(limb_env):
     sim, ctx = limb_env
     init_conf, goal_conf = _confs(ctx)
     (grasp,) = next(sample_grasp(ctx, LIMB_NAME))
-    _, _, state = next(plan_grasp_motion(ctx, LIMB_NAME, grasp, init_conf, goal_conf))
+    _, _, state = _grasp_motion(ctx, grasp, init_conf, goal_conf)
 
     restore_state(sim, state)
     torque = [0.3] * NUM_ROBOT_JOINTS
@@ -335,7 +368,7 @@ def test_mpc_makes_progress_toward_the_goal(limb_env):
     sim, ctx = limb_env
     init_conf, goal_conf = _confs(ctx)
     (grasp,) = next(sample_grasp(ctx, LIMB_NAME))
-    _, _, state = next(plan_grasp_motion(ctx, LIMB_NAME, grasp, init_conf, goal_conf))
+    _, _, state = _grasp_motion(ctx, grasp, init_conf, goal_conf)
 
     goal = np.asarray(goal_conf.positions)
     ctx.mpc = MPCConfig(num_rollouts=12)
@@ -361,7 +394,7 @@ def test_the_directed_torque_drives_the_limb_toward_the_goal(limb_env):
     sim, ctx = limb_env
     init_conf, goal_conf = _confs(ctx)
     (grasp,) = next(sample_grasp(ctx, LIMB_NAME))
-    _, _, state = next(plan_grasp_motion(ctx, LIMB_NAME, grasp, init_conf, goal_conf))
+    _, _, state = _grasp_motion(ctx, grasp, init_conf, goal_conf)
 
     goal = np.asarray(goal_conf.positions)
     ctx.mpc = MPCConfig()
@@ -395,7 +428,7 @@ def test_rollouts_that_break_a_limit_are_rejected_not_penalised(limb_env):
     sim, ctx = limb_env
     init_conf, goal_conf = _confs(ctx)
     (grasp,) = next(sample_grasp(ctx, LIMB_NAME))
-    _, _, state = next(plan_grasp_motion(ctx, LIMB_NAME, grasp, init_conf, goal_conf))
+    _, _, state = _grasp_motion(ctx, grasp, init_conf, goal_conf)
 
     goal = np.asarray(goal_conf.positions)
     ctx.mpc = MPCConfig(num_rollouts=8)
@@ -427,7 +460,7 @@ def test_torques_stay_inside_the_environment_limits(limb_env):
     sim, ctx = limb_env
     init_conf, goal_conf = _confs(ctx)
     (grasp,) = next(sample_grasp(ctx, LIMB_NAME))
-    _, _, state = next(plan_grasp_motion(ctx, LIMB_NAME, grasp, init_conf, goal_conf))
+    _, _, state = _grasp_motion(ctx, grasp, init_conf, goal_conf)
 
     lower, upper = ctx.robot_torque_limits
     ctx.mpc = MPCConfig(num_rollouts=8)
@@ -507,9 +540,7 @@ def test_planned_grasp_approach_stays_out_of_the_person(human_env):
     sim, ctx = human_env
     init_conf, goal_conf = _confs(ctx)
     (grasp,) = next(sample_grasp(ctx, LIMB_NAME))
-    base_conf, trajectory, _ = next(
-        plan_grasp_motion(ctx, LIMB_NAME, grasp, init_conf, goal_conf)
-    )
+    base_conf, trajectory, _ = _grasp_motion(ctx, grasp, init_conf, goal_conf)
 
     release_grasp(sim)
     try:
@@ -685,7 +716,7 @@ def test_holding_the_limb_still_costs_the_person_nothing_extra(limb_env):
     sim, ctx = limb_env
     init_conf, goal_conf = _confs(ctx)
     (grasp,) = next(sample_grasp(ctx, LIMB_NAME))
-    _, _, state = next(plan_grasp_motion(ctx, LIMB_NAME, grasp, init_conf, goal_conf))
+    _, _, state = _grasp_motion(ctx, grasp, init_conf, goal_conf)
     try:
         restore_state(sim, state)
         human = advance_corrected(sim, [0.0] * NUM_ROBOT_JOINTS)
@@ -706,9 +737,7 @@ def test_limb_motions_that_leave_the_range_of_motion_are_rejected(limb_env):
     try:
         init_conf, goal_conf = _confs(ctx)
         (grasp,) = next(sample_grasp(ctx, LIMB_NAME))
-        _, _, state = next(
-            plan_grasp_motion(ctx, LIMB_NAME, grasp, init_conf, goal_conf)
-        )
+        _, _, state = _grasp_motion(ctx, grasp, init_conf, goal_conf)
 
         restore_state(sim, state)
         assert not limb_out_of_limits(ctx)

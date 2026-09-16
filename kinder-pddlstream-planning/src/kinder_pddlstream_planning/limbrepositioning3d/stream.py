@@ -34,6 +34,7 @@ from kinder_pddlstream_planning.limbrepositioning3d.utils import (
     BestAttempt,
     CoupledState,
     JointTorques,
+    StreamLog,
     StreamProfile,
     advance,
     advance_corrected,
@@ -62,10 +63,26 @@ from kinder_pddlstream_planning.limbrepositioning3d.utils import (
 
 NUM_REACH_CHECKS = 3
 GRASP_SLIDE_FRACTIONS = (0.1, 0.7)
-NUM_SAMPLED_GRASPS = 8
 DEFAULT_GRASP_SLIDE = 0.10
 MAX_DEFERRED_BASE_POSES = 20
 GRASP_ROLLS: tuple[float, ...] = (0.0, np.pi)
+# MPC runs per (state, goal) before plan-limb-motion gives up on it.
+MAX_LIMB_MOTION_ATTEMPTS = 3
+
+
+@dataclass(eq=False)
+class LimbGrasp:
+    """A grasp `slide` meters up the limb, rolled `roll`.
+
+    `pose` maps the limb's grasp frame to the end effector.
+    """
+
+    pose: Pose
+    slide: float
+    roll: float
+
+    def __repr__(self) -> str:
+        return f"g{id(self) % 10000}(slide={self.slide:.3f}, roll={self.roll:.2f})"
 
 
 @dataclass(eq=False)
@@ -175,6 +192,7 @@ class LimbStreamContext:
     base_rejections: Counter = field(default_factory=Counter)
     # Where planning time went, keyed by stream and by the stages nested inside them.
     profile: StreamProfile = field(default_factory=StreamProfile, repr=False)
+    log: StreamLog = field(default_factory=StreamLog, repr=False)
     resting_penetration: dict[int, float] = field(default_factory=dict, repr=False)
     # The range of motion the planner is allowed to use
     believed_joint_limits: tuple[JointPositions, JointPositions] | None = None
@@ -188,15 +206,18 @@ class LimbStreamContext:
     limb_joint_infos: list = field(init=False, repr=False)
     grasp_slide_axis: np.ndarray = field(init=False, repr=False)
     grasp_slide_span: float = field(init=False, repr=False)
+    _seeds: np.random.SeedSequence = field(init=False, repr=False)
     _ik_rng: np.random.Generator = field(init=False, repr=False)
     _grasp_rng: np.random.Generator = field(init=False, repr=False)
     _base_rng: np.random.Generator = field(init=False, repr=False)
     _reach_cloud: np.ndarray | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._ik_rng = np.random.default_rng(self.motion_seed)
-        self._grasp_rng = np.random.default_rng(self.motion_seed)
-        self._base_rng = np.random.default_rng(self.motion_seed)
+        # Independent streams, so grasp and base draws are not correlated.
+        self._seeds = np.random.SeedSequence(self.motion_seed)
+        self._ik_rng, self._grasp_rng, self._base_rng = (
+            np.random.default_rng(seed) for seed in self._seeds.spawn(3)
+        )
         if self.human_torque_limit is None:
             self.human_torque_limit = default_human_torque_limit(
                 self.sim.limb.get_name()
@@ -208,6 +229,10 @@ class LimbStreamContext:
         self.limb_joint_infos = self.sim.limb.get_arm_joint_infos()
         self.grasp_slide_axis, self.grasp_slide_span = limb_slide_axis(self.sim)
         self.refresh_collision_baseline()
+
+    def spawn_rng(self) -> np.random.Generator:
+        """A fresh generator, independent of every other one this context handed out."""
+        return np.random.default_rng(self._seeds.spawn(1)[0])
 
     def refresh_collision_baseline(self) -> None:
         """Record how far the grasped limb overlaps each body it starts out touching.
@@ -305,37 +330,59 @@ class LimbStreamContext:
         return (abs(self.human_torque_limit), abs(self.robot_induced_torque_limit))
 
 
-def sample_grasp(ctx: LimbStreamContext, limb: str) -> Iterator[tuple[Pose]]:
-    """Yield the default slide and random ones, each way up, in random order."""
+def sample_grasp(ctx: LimbStreamContext, limb: str) -> Iterator[tuple[LimbGrasp]]:
+    """Yield the default slide both ways up, then random slides without end."""
     del limb  # there is a single limb per environment
-    scene_grasp = ctx.sim.scene.grasp_transform
     rng = ctx._grasp_rng  # pylint: disable=protected-access
     low, high = GRASP_SLIDE_FRACTIONS
-    slides = [DEFAULT_GRASP_SLIDE]
-    for _ in range(NUM_SAMPLED_GRASPS):
-        slides.append(float(rng.uniform(low, high)) * ctx.grasp_slide_span)
-    candidates = [
-        slid_grasp(ctx, scene_grasp, slide, roll)
-        for slide in slides
-        for roll in GRASP_ROLLS
-    ]
-    rng.shuffle(candidates)
-    for grasp in candidates:
-        yield (grasp,)
+    for roll in rng.permutation(GRASP_ROLLS):
+        yield (_limb_grasp(ctx, DEFAULT_GRASP_SLIDE, float(roll)),)
+    while True:
+        slide = float(rng.uniform(low, high)) * ctx.grasp_slide_span
+        yield (_limb_grasp(ctx, slide, float(rng.choice(GRASP_ROLLS))),)
 
 
-def plan_grasp_motion(
+def _limb_grasp(ctx: LimbStreamContext, slide: float, roll: float) -> LimbGrasp:
+    """The scene's grasp slid `slide` up the limb and rolled `roll`."""
+    pose = slid_grasp(ctx, ctx.sim.scene.grasp_transform, slide, roll)
+    return LimbGrasp(pose, slide, roll)
+
+
+def _reach_saturation(
+    ctx: LimbStreamContext, grasp: LimbGrasp, waypoints: np.ndarray
+) -> float | str:
+    """Peak `control_saturation` along the waypoints, or why the base cannot hold them.
+
+    Each IK is seeded from the previous solution to stay on one continuous branch,
+    since the arm cannot teleport between branches while welded to the limb.
+    """
+    seed: JointPositions = ctx.retract_joints
+    saturation = 0.0
+    for waypoint in waypoints:
+        with ctx.profile.timed("grasp_ik"):
+            solution = grasp_ik(ctx, grasp.pose, tuple(waypoint), seed)
+        if solution is None:
+            return "the arm cannot reach the grasp"
+        ratio = control_saturation(ctx, solution)
+        if not np.isfinite(ratio):
+            return "the grasp is kinematically singular"
+        saturation = max(saturation, ratio)
+        seed = solution
+    return saturation
+
+
+def sample_base_pose(
     ctx: LimbStreamContext,
     limb: str,
-    grasp: Pose,
+    grasp: LimbGrasp,
     init_conf: LimbConf,
     goal_conf: LimbConf,
-) -> Iterator[tuple[SE2Pose, ArmTrajectory, CoupledState]]:
-    """Yield a base pose that holds the grasp throughout, and the arm path onto it.
-
-    A rigid grasp ties the limb configuration to the end-effector pose.
+) -> Iterator[tuple[SE2Pose]]:
+    """Yield base poses that hold the grasp from the initial to the goal configuration.
 
     Requiring IK at the goal too is what makes `move_base` a real decision.
+
+    Bases the arm cannot hold the limb at come last, least saturated first.
     """
     del limb  # there is a single limb per environment
     sim = ctx.sim
@@ -344,58 +391,75 @@ def plan_grasp_motion(
         np.asarray(goal_conf.positions),
         NUM_REACH_CHECKS,
     )
+    rejected: list[list] = []
+
+    def reject(base_conf: SE2Pose, reason: str) -> None:
+        ctx.base_rejections[reason] += 1
+        rejected.append([base_conf.x, base_conf.y, base_conf.rot, reason])
+
+    def noted(base_conf: SE2Pose, saturation: float) -> tuple[SE2Pose]:
+        ctx.log.note(saturation=saturation, rejected=list(rejected))
+        rejected.clear()
+        return (base_conf,)
+
     with saved_sim_state(sim):
         release_grasp(sim)
         candidates = ctx.profile.wrap(
-            "base_candidates", base_candidates(ctx, grasp, list(init_conf.positions))
+            "base_candidates",
+            base_candidates(ctx, grasp.pose, list(init_conf.positions)),
         )
         if ctx.base_pose_hint is not None:
             candidates = itertools.chain([ctx.base_pose_hint], candidates)
-        deferred: list[tuple[float, SE2Pose, ArmTrajectory, CoupledState]] = []
+        deferred: list[tuple[float, SE2Pose]] = []
         for base_conf in candidates:
             sim.robot.set_base(base_conf)
-            # Seed each IK from the previous solution to stay on one continuous branch,
-            # since the arm cannot teleport between branches while welded to the limb.
-            seed: JointPositions = ctx.retract_joints
-            reachable = True
-            saturation = 0.0
-            for waypoint in waypoints:
-                with ctx.profile.timed("grasp_ik"):
-                    solution = grasp_ik(ctx, grasp, tuple(waypoint), seed)
-                if solution is None:
-                    ctx.base_rejections["the arm cannot reach the grasp"] += 1
-                    reachable = False
-                    break
-                ratio = control_saturation(ctx, solution)
-                if not np.isfinite(ratio):
-                    ctx.base_rejections["the grasp is kinematically singular"] += 1
-                    reachable = False
-                    break
-                saturation = max(saturation, ratio)
-                seed = solution
-            if not reachable:
+            saturation = _reach_saturation(ctx, grasp, waypoints)
+            if isinstance(saturation, str):
+                reject(base_conf, saturation)
                 continue
-            if (
-                ctx.filter_saturated_bases
-                and saturation > 1.0
-                and len(deferred) >= MAX_DEFERRED_BASE_POSES
-            ):
-                ctx.base_rejections[
-                    "the arm cannot hold the limb's weight at the grasp"
-                ] += 1
+            saturated = ctx.filter_saturated_bases and saturation > 1.0
+            if saturated and len(deferred) >= MAX_DEFERRED_BASE_POSES:
+                reject(base_conf, "the arm cannot hold the limb's weight at the grasp")
                 continue
             with ctx.profile.timed("base_collision_check"):
                 base_hit = ctx.check_base_collisions and base_in_collision(ctx)
             if base_hit:
-                ctx.base_rejections["the base collides with the scene"] += 1
+                reject(base_conf, "the base collides with the scene")
                 continue
-            with ctx.profile.timed("grasp_ik"):
-                grasp_joints = grasp_ik(
-                    ctx, grasp, init_conf.positions, ctx.retract_joints
-                )
-            if grasp_joints is None:
-                ctx.base_rejections["the arm cannot reach the grasp"] += 1
+            if saturated:
+                deferred.append((saturation, base_conf))
                 continue
+            yield noted(base_conf, saturation)
+            release_grasp(sim)
+        for saturation, base_conf in sorted(deferred, key=lambda entry: entry[0]):
+            sim.robot.set_base(base_conf)
+            yield noted(base_conf, saturation)
+            release_grasp(sim)
+        ctx.log.note(rejected=list(rejected))
+
+
+def plan_grasp_motion(
+    ctx: LimbStreamContext,
+    limb: str,
+    grasp: LimbGrasp,
+    base_conf: SE2Pose,
+    init_conf: LimbConf,
+) -> Iterator[tuple[ArmTrajectory, CoupledState]]:
+    """Yield the arm path from its retracted conf onto the grasp, from `base_conf`.
+
+    A rigid grasp ties the limb configuration to the end-effector pose.
+    """
+    del limb  # there is a single limb per environment
+    sim = ctx.sim
+    with saved_sim_state(sim):
+        release_grasp(sim)
+        sim.robot.set_base(base_conf)
+        with ctx.profile.timed("grasp_ik"):
+            grasp_joints = grasp_ik(
+                ctx, grasp.pose, init_conf.positions, ctx.retract_joints
+            )
+        joint_plan = None
+        if grasp_joints is not None:
             with ctx.profile.timed("arm_motion_planning"):
                 joint_plan = run_motion_planning(
                     sim.robot.arm,
@@ -405,29 +469,25 @@ def plan_grasp_motion(
                     seed=ctx.motion_seed,
                     physics_client_id=sim.physics_client_id,
                 )
-            if joint_plan is None:
-                ctx.base_rejections["no arm path onto the grasp"] += 1
-                continue
-            trajectory = ArmTrajectory(list(joint_plan))
-            state = CoupledState(
-                base_pose=base_conf,
-                robot_positions=list(joint_plan[-1]),
-                robot_velocities=[0.0] * len(joint_plan[-1]),
-                limb_positions=list(init_conf.positions),
-                limb_velocities=[0.0] * NUM_LIMB_JOINTS,
-                approach=trajectory,
-            )
-            if ctx.filter_saturated_bases and saturation > 1.0:
-                deferred.append((saturation, base_conf, trajectory, state))
-                continue
-            yield (base_conf, trajectory, state)
-            release_grasp(sim)
-        for saturation, base_conf, trajectory, state in sorted(
-            deferred, key=lambda entry: entry[0]
-        ):
-            sim.robot.set_base(base_conf)
-            yield (base_conf, trajectory, state)
-            release_grasp(sim)
+    if joint_plan is None:
+        reason = (
+            "the arm cannot reach the grasp"
+            if grasp_joints is None
+            else "no arm path onto the grasp"
+        )
+        ctx.base_rejections[reason] += 1
+        ctx.log.note(failure=reason)
+        return
+    trajectory = ArmTrajectory(list(joint_plan))
+    state = CoupledState(
+        base_pose=base_conf,
+        robot_positions=list(joint_plan[-1]),
+        robot_velocities=[0.0] * len(joint_plan[-1]),
+        limb_positions=list(init_conf.positions),
+        limb_velocities=[0.0] * NUM_LIMB_JOINTS,
+        approach=trajectory,
+    )
+    yield (trajectory, state)
 
 
 def plan_base_motion(
@@ -463,21 +523,54 @@ def _charge_rollout(ctx: LimbStreamContext, outcome: str, start: float) -> None:
 
 def plan_limb_motion(
     ctx: LimbStreamContext, s1: CoupledState, q2: LimbConf
-) -> Iterator[tuple[TorqueTrajectory, CoupledState]]:
+) -> Iterator[tuple[TorqueTrajectory, CoupledState] | None]:
     """Generate a torque trajectory from state `s1` to limb configuration `q2`.
 
-    Runs predictive-sampling MPC closed-loop, recording the torques it applies.
+    Each call runs one MPC with fresh noise. A failed one yields None, so PDDLStream
+    may come back for another, up to `MAX_LIMB_MOTION_ATTEMPTS`.
+    """
+    if not ctx.in_believed_limits(list(q2.positions)):
+        reason = "the target is outside the limb's joint limits"
+        _charge_rollout(ctx, reason, time.time())
+        ctx.log.note(failure=reason)
+        print(f"plan-limb-motion: {reason}.")
+        return
+    for attempt in range(MAX_LIMB_MOTION_ATTEMPTS):
+        ctx.log.note(attempt=attempt)
+        yield _limb_motion_attempt(ctx, s1, q2)
+
+
+def _trajectory_margins(
+    ctx: LimbStreamContext, trajectory: TorqueTrajectory
+) -> dict[str, float]:
+    """Peak load as a fraction of each limit, and the closest approach to the RoM."""
+    total_limit, robot_limit = ctx.human_torque_limits
+    _, upper = ctx.robot_torque_limits
+    lower_rom, upper_rom = ctx.believed_joint_limits or ctx.true_joint_limits
+    path = np.asarray(trajectory.limb_path)
+    return {
+        "human_torque_ratio": float(np.abs(trajectory.human_torques).max())
+        / total_limit,
+        "robot_share_ratio": float(np.abs(trajectory.robot_induced_torques).max())
+        / robot_limit,
+        "robot_torque_ratio": float(
+            (np.abs(trajectory.commanded_torques) / upper).max()
+        ),
+        "rom_margin": float(
+            np.minimum(path - np.asarray(lower_rom), np.asarray(upper_rom) - path).min()
+        ),
+    }
+
+
+def _limb_motion_attempt(
+    ctx: LimbStreamContext, s1: CoupledState, q2: LimbConf
+) -> tuple[TorqueTrajectory, CoupledState] | None:
+    """Run predictive-sampling MPC closed-loop, recording the torques it applies.
 
     It stops with enough headroom that an open-loop replay also lands in tolerance.
     """
     sim = ctx.sim
     call_start = time.time()
-    if not ctx.in_believed_limits(list(q2.positions)):
-        _charge_rollout(
-            ctx, "the target is outside the limb's joint limits", call_start
-        )
-        print("plan-limb-motion: the target is outside the limb's joint limits.")
-        return
     goal = np.asarray(q2.positions, dtype=np.float64)
     mpc = PredictiveSamplingMPC(ctx, goal, s1)
 
@@ -596,16 +689,23 @@ def plan_limb_motion(
                 reached = False
                 giveup = "replayed open-loop into the person or the furniture"
 
+    ctx.log.note(
+        best_error=best_error,
+        control_steps=control_steps,
+        torque_steps=len(robot_torques),
+    )
     if not reached:
         record_attempt(ctx, s1, robot_torques, best_error, giveup, plan_seconds)
         _charge_rollout(ctx, giveup, call_start)
+        ctx.log.note(failure=giveup)
         print(f"plan-limb-motion: MPC rollout {giveup}.")
-        return
+        return None
     if not robot_torques:
         # A zero-length LimbMotion yields a no-op move_limb PDDLStream cannot rebind.
         _charge_rollout(ctx, "already at the target configuration", call_start)
+        ctx.log.note(failure="already at the target configuration")
         print("plan-limb-motion: already at the target configuration; not certified.")
-        return
+        return None
     assert s2 is not None
     record_attempt(
         ctx,
@@ -617,17 +717,16 @@ def plan_limb_motion(
     )
     _charge_rollout(ctx, "reached the goal", call_start)
     print(f"plan-limb-motion: generated a trajectory with {len(robot_torques)} steps.")
-    yield (
-        TorqueTrajectory(
-            robot_torques,
-            human_torques,
-            robot_induced,
-            limb_path,
-            commanded_torques,
-            plan_seconds,
-        ),
-        s2,
+    trajectory = TorqueTrajectory(
+        robot_torques,
+        human_torques,
+        robot_induced,
+        limb_path,
+        commanded_torques,
+        plan_seconds,
     )
+    ctx.log.note(**_trajectory_margins(ctx, trajectory))
+    return trajectory, s2
 
 
 def check_human_joint_limits(
@@ -706,7 +805,7 @@ class PredictiveSamplingMPC:
         self._cfg = ctx.mpc
         self._obstacles = ctx.obstacle_ids
         self._goal = goal
-        self._rng = np.random.default_rng(ctx.motion_seed)
+        self._rng = ctx.spawn_rng()
         self._lower, self._upper = ctx.robot_torque_limits
         self._nominal = np.zeros((self._cfg.num_control_points, NUM_ROBOT_JOINTS))
         if ctx.warm_start is not None and start is not None:

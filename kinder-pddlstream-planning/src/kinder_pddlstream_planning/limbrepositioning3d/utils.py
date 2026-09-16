@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 
 import numpy as np
 import pybullet as p
@@ -103,6 +103,52 @@ class StreamProfile:
             }
             for key in sorted(self.seconds)
         }
+
+
+@dataclass
+class StreamLog:
+    """One record per stream call, with inputs and outputs as serial object ids.
+
+    Streams attach what they learned about a call through `note`, e.g. why it failed.
+    """
+
+    records: list[dict[str, Any]] = field(default_factory=list)
+    objects: list[Any] = field(default_factory=list, repr=False)
+    _serials: dict[int, int] = field(default_factory=dict, repr=False)
+    _notes: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    def ref(self, obj: Any) -> int:
+        """A serial id for `obj`, kept alive so `id()` is never reused."""
+        if id(obj) not in self._serials:
+            self._serials[id(obj)] = len(self.objects)
+            self.objects.append(obj)
+        return self._serials[id(obj)]
+
+    def note(self, **info: Any) -> None:
+        """Attach `info` to the call in progress."""
+        self._notes.update(info)
+
+    def record(
+        self,
+        stream: str,
+        inputs: tuple,
+        outputs: tuple | list | None,
+        seconds: float,
+        **info: Any,
+    ) -> None:
+        """Close the call in progress; `outputs` None means the stream is exhausted."""
+        self.records.append(
+            {
+                "call": len(self.records),
+                "stream": stream,
+                "inputs": [self.ref(x) for x in inputs],
+                "outputs": None if outputs is None else [self.ref(x) for x in outputs],
+                "seconds": seconds,
+                **info,
+                **self._notes,
+            }
+        )
+        self._notes = {}
 
 
 NUM_BASE_SEARCH_ROTATIONS = 24

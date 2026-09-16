@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import time
 import traceback
 from functools import partial
@@ -36,6 +37,7 @@ from pybullet_helpers.geometry import SE2Pose
 from kinder_pddlstream_planning.limbrepositioning3d.stream import (
     ArmTrajectory,
     LimbConf,
+    LimbGrasp,
     LimbStreamContext,
     MPCConfig,
     TorqueTrajectory,
@@ -45,6 +47,7 @@ from kinder_pddlstream_planning.limbrepositioning3d.stream import (
     plan_base_motion,
     plan_grasp_motion,
     plan_limb_motion,
+    sample_base_pose,
     sample_grasp,
 )
 from kinder_pddlstream_planning.limbrepositioning3d.utils import (
@@ -52,7 +55,8 @@ from kinder_pddlstream_planning.limbrepositioning3d.utils import (
     DEFAULT_LIMB_JOINT_DAMPING,
     DEFAULT_ROBOT_INDUCED_TORQUE_LIMIT,
     ROBOT_TORQUE_LIMITS,
-    StreamProfile,
+    CoupledState,
+    StreamLog,
     advance_corrected,
     apply_limb_joint_damping,
     engage_grasp,
@@ -220,21 +224,27 @@ def build_stream_context(
     )
 
 
-def _timed_gen_fn(
-    profile: StreamProfile, name: str, fn: Callable[..., Any]
-) -> Callable[..., Any]:
-    """Charge every `next()` PDDLStream pulls from `fn`'s generator to `name`."""
+def _logged_gen_fn(ctx: LimbStreamContext, name: str, fn: Callable[..., Any]) -> Any:
+    """Charge every `next()` PDDLStream pulls from `fn` to `name`, and log it."""
 
     def wrapped(*args: Any) -> Any:
-        yield from profile.wrap(name, iter(fn(*args)))
+        iterator = ctx.profile.wrap(name, iter(fn(*args)))
+        while True:
+            start = time.perf_counter()
+            try:
+                item = next(iterator)
+            except StopIteration:
+                ctx.log.record(name, args, None, time.perf_counter() - start)
+                return
+            # A None item is a call that produced nothing but may be retried.
+            ctx.log.record(name, args, item or (), time.perf_counter() - start)
+            yield item
 
     return wrapped
 
 
-def _timed_test(
-    profile: StreamProfile, name: str, fn: Callable[..., Any]
-) -> Callable[..., Any]:
-    """Charge each evaluation of the test `fn` to `name`."""
+def _logged_test(ctx: LimbStreamContext, name: str, fn: Callable[..., Any]) -> Any:
+    """Charge and log each evaluation of the test `fn`."""
 
     def wrapped(*args: Any) -> Any:
         start = time.perf_counter()
@@ -244,9 +254,62 @@ def _timed_test(
             return passed
         finally:
             # A rejected check is time the search spent proving a trajectory unusable.
-            profile.add(name, time.perf_counter() - start, produced=passed)
+            seconds = time.perf_counter() - start
+            ctx.profile.add(name, seconds, produced=passed)
+            ctx.log.record(name, args, (), seconds, passed=passed)
 
     return wrapped
+
+
+def _describe(obj: Any) -> Any:
+    """A JSON-writable view of a stream object."""
+    if isinstance(obj, LimbGrasp):
+        return {"type": "grasp", "slide": obj.slide, "roll": obj.roll}
+    if isinstance(obj, SE2Pose):
+        return {"type": "base", "x": obj.x, "y": obj.y, "rot": obj.rot}
+    if isinstance(obj, LimbConf):
+        return {"type": "limb_conf", "positions": list(obj.positions)}
+    if isinstance(obj, CoupledState):
+        return {
+            "type": "state",
+            "base": [obj.base_pose.x, obj.base_pose.y, obj.base_pose.rot],
+            "robot_positions": list(obj.robot_positions),
+            "limb_positions": list(obj.limb_positions),
+        }
+    if isinstance(obj, ArmTrajectory):
+        return {"type": "arm_trajectory", "waypoints": len(obj.joint_plan)}
+    if isinstance(obj, TorqueTrajectory):
+        return {"type": "torque_trajectory", "steps": len(obj.robot_torques)}
+    if isinstance(obj, list):
+        return {"type": "base_trajectory", "waypoints": len(obj)}
+    return str(obj)
+
+
+def write_stream_log(
+    path: Path,
+    log: StreamLog,
+    result: RunResult,
+    plan: list[tuple[str, tuple]] | None,
+    profile: dict[str, Any],
+) -> None:
+    """Dump every stream call, the objects they exchanged, and the plan that used them."""
+    plan_refs = (
+        None
+        if plan is None
+        else [[name, [log.ref(arg) for arg in args]] for name, args in plan]
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "result": dataclasses.asdict(result),
+                "plan": plan_refs,
+                "objects": [_describe(obj) for obj in log.objects],
+                "calls": log.records,
+                "profile": profile,
+            }
+        )
+    )
 
 
 def create_problem(ctx: LimbStreamContext) -> PDDLProblem:
@@ -270,6 +333,7 @@ def create_problem(ctx: LimbStreamContext) -> PDDLProblem:
 
     gen_fns: dict[str, Callable[..., Any]] = {
         "sample-grasp": sample_grasp,
+        "sample-base-pose": sample_base_pose,
         "plan-grasp-motion": plan_grasp_motion,
         "plan-base-motion": plan_base_motion,
         "plan-limb-motion": plan_limb_motion,
@@ -280,10 +344,10 @@ def create_problem(ctx: LimbStreamContext) -> PDDLProblem:
         "check-robot-torque-limits": check_robot_torque_limits,
     }
     stream_map = {
-        name: from_gen_fn(_timed_gen_fn(ctx.profile, name, partial(fn, ctx)))
+        name: from_gen_fn(_logged_gen_fn(ctx, name, partial(fn, ctx)))
         for name, fn in gen_fns.items()
     } | {
-        name: from_test(_timed_test(ctx.profile, name, partial(fn, ctx)))
+        name: from_test(_logged_test(ctx, name, partial(fn, ctx)))
         for name, fn in tests.items()
     }
 
@@ -444,15 +508,17 @@ def solve_and_execute(
     limb_joint_damping: float = DEFAULT_LIMB_JOINT_DAMPING,
     robot_base_z: float | None = None,
     result: RunResult | None = None,
+    log_path: str | Path | None = None,
 ) -> bool:
     """Build the variant, plan with PDDLStream, and execute the plan.
 
     Returns whether the limb ends up within `goal_atol` of its goal. A `result` is
-    filled in with what the run took and measured.
+    filled in with what the run took and measured, and `log_path` gets every stream call.
     """
     if result is None:
         result = RunResult(variant=variant, seed=seed)
     ctx: LimbStreamContext | None = None
+    plan: list[tuple[str, tuple]] | None = None
     sim = create_env(
         variant,
         standoff=standoff,
@@ -519,6 +585,10 @@ def solve_and_execute(
                 assert gif_path is not None
                 save_gif(gif_path, frames)
     finally:
+        if log_path is not None and ctx is not None:
+            write_stream_log(
+                Path(log_path), ctx.log, result, plan, ctx.profile.as_dict()
+            )
         sim.close()
 
 
@@ -726,6 +796,12 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--log-path",
+        type=Path,
+        default=None,
+        help="Write every stream call of the run to this JSON file (default: off).",
+    )
+    parser.add_argument(
         "--use-gui",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -771,6 +847,7 @@ def main() -> None:
             ),
             verbose=True,
             result=result,
+            log_path=args.log_path,
             **shared,
         )
         print(f"Reached goal: {success}")

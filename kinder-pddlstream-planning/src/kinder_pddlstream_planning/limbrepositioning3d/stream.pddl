@@ -1,20 +1,28 @@
 (define (stream limbrepositioning3d)
-  ; Single-shot for now: the scene ships one fixed transform per limb family.
+  ; Endless: the default slide both ways up, then random slides.
   (:stream sample-grasp
     :inputs (?l)
     :domain (Limb ?l)
     :outputs (?g)
     :certified (Grasp ?l ?g)
   )
-  (:stream plan-grasp-motion
+
+  ; Both limb configurations are inputs: the arm must hold the grasp throughout.
+  (:stream sample-base-pose
     :inputs (?l ?g ?qL1 ?qL2)
     :domain (and (Grasp ?l ?g) (InitConf ?l ?qL1) (GoalConf ?l ?qL2))
-    :outputs (?q ?at ?s)
+    :outputs (?q)
     :certified (and (BConf ?q)
                     (Reachable ?l ?g ?q ?qL1)
-                    (Reachable ?l ?g ?q ?qL2)
-                    (State ?s)
-                    (StateConf ?s ?qL1)
+                    (Reachable ?l ?g ?q ?qL2))
+  )
+
+  (:stream plan-grasp-motion
+    :inputs (?l ?g ?q ?qL)
+    :domain (and (Reachable ?l ?g ?q ?qL) (InitConf ?l ?qL))
+    :outputs (?at ?s)
+    :certified (and (State ?s)
+                    (StateConf ?s ?qL)
                     (GraspKin ?l ?g ?q ?at ?s))
   )
 
@@ -25,7 +33,7 @@
     :certified (BaseMotion ?q1 ?bt ?q2)
   )
 
-  ; Runs predictive-sampling MPC and returns the open-loop torques it found.
+  ; Runs predictive-sampling MPC, with fresh noise on each retry.
   (:stream plan-limb-motion
     :inputs (?s1 ?qL2)
     :domain (and (State ?s1) (Conf ?qL2))
