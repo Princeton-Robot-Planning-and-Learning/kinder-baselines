@@ -10,6 +10,7 @@ from kinder.envs.dynamic3d.object_types import (
     MujocoDrawerObjectType,
     MujocoFixtureObjectType,
     MujocoObjectType,
+    MujocoStaticColliderType,
     MujocoTidyBotRobotObjectType,
 )
 from kinder.envs.kinematic3d.utils import extend_joints_to_include_fingers
@@ -168,7 +169,12 @@ def get_overhead_kinematic2ds(state: ObjectCentricState) -> dict[str, Geom2D]:
     """Get a mapping from object name to Geom2D from an overhead perspective."""
     geoms: dict[str, Geom2D] = {}
     for obj in state:
-        print(obj.name)
+        # Compiled collision boxes supersede legacy fixture size approximations.
+        if obj.is_instance(MujocoFixtureObjectType) and any(
+            name.startswith(f"collider:{obj.name}:")
+            for name in state.get_object_names()
+        ):
+            continue
         if obj.is_instance(MujocoTidyBotRobotObjectType):
             pose = get_overhead_robot_se2_pose(state, obj)
         elif obj.is_instance(MujocoDrawerObjectType):
@@ -180,6 +186,18 @@ def get_overhead_kinematic2ds(state: ObjectCentricState) -> dict[str, Geom2D]:
         else:
             raise NotImplementedError
         width, height, _ = get_bounding_box(state, obj)
+        if obj.is_instance(MujocoStaticColliderType):
+            # Project a full 3-D oriented box, including vertical/diagonal walls,
+            # onto a yaw-aligned rectangle. Do not mistake wall height for width.
+            rotation = Rotation.from_quat(
+                [state.get(obj, key) for key in ("qx", "qy", "qz", "qw")]
+            ).as_matrix()
+            axis = rotation[:2, np.argmax(np.linalg.norm(rotation[:2], axis=0))]
+            yaw = np.arctan2(axis[1], axis[0])
+            basis = np.array([[np.cos(yaw), np.sin(yaw)], [-np.sin(yaw), np.cos(yaw)]])
+            dimensions = np.array(get_bounding_box(state, obj))
+            width, height = np.abs(basis @ rotation[:2]) @ dimensions
+            pose = SE2(pose.x, pose.y, yaw)
         geom = Rectangle.from_center(
             pose.x, pose.y, width, height, rotation_about_center=pose.theta()
         )
@@ -250,7 +268,7 @@ def run_base_motion_planning(
     # Geom2D for one, so they are absent from geoms and would KeyError below.
     obstacles = [o for o in obstacles if not o.is_instance(MujocoDrawerObjectType)]
     geoms = get_overhead_kinematic2ds(state)
-    obstacle_geoms: set[Geom2D] = {geoms[o.name] for o in obstacles}
+    obstacle_geoms: set[Geom2D] = {geoms[o.name] for o in obstacles if o.name in geoms}
 
     # Set up the RRT methods.
     def sample_fn(_: SE2) -> SE2:
@@ -491,6 +509,26 @@ class PyBulletSim:
 
         # Create all the cubes.
         self._bins: dict[str, int] = {}
+        self._static_colliders: dict[str, int] = {}
+        for obj in initial_state.get_objects(MujocoStaticColliderType):
+            body = create_pybullet_block(
+                color=(0.5, 0.5, 0.5, 1.0),
+                half_extents=tuple(
+                    initial_state.get(obj, key) / 2 for key in ("bb_x", "bb_y", "bb_z")
+                ),
+                physics_client_id=self._physics_client_id,
+            )
+            set_pose(
+                body,
+                Pose(
+                    tuple(initial_state.get(obj, key) for key in ("x", "y", "z")),
+                    tuple(
+                        initial_state.get(obj, key) for key in ("qx", "qy", "qz", "qw")
+                    ),
+                ),
+                self._physics_client_id,
+            )
+            self._static_colliders[obj.name] = body
         self._cubes: dict[str, int] = {}
         for cube_name in initial_state.get_object_names():
             if "cube" in cube_name:
@@ -691,6 +729,7 @@ class PyBulletSim:
         collision_bodies: set[int] = set()
         collision_bodies.update(self._cubes.values())
         collision_bodies.update(self._bins.values())
+        collision_bodies.update(self._static_colliders.values())
         if self._cupboard1_shelf_id is not None:
             collision_bodies.add(self._cupboard1_shelf_id)
         if held_object is not None:
