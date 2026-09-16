@@ -10,6 +10,7 @@ from typing import NamedTuple
 
 import numpy as np
 from kinder.envs.dynamic3d.mujoco_utils import CONTROL_SCHEDULE_TIMESTEP
+from kinder.envs.dynamic3d.robots.tidybot_robot_env import TidyBotRobotEnv
 from pybullet_helpers.inverse_kinematics import JointPositions
 from relational_structs import Array
 
@@ -48,6 +49,28 @@ class TossSwing(NamedTuple):
     release_slice: int
 
 
+def bound_tossing_action(action: Array) -> Array:
+    """Emit 18D commands with bounded position deltas and unchanged arm PD torque.
+
+    The Tossing controllers assume the default TidyBot PD gains. Transfer clipped
+    arm position error to velocity targets using those public gains; clipping alone
+    weakens the throw. Velocity targets retain their existing unrestricted range.
+    Legacy 11D setup commands have zero velocity targets before this conversion.
+    """
+    bounded = np.array(action, dtype=np.float32, copy=True)
+    if bounded.shape[-1] == 11:
+        bounded = np.concatenate(
+            [bounded, np.zeros((*bounded.shape[:-1], 7), dtype=np.float32)], axis=-1
+        )
+    position_delta = bounded[..., 3:10].copy()
+    bounded[..., :10] = np.clip(bounded[..., :10], -0.1, 0.1)
+    bounded[..., 10] = np.clip(bounded[..., 10], 0.0, 1.0)
+    bounded[..., 11:18] += (position_delta - bounded[..., 3:10]) * (
+        TidyBotRobotEnv.ARM_KP / TidyBotRobotEnv.ARM_KD
+    )
+    return bounded
+
+
 def toss_swing_action(
     swing: TossSwing,
     step_idx: int,
@@ -73,6 +96,7 @@ def toss_swing_action(
     target_joint_angles = swing.start_joint_angles + swing.direction * s
     action[3:10] = kp * (target_joint_angles - np.array(current_joint_angles[:7]))
     action[11:18] = swing.direction * (ds * kv)
+    action = bound_tossing_action(action)
 
     if has_released or step_idx > swing.release_step:
         action[10] = 0.0
