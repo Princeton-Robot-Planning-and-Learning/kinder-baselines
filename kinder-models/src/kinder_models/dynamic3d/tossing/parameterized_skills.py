@@ -1447,15 +1447,13 @@ class MoveToTossLocationAndTossController(
     )
     TARGET_ROTATION_BOUNDS = (-MAX_TARGET_ROTATION, MAX_TARGET_ROTATION)
 
-    # TossController's two dials, opened up as sampled parameters. Narrowed from the
-    # originally-shipped (60, TOSS_MAX_VELOCITY) / (600, 840): measured directly
-    # (toss_param_probe4.py, isolated toss draws from a real post-pick state, 480
-    # draws across 16 seeds) that every scoring draw fell in speed_deg [117.5, 140.0]
-    # and release_ms [710.4, 836.1] -- the wide bounds spent the large majority of
-    # the sampler's budget on combinations that can never score. A few degrees/ms of
-    # margin below the measured minimums, since 480 draws is not exhaustive.
-    SPEED_BOUNDS = (np.deg2rad(115.0), TOSS_MAX_VELOCITY)
-    RELEASE_MS_BOUNDS = (700.0, 840.0)
+    # Simulation-only extension for KINDER's farther receivers. Scale the whole
+    # motion profile, not only velocity, and include earlier releases at higher
+    # effort. These settings are NOT validated hardware limits. The standalone
+    # TossController and low-level swing helpers retain the original ceiling.
+    MAX_SIMULATION_EFFORT = 3.0
+    SPEED_BOUNDS = (np.deg2rad(115.0), TOSS_MAX_VELOCITY * MAX_SIMULATION_EFFORT)
+    RELEASE_MS_BOUNDS = (400.0, 840.0)
 
     def __init__(
         self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
@@ -1630,6 +1628,7 @@ class MoveToTossLocationAndTossController(
             windup_plan[-1],
             self._release_speed,
             self._gripper_release_ms,
+            max_effort=self.MAX_SIMULATION_EFFORT,
         )
 
     def terminated(self) -> bool:
