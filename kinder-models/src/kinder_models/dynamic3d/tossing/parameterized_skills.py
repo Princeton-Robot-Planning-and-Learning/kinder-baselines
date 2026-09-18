@@ -1435,8 +1435,11 @@ class MoveToTossLocationAndTossController(
         # known-good starting pose instead of wherever the release left the arm.
         RETURN_HOME = enum.auto()
 
-    # Where a throw is possible; the upper part does not score.
-    TARGET_DISTANCE_BOUNDS = (1.25, 1.45)
+    # Candidate release positions, not a guarantee of ballistic success. KINDER
+    # #191 moved receivers to x in [2.6, 3.42]. With the barrier at x=1.3 and
+    # a 0.55 m robot footprint, the farthest receiver needs >2.425 m standoff
+    # just to keep the base on the near side. Retain short same-side throws too.
+    TARGET_DISTANCE_BOUNDS = (1.25, 2.6)
 
     # Widest rotation that stays within half of WAYPOINT_TOLERANCE at max standoff.
     MAX_TARGET_ROTATION = float(
