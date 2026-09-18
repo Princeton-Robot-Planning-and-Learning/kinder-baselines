@@ -7,6 +7,9 @@ toss past it is irreversible.
 TODO: only Tossing3D-o1 is supported; no operator says which cube a throw is aimed at.
 """
 
+from dataclasses import asdict, dataclass
+from typing import Any
+
 import numpy as np
 from bilevel_planning.structs import (
     RelationalAbstractGoal,
@@ -43,7 +46,7 @@ OnGround = Predicate("OnGround", [MujocoObjectType])
 Holding = Predicate("Holding", [MujocoTidyBotRobotObjectType, MujocoMovableObjectType])
 HandEmpty = Predicate("HandEmpty", [MujocoTidyBotRobotObjectType])
 MovableIsDownX = Predicate(
-    "MovableIsDownX", [MujocoMovableObjectType, MujocoMovableObjectType]
+    "MovableIsDownX", [MujocoMovableObjectType, MujocoObjectType]
 )
 # The environment's inflated region, not the task JSON's "ranges".
 GOAL_REGION_NAME = "blocks_goal_region"
@@ -52,6 +55,27 @@ BIN_NAME = "bin_0"
 
 CUBE_NAME_PREFIX = "cube"
 BARRIER_NAME = "cuboid_barrier"
+
+
+@dataclass(frozen=True)
+class HoldingEvidence:
+    """Auditable inputs to the Tossing3D ``Holding`` predicate."""
+
+    gripper_command: float
+    gripper_closed: bool
+    cube_z: float
+    cube_off_ground: bool
+    contact_count: int
+    contacts: tuple[dict[str, Any], ...]
+    finger_contact: bool
+    ee_cube_distance_xyz: tuple[float, float, float]
+    legacy_ee_near: bool
+    legacy_holding: bool
+    contact_holding: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return plain JSON-compatible diagnostic data."""
+        return asdict(self)
 
 
 class Tossing3DStateAbstractor:
@@ -82,7 +106,7 @@ class Tossing3DStateAbstractor:
         movables = state.get_objects(MujocoMovableObjectType)
         all_mujoco_objects = set(fixtures) | set(movables)
         cubes = self._get_cubes(state)
-        barriers = [o for o in movables if o.name == BARRIER_NAME]
+        barriers = [o for o in state if o.name == BARRIER_NAME]
 
         if self._check_gripper_open(state, robot):
             atoms.add(GroundAtom(HandEmpty, [robot]))
@@ -90,7 +114,7 @@ class Tossing3DStateAbstractor:
         for cube in cubes:
             if self._check_on_ground(state, cube):
                 atoms.add(GroundAtom(OnGround, [cube]))
-            if self._check_holding(state, robot, cube):
+            if self.holding_evidence(state, robot, cube).contact_holding:
                 atoms.add(GroundAtom(Holding, [robot, cube]))
             if self._check_in_goal_region(state, cube):
                 atoms.add(GroundAtom(MovableInGoalRegion, [cube]))
@@ -148,19 +172,41 @@ class Tossing3DStateAbstractor:
         self, state: ObjectCentricState, robot: Object, movable: Object
     ) -> bool:
         """Whether the gripper is closed on this movable and lifting it."""
+        return self.holding_evidence(state, robot, movable).contact_holding
+
+    def holding_evidence(
+        self, state: ObjectCentricState, robot: Object, movable: Object
+    ) -> HoldingEvidence:
+        """Evaluate both the legacy and contact-based holding classifiers."""
+        self._pybullet_sim.set_state(state)
         z = state.get(movable, "z")
-        if (
-            state.get(robot, "pos_gripper") <= GRIPPER_GRASPING_THRESHOLD
-            or z <= MINIMUM_HOLDING_HEIGHT
-        ):
-            return False
+        gripper_command = state.get(robot, "pos_gripper")
+        gripper_closed = bool(gripper_command > GRIPPER_GRASPING_THRESHOLD)
+        cube_off_ground = bool(z > MINIMUM_HOLDING_HEIGHT)
         ee_pose = self._pybullet_sim.get_ee_pose()
-        return bool(
-            abs(ee_pose.position[0] - state.get(movable, "x"))
-            < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
-            and abs(ee_pose.position[1] - state.get(movable, "y"))
-            < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
-            and abs(ee_pose.position[2] - z) < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
+        distance_xyz = (
+            abs(ee_pose.position[0] - state.get(movable, "x")),
+            abs(ee_pose.position[1] - state.get(movable, "y")),
+            abs(ee_pose.position[2] - z),
+        )
+        legacy_ee_near = bool(all(
+            distance < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE
+            for distance in distance_xyz
+        ))
+        contacts = self._sim.get_gripper_object_contacts(movable.name, state=state)
+        finger_contact = bool(contacts)
+        return HoldingEvidence(
+            gripper_command=gripper_command,
+            gripper_closed=gripper_closed,
+            cube_z=z,
+            cube_off_ground=cube_off_ground,
+            contact_count=len(contacts),
+            contacts=tuple(contacts),
+            finger_contact=finger_contact,
+            ee_cube_distance_xyz=distance_xyz,
+            legacy_ee_near=legacy_ee_near,
+            legacy_holding=gripper_closed and cube_off_ground and legacy_ee_near,
+            contact_holding=gripper_closed and cube_off_ground and finger_contact,
         )
 
     @staticmethod
