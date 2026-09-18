@@ -71,6 +71,37 @@ pose; arbitrary robot poses after practice are not certified by this corpus.
 
 ## Trial outcomes
 
+### Boundary audit
+
+The runner now explicitly enables the furnished scene, matching HITL. The earlier
+30-scene witness survey above used the default simple background.
+
+The checked-in region JSONs are frozen snapshots of the evaluation task and HITL
+reset definitions; refresh them if those definitions change. Run from
+`kinder-models/` with EGL and the matching simulator dependency:
+
+```bash
+python scripts/generate_toss_boundary_cells.py \
+  --regions scripts/toss_boundary_regions.json --output /tmp/bin-edges.json
+python scripts/check_toss_boundaries.py \
+  --regions /tmp/bin-edges.json --precut-regions --output /tmp/bin-edge-trials.jsonl
+python scripts/check_toss_boundaries.py \
+  --regions scripts/toss_boundary_regions.json \
+  --cube-region scripts/toss_cube_region.json --output /tmp/cube-edge-trials.jsonl
+```
+
+The first command intersects region bounds with room halfspaces and subtracts
+furniture/obstacle footprints, accounting for the bin footprint and clearance.
+It tests vertices and edge midpoints just inside that feasible polygon, including
+hole boundaries when present. The last command probes eight pickup-region edge
+cells for each placement family. Both use physical pickup/toss execution, preserve
+each failed attempt and require a successful witness per case. Empty cells are
+reported separately and cause a nonzero exit, never counted as covered. The
+generator uses the current 30 cm bin fixture and rejects changed bin dimensions.
+
+This finite audit does not certify arbitrary post-practice robot poses or every
+combination of continuous coordinates and orientations.
+
 - `success`: the actual simulator goal reports the cube in the bin.
 - `toss_miss`: the toss controller completed but the goal is false.
 - `pickup_failed`: pickup completed without the contact-based Holding predicate.

@@ -37,6 +37,7 @@ def run_trial(
     rotation: float = 0.0,
     step_limit: int = 400,
     bin_reset_region: dict | None = None,
+    cube_reset_region: dict | None = None,
 ) -> dict:
     """Return physical outcomes and failures without dropping failed trials."""
     if step_limit <= 0 or not np.isfinite(max_effort) or max_effort <= 0:
@@ -53,13 +54,15 @@ def run_trial(
         "max_effort": max_effort,
         "rotation": rotation,
         "status": "error",
+        "scene_bg": True,
         "pickup_steps": 0,
         "toss_steps": 0,
         "bin_reset_region": bin_reset_region,
+        "cube_reset_region": cube_reset_region,
     }
     started = time.monotonic()
     kinder.register_all_environments()
-    env = kinder.make("kinder/Tossing3D-o1-v0", allow_state_access=True)
+    env = kinder.make("kinder/Tossing3D-o1-v0", allow_state_access=True, scene_bg=True)
     sims = []
     phase = "pickup"
     stage = "reset"
@@ -68,11 +71,19 @@ def run_trial(
         abstractor = Tossing3DStateAbstractor(scene)
         obs, _ = env.reset(seed=seed)
         state = env.observation_space.devectorize(obs)
-        if bin_reset_region is not None:
+        if bin_reset_region is not None or cube_reset_region is not None:
             # Use the production reset sampler, including room/furniture clearance.
+            regions = {}
+            placements = {"cube_0": "blocks_init_region"}
+            if bin_reset_region is not None:
+                regions["__coverage_bin_region"] = bin_reset_region
+                placements["bin_0"] = "__coverage_bin_region"
+            if cube_reset_region is not None:
+                regions["__coverage_cube_region"] = cube_reset_region
+                placements["cube_0"] = "__coverage_cube_region"
             scene.reset_ground_objects_to_regions(
-                {"cube_0": "blocks_init_region", "bin_0": "__coverage_bin_region"},
-                region_configs={"__coverage_bin_region": bin_reset_region},
+                placements,
+                region_configs=regions,
             )
             state = scene._get_current_state()  # pylint: disable=protected-access
         robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
@@ -80,6 +91,7 @@ def run_trial(
         barrier = state.get_object_from_name("cuboid_barrier")
         bin_object = state.get_object_from_name("bin_0")
         result["initial_bin_xyz"] = [float(state.get(bin_object, a)) for a in "xyz"]
+        result["initial_cube_xyz"] = [float(state.get(cube, a)) for a in "xyz"]
         for phase, key, params in [
             ("pickup", "pick_cube", None),
             (
