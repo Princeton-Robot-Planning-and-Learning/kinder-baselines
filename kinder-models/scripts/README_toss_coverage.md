@@ -38,6 +38,39 @@ results survive interruption.
 
 ## Reading results
 
+## Per-configuration solution checks
+
+Add `--find-solutions` to stop each seed/effort search at its first successful
+physical trajectory. The summary records that witness and its parameters for
+each requested seed. Exit status 2 means at least one requested scene has no
+witness in the tested grid; it does not prove that scene is impossible. Witness
+parameters must stay inside the composed controller's supported bounds.
+
+For practice placements, pass `--bin-reset-region region.json`, containing the
+application's reset-region definition (`target`, `ranges`, `yaw_ranges`). The
+runner invokes the environment's real feasible-placement reset method for the
+cube and bin, rather than teleporting them to unchecked poses. Run each reset
+destination separately; do not pool them with initial evaluation scenes.
+
+Executed on 2026-09-18, using seeds 10200 through 10209 and effort ceiling 3:
+
+| Placement family | Scenes with a physical solution |
+| --- | ---: |
+| Initial opposite-side evaluation | 10/10 |
+| Robot-side practice reset | 10/10 |
+| Opposite-side practice reset | 10/10 |
+
+Evaluation searched distance 2.5, speeds 360/380/358/400/340 deg/s and release
+500/480/520 ms. Reset searches used distances 1.35/1.4/1.3/1.45, speeds
+140/130/120 deg/s and release 780/760/800/720 ms. All used rotation 0.
+Reset regions came from the application's `BIN_RESET_REGION_BY_SIDE` definition.
+
+These are existence checks, **not learned-policy success rates or a proof over
+the continuous configuration space**. Resets here start from the initial robot
+pose; arbitrary robot poses after practice are not certified by this corpus.
+
+## Trial outcomes
+
 - `success`: the actual simulator goal reports the cube in the bin.
 - `toss_miss`: the toss controller completed but the goal is false.
 - `pickup_failed`: pickup completed without the contact-based Holding predicate.

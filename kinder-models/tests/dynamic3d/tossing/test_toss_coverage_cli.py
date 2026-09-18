@@ -75,3 +75,49 @@ def test_cli_reports_errors_with_nonzero_exit(tmp_path, monkeypatch) -> None:
     )
     with pytest.raises(SystemExit, match="1"):
         coverage.main()
+
+
+def test_solution_coverage_requires_a_witness_for_every_scene() -> None:
+    """Many successes on one scene must not hide a missing or unattempted scene."""
+    rows = [{"seed": 1, "max_effort": 3.0, "status": "success"}] * 10
+    result = coverage.solution_coverage(rows, seeds=[1, 2], efforts=[3.0])
+    assert result[0]["covered"]
+    assert not result[1]["covered"]
+    assert result[1]["witness"] is None and result[1]["attempts"] == 0
+
+
+def test_find_solutions_exits_nonzero_for_uncovered_scene(
+    tmp_path, monkeypatch
+) -> None:
+    """A witness on seed one cannot turn the whole coverage gate green."""
+    calls = []
+
+    def trial(**kw):
+        calls.append(kw)
+        return {**kw, "status": "success" if kw["seed"] == 1 else "toss_miss"}
+
+    monkeypatch.setattr(coverage, "run_trial", trial)
+    output = tmp_path / "witnesses.jsonl"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "coverage",
+            "--output",
+            str(output),
+            "--find-solutions",
+            "--seeds",
+            "1",
+            "2",
+            "--speeds",
+            "350",
+            "360",
+            "--efforts",
+            "3",
+        ],
+    )
+    with pytest.raises(SystemExit, match="2"):
+        coverage.main()
+    assert len(calls) == 3  # one successful attempt on seed one; both on seed two
+    summary = json.loads(output.read_text().splitlines()[-1])
+    assert [r["covered"] for r in summary["solution_coverage"]] == [True, False]

@@ -47,3 +47,29 @@ def test_coverage_records_pickup_timeout() -> None:
     )
     assert row["status"] == "pickup_timeout", row
     assert row["pickup_steps"] == 1 and row["toss_steps"] == 0
+
+
+@pytest.mark.parametrize("x_min,x_max,yaw", [(-2.3, -1.48, 180.0), (1.48, 2.3, 0.0)])
+def test_reset_destination_has_a_physical_solution(
+    x_min: float, x_max: float, yaw: float
+) -> None:
+    """Frozen HITL reset-region regression fixtures, not new placement policy.
+
+    Exercise KINDER's real feasible-placement sampler for both destinations.
+    The broader coverage runner accepts exported current application regions.
+    """
+    region = {
+        "target": "ground",
+        "ranges": [[x_min, -2.3, x_max, 2.3]],
+        "yaw_ranges": [[yaw, yaw]],
+    }
+    row = run_trial(
+        seed=10200,
+        distance=1.35,
+        speed=140.0,
+        release_ms=780.0,
+        max_effort=3.0,
+        bin_reset_region=region,
+    )
+    assert row["pickup_holding"], row
+    assert row["status"] == "success", row
