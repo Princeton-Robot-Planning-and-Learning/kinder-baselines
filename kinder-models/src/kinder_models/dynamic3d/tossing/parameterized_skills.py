@@ -1501,7 +1501,20 @@ class MoveToTossLocationAndTossController(
         (360.0, 500.0),
         (400.0, 500.0),
     )
-    MAX_SWING_VELOCITY = np.deg2rad(400.0)
+
+    # Widest rotation that stays within half of WAYPOINT_TOLERANCE at max standoff.
+    MAX_TARGET_ROTATION = float(
+        np.arcsin(0.5 * WAYPOINT_TOLERANCE / TARGET_DISTANCE_BOUNDS[1])
+    )
+    TARGET_ROTATION_BOUNDS = (-MAX_TARGET_ROTATION, MAX_TARGET_ROTATION)
+
+    # Simulation-only extension for KINDER's farther receivers. Scale the whole
+    # motion profile, not only velocity, and include earlier releases at higher
+    # effort. These settings are NOT validated hardware limits. The standalone
+    # TossController and low-level swing helpers retain the original ceiling.
+    MAX_SIMULATION_EFFORT = 3.0
+    SPEED_BOUNDS = (np.deg2rad(115.0), TOSS_MAX_VELOCITY * MAX_SIMULATION_EFFORT)
+    RELEASE_MS_BOUNDS = (400.0, 840.0)
 
     def __init__(
         self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
@@ -1694,7 +1707,7 @@ class MoveToTossLocationAndTossController(
             windup_plan[-1],
             self._release_speed,
             self._gripper_release_ms,
-            max_velocity=self.MAX_SWING_VELOCITY,
+            max_effort=self.MAX_SIMULATION_EFFORT,
         )
 
     def terminated(self) -> bool:

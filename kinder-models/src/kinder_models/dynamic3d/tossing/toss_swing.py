@@ -119,7 +119,7 @@ def plan_toss_swing(
     release_speed: float = TOSS_MAX_VELOCITY,
     gripper_release_ms: int = TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS,
     *,
-    max_velocity: float = TOSS_MAX_VELOCITY,
+    max_effort: float = 1.0,
 ) -> TossSwing:
     """Time a motion plan as a toss, and fix the millisecond the gripper opens on.
 
@@ -133,7 +133,7 @@ def plan_toss_swing(
     # Do not align this with the _compute_per_joint_profile siblings.
     direction = dq / s_total if s_total > 1e-4 else np.zeros(7)
     max_vel, max_accel, max_decel = toss_profile_limits(
-        release_speed, max_velocity=max_velocity
+        release_speed, max_effort=max_effort
     )
     trajectory = _trapezoidal_motion_profile(
         s_total,
@@ -157,18 +157,18 @@ def plan_toss_swing(
 def toss_profile_limits(
     release_speed: float = TOSS_MAX_VELOCITY,
     *,
-    max_velocity: float = TOSS_MAX_VELOCITY,
+    max_effort: float = 1.0,
 ) -> tuple[float, float, float]:
     """The (max_vel, max_accel, max_decel) triple a toss at release_speed is timed by.
 
     One factor on all three, so this is an effort and not a speed cap: raising max_vel
     alone turns the profile triangular and moves the release into the acceleration
-    phase. The default preserves the demonstrated real-arm ceiling. Simulated
-    controllers can explicitly select a higher ceiling without changing other callers.
+    phase. The default ceiling preserves the original profile. Values above one
+    are an explicit simulation experiment, not a hardware-safe operating limit.
     """
-    if not np.isfinite(max_velocity) or max_velocity <= 0:
-        raise ValueError("max_velocity must be finite and positive")
-    effort = np.clip(release_speed, 0.0, max_velocity) / TOSS_MAX_VELOCITY
+    if not np.isfinite(max_effort) or max_effort <= 0:
+        raise ValueError("max_effort must be finite and positive")
+    effort = min(max(release_speed / TOSS_MAX_VELOCITY, 0.0), max_effort)
     return (
         TOSS_MAX_VELOCITY * effort,
         TOSS_MAX_ACCELERATION * effort,

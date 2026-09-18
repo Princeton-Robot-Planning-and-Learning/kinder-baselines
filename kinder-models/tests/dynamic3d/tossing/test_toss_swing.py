@@ -166,7 +166,7 @@ def test_the_release_speeds_the_sampler_draws_are_never_clamped():
     for speed_degrees, _ in controller.THROW_PROFILES:
         speed = np.deg2rad(speed_degrees)
         assert np.isclose(
-            toss_profile_limits(speed, max_velocity=controller.MAX_SWING_VELOCITY)[0],
+            toss_profile_limits(speed, max_effort=controller.MAX_SIMULATION_EFFORT)[0],
             speed,
         )
 
@@ -177,7 +177,7 @@ def test_simulated_swing_uses_explicit_higher_ceiling():
     end = list(TOSS_RELEASE_ARM_CONFIGURATION) + [0.0] * 6
     speed = np.deg2rad(280.0)
     default = plan_toss_swing([end], start, speed, 550)
-    fast = plan_toss_swing([end], start, speed, 550, max_velocity=np.deg2rad(400.0))
+    fast = plan_toss_swing([end], start, speed, 550, max_effort=3.0)
     assert len(fast.trajectory) < len(default.trajectory)
     assert fast.release_step == default.release_step
     assert fast.release_slice == default.release_slice
@@ -252,7 +252,7 @@ def test_room_profiles_emit_only_declared_action_vectors():
             start,
             np.deg2rad(speed),
             int(release_ms),
-            max_velocity=MoveToTossLocationAndTossController.MAX_SWING_VELOCITY,
+            max_effort=MoveToTossLocationAndTossController.MAX_SIMULATION_EFFORT,
         )
         assert swing.release_slice == 0
         action = toss_swing_action(swing, swing.release_step, start, 1.0, False)
