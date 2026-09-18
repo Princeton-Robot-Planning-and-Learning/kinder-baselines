@@ -1,0 +1,1 @@
+{"evaluation": {"target": "ground", "ranges": [[2.6, -2.3, 3.42, 2.3]], "yaw_ranges": [[0, 0]]}, "robot_side": {"target": "ground", "ranges": [[-2.3, -2.3, -1.48, 2.3]], "yaw_ranges": [[180, 180]]}, "opposite_side": {"target": "ground", "ranges": [[1.48, -2.3, 2.3, 2.3]], "yaw_ranges": [[0, 0]]}}
