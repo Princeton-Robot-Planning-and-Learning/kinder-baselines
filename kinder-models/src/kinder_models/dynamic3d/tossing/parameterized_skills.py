@@ -27,6 +27,7 @@ from pybullet_helpers.inverse_kinematics import (
     inverse_kinematics,
 )
 from pybullet_helpers.motion_planning import (
+    check_collisions_with_held_object,
     remap_joint_position_plan_to_constant_distance,
     run_motion_planning,
 )
@@ -816,6 +817,10 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
 
     TARGET_DISTANCE = 0.55
     TARGET_ROTATION = 0.0
+    # A geometrically non-intersecting path is insufficient under physical tracking
+    # error: the wrist can hit a nearby bin while closing. Reserve 1 cm from
+    # non-target obstacles; the target cube must remain touchable for grasping.
+    GRASP_OBSTACLE_CLEARANCE = 0.01
     # Replan when the cube moves by a tenth of its width during the approach.
     GRASP_REPLAN_DISTANCE = 0.005
     # Floor pickup requires separated collision geometry; 1e-6 m is effectively zero
@@ -1028,6 +1033,24 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             target_around_cube_end_effector_pose,
             set_joints=False,
         )
+        sim = self._pybullet_sim
+        non_target_obstacles = sim.get_collision_bodies(
+            held_object=sim._cubes[
+                cube_to_pick_up.name
+            ]  # pylint: disable=protected-access
+        )
+
+        def has_grasp_clearance(joints: JointPositions) -> bool:
+            return not check_collisions_with_held_object(
+                sim.robot,
+                non_target_obstacles,
+                sim.physics_client_id,
+                held_object=None,
+                base_link_to_held_obj=None,
+                joint_state=joints,
+                distance_threshold=self.GRASP_OBSTACLE_CLEARANCE,
+            )
+
         around_plan = run_motion_planning(
             self._pybullet_sim.robot,
             # Where the hover plan actually ENDS, not the inverse-kinematics solution it
@@ -1041,6 +1064,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             target_around_joints,
             # The cube is still a collision body here.
             collision_bodies=self._pybullet_sim.get_collision_bodies(),
+            additional_state_constraint_fn=has_grasp_clearance,
             seed=0,
             physics_client_id=self._pybullet_sim.physics_client_id,
         )

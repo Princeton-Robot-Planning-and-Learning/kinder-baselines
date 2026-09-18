@@ -1,7 +1,9 @@
 """End-to-end robustness tests for Tossing3D's physical PickCube controller."""
 
 import itertools
+import json
 import os
+from pathlib import Path
 
 # Force the workstation's headless GPU backend before importing/registering Kinder;
 # registration otherwise selects OSMesa and contaminates other Dynamic3D tests collected
@@ -208,6 +210,37 @@ _OBSERVED_FAILURES = (
         (2.1794789, 0.0380994, -0.0001078),
     ),
 )
+
+
+@pytest.mark.parametrize("bin_offset,feasible", [(0.0, False), (-0.15, True)])
+def test_pick_cube_recorded_bin_adjacent_missed_grasp(
+    bin_offset, feasible, monkeypatch
+):
+    """Reject the wrist/bin collision; pick successfully when there is clearance."""
+    recorded = json.loads(
+        Path(__file__).with_name("missed_grasp_state.json").read_text()
+    )
+    env = _make_env()
+    try:
+        obs, _ = env.reset(seed=125)
+        state = env.observation_space.devectorize(obs)
+        for name, values in recorded.items():
+            obj = state.get_object_from_name(name)
+            _set_values(state, obj, state.type_features[obj.type], values)
+        bin_obj = state.get_object_from_name("bin_0")
+        state.set(bin_obj, "x", state.get(bin_obj, "x") + bin_offset)
+        if feasible:
+            _run_pick(env, state)
+        else:
+
+            def unexpected_step(_action):
+                pytest.fail("Unsafe bin-adjacent grasp must be rejected before motion")
+
+            monkeypatch.setattr(env, "step", unexpected_step)
+            with pytest.raises(ValueError, match="No collision-free cube grasp"):
+                _run_pick(env, state)
+    finally:
+        env.close()
 
 
 def _make_env():
