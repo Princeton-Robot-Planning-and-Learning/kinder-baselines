@@ -1481,6 +1481,11 @@ class MoveToTossLocationAndTossController(
 
     # Leave room for the physical chassis on the launch side of the fixed barrier.
     LAUNCH_CLEARANCE_BOUNDS = (0.025, 0.055)
+    # Candidate release positions, not a guarantee of ballistic success. KINDER
+    # #191 moved receivers to x in [2.6, 3.42]. With the barrier at x=1.3 and
+    # a 0.55 m robot footprint, the farthest receiver needs >2.425 m standoff
+    # just to keep the base on the near side. Retain short same-side throws too.
+    TARGET_DISTANCE_BOUNDS = (1.25, 2.6)
 
     # Coupled speed/release candidates for the farther simulated receiver. Faster
     # swings need earlier release; sampling these independently wastes refinements.
