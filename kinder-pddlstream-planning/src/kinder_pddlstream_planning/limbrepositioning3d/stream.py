@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Iterator
 
 import numpy as np
+import pybullet as p
 from kinder.envs.dynamic3d.limb_utils import NUM_LIMB_JOINTS, NUM_ROBOT_JOINTS
 from kinder.envs.dynamic3d.limbrepositioning3d import (
     ObjectCentricLimbRepositioning3DEnv,
@@ -68,6 +69,12 @@ MAX_DEFERRED_BASE_POSES = 20
 GRASP_ROLLS: tuple[float, ...] = (0.0, np.pi)
 # MPC runs per (state, goal) before plan-limb-motion gives up on it.
 MAX_LIMB_MOTION_ATTEMPTS = 3
+# Limb path durations, in MPC control steps.
+LIMB_PATH_STEPS = (40, 160)
+# Standard deviation, in radians, of each random bump added to a limb path.
+LIMB_PATH_BUMP_SCALE = 0.15
+# Candidate paths drawn per sample-limb-path call before it reports a failure.
+MAX_LIMB_PATH_TRIES = 50
 
 
 @dataclass(eq=False)
@@ -106,6 +113,16 @@ class ArmTrajectory:
 
     def __repr__(self) -> str:
         return f"at{id(self) % 10000}(waypoints={len(self.joint_plan)})"
+
+
+@dataclass(eq=False)
+class LimbPath:
+    """A timed limb joint path, one waypoint per MPC control step, start and goal included."""
+
+    waypoints: np.ndarray
+
+    def __repr__(self) -> str:
+        return f"xi{id(self) % 10000}(steps={len(self.waypoints) - 1})"
 
 
 @dataclass(eq=False)
@@ -184,6 +201,11 @@ class LimbStreamContext:
     mpc: MPCConfig = field(default_factory=MPCConfig)
     check_base_collisions: bool = True
     check_robot_collisions: bool = True
+    check_base_furniture_collisions: bool = True
+    # Sample a limb path first, and pull MPC along it.
+    object_first: bool = False
+    # Fixes the first limb path's duration, in control steps; later ones range around it.
+    limb_path_steps: int | None = None
     filter_saturated_bases: bool = True
     human_torque_limit: float | None = None
     robot_induced_torque_limit: float = DEFAULT_ROBOT_INDUCED_TORQUE_LIMIT
@@ -284,6 +306,8 @@ class LimbStreamContext:
 
         Kept separate from `check_robot_collisions`, which governs the arm.
         """
+        if not self.check_base_furniture_collisions:
+            return self.human_collision_ids
         return self.human_collision_ids + self.scene_collision_ids
 
     @staticmethod
@@ -504,7 +528,12 @@ def plan_base_motion(
                 sim.robot,
                 q1,
                 q2,
-                collision_bodies=ctx.obstacle_ids or ctx.scene_collision_ids,
+                collision_bodies=[
+                    body_id
+                    for body_id in ctx.obstacle_ids or ctx.scene_collision_ids
+                    if ctx.check_base_furniture_collisions
+                    or body_id not in ctx.scene_collision_ids
+                ],
                 seed=ctx.motion_seed,
             )
     if base_plan is None:
@@ -519,6 +548,107 @@ def _charge_rollout(ctx: LimbStreamContext, outcome: str, start: float) -> None:
         time.time() - start,
         produced=outcome == "reached the goal",
     )
+
+
+def _limb_path_violation(ctx: LimbStreamContext, waypoints: np.ndarray) -> str | None:
+    """Why the person could not follow `waypoints`, judged on the limb alone, or None."""
+    sim = ctx.sim
+    dt = ctx.mpc.action_repeat * sim.config.dt
+    velocities = np.gradient(waypoints, dt, axis=0)
+    accelerations = np.gradient(velocities, dt, axis=0)
+    rest = [0.0] * waypoints.shape[1]
+    total_limit, robot_limit = ctx.human_torque_limits
+    with saved_sim_state(sim):
+        for q, qd, qdd in zip(waypoints, velocities, accelerations):
+            if not ctx.in_believed_limits(list(q)):
+                return "the path leaves the range of motion"
+            total, gravity = (
+                np.asarray(
+                    p.calculateInverseDynamics(
+                        sim.limb.robot_id,
+                        list(q),
+                        list(v),
+                        list(a),
+                        physicsClientId=sim.physics_client_id,
+                    )
+                )
+                for v, a in ((qd, qdd), (rest, rest))
+            )
+            if (
+                np.abs(total).max() > total_limit
+                or np.abs(total - gravity).max() > robot_limit
+            ):
+                return "the path overloads a joint of the person"
+            if ctx.resting_penetration:
+                sim.limb.set_joints(list(q), joint_velocities=rest)
+                if human_in_collision(ctx):
+                    return "the path drives the limb into the person or the furniture"
+    return None
+
+
+def sample_limb_path(
+    ctx: LimbStreamContext, limb: str, init_conf: LimbConf, goal_conf: LimbConf
+) -> Iterator[tuple[LimbPath] | None]:
+    """Yield timed limb paths from init to goal that pass the human checks on their own.
+
+    The first candidate is a straight line at a middling pace; later ones add random
+    bumps and durations. Every path starts and ends at rest.
+    """
+    del limb  # there is a single limb per environment
+    rng = ctx.spawn_rng()
+    start = np.asarray(init_conf.positions, dtype=np.float64)
+    goal = np.asarray(goal_conf.positions, dtype=np.float64)
+    moving = np.abs(goal - start) > 1e-6
+    low, high = LIMB_PATH_STEPS
+    if ctx.limb_path_steps is not None:
+        low, high = ctx.limb_path_steps // 2, 2 * ctx.limb_path_steps
+    tries = 0
+    while True:
+        rejected: Counter = Counter()
+        for _ in range(MAX_LIMB_PATH_TRIES):
+            straight = tries == 0
+            tries += 1
+            middle = ctx.limb_path_steps or (low + high) // 2
+            steps = middle if straight else int(rng.integers(low, high + 1))
+            s = np.linspace(0.0, 1.0, steps + 1)[:, None]
+            envelope = np.sin(np.pi * s) ** 2
+            bumps = np.zeros((2, len(start)))
+            if not straight:
+                bumps = (
+                    rng.normal(scale=LIMB_PATH_BUMP_SCALE, size=bumps.shape) * moving
+                )
+            waypoints = (
+                start
+                + s * s * (3.0 - 2.0 * s) * (goal - start)
+                + envelope * (bumps[0] + np.cos(np.pi * s) * bumps[1])
+            )
+            reason = _limb_path_violation(ctx, waypoints)
+            if reason is None:
+                ctx.log.note(steps=steps, rejected_paths=dict(rejected))
+                yield (LimbPath(waypoints),)
+                break
+            rejected[reason] += 1
+        else:
+            ctx.log.note(
+                failure="no limb path passed the human checks",
+                rejected_paths=dict(rejected),
+            )
+            yield None
+
+
+def plan_limb_motion_along(
+    ctx: LimbStreamContext,
+    limb: str,
+    s1: CoupledState,
+    path: LimbPath,
+    q1: LimbConf,
+    q2: LimbConf,
+) -> Iterator[tuple[TorqueTrajectory, CoupledState] | None]:
+    """`plan_limb_motion`, with MPC pulled along `path` rather than straight at `q2`."""
+    del limb, q1  # tie the path to this state and goal in the PDDL only
+    for attempt in range(MAX_LIMB_MOTION_ATTEMPTS):
+        ctx.log.note(attempt=attempt)
+        yield _limb_motion_attempt(ctx, s1, q2, path)
 
 
 def plan_limb_motion(
@@ -563,7 +693,10 @@ def _trajectory_margins(
 
 
 def _limb_motion_attempt(
-    ctx: LimbStreamContext, s1: CoupledState, q2: LimbConf
+    ctx: LimbStreamContext,
+    s1: CoupledState,
+    q2: LimbConf,
+    path: LimbPath | None = None,
 ) -> tuple[TorqueTrajectory, CoupledState] | None:
     """Run predictive-sampling MPC closed-loop, recording the torques it applies.
 
@@ -572,7 +705,7 @@ def _limb_motion_attempt(
     sim = ctx.sim
     call_start = time.time()
     goal = np.asarray(q2.positions, dtype=np.float64)
-    mpc = PredictiveSamplingMPC(ctx, goal, s1)
+    mpc = PredictiveSamplingMPC(ctx, goal, s1, path)
 
     cfg = ctx.mpc
     threshold = max(ctx.goal_atol - cfg.replay_slack, ctx.goal_atol / 2)
@@ -632,7 +765,7 @@ def _limb_motion_attempt(
                 reached = False
                 giveup = "drove the limb into the person or the furniture"
                 break
-            if best_error - error > cfg.divergence_tolerance:
+            if best_error - error > cfg.divergence_tolerance or mpc.progressed:
                 steps_since_improvement = 0
             else:
                 steps_since_improvement += 1
@@ -799,12 +932,18 @@ class PredictiveSamplingMPC:
         ctx: LimbStreamContext,
         goal: np.ndarray,
         start: CoupledState | None = None,
+        path: LimbPath | None = None,
     ) -> None:
         self._ctx = ctx
         self._sim = ctx.sim
         self._cfg = ctx.mpc
         self._obstacles = ctx.obstacle_ids
+        self._final_goal = goal
+        # With a path, `_goal` is a subgoal on it one horizon ahead of the limb.
         self._goal = goal
+        self._path = None if path is None else path.waypoints
+        self._progress = 0
+        self.progressed = False
         self._rng = ctx.spawn_rng()
         self._lower, self._upper = ctx.robot_torque_limits
         self._nominal = np.zeros((self._cfg.num_control_points, NUM_ROBOT_JOINTS))
@@ -820,7 +959,11 @@ class PredictiveSamplingMPC:
 
     def step(self) -> list[JointTorques]:
         """Choose the torque to apply in the simulator's current state."""
-        error = limb_error(self._ctx, self._sim.limb.get_joint_positions(), self._goal)
+        if self._path is not None:
+            self._follow_path()
+        error = limb_error(
+            self._ctx, self._sim.limb.get_joint_positions(), self._final_goal
+        )
         with self._ctx.profile.timed("mpc_state_capture"):
             start = capture_state(self._sim)
         candidates = self._sample_candidates(error, start)
@@ -830,6 +973,18 @@ class PredictiveSamplingMPC:
         self._nominal = best
         self._step_index += self._commit
         return [list(torque) for torque in self._expand(best)[: self._commit]]
+
+    def _follow_path(self) -> None:
+        """Aim one horizon past the closest waypoint ahead, never moving back."""
+        assert self._path is not None
+        positions = list(self._sim.limb.get_joint_positions())
+        window = self._path[self._progress : self._progress + 2 * self._cfg.horizon]
+        nearest = self._progress + int(
+            np.argmin([limb_error(self._ctx, positions, w) for w in window])
+        )
+        self.progressed = nearest > self._progress
+        self._progress = nearest
+        self._goal = self._path[min(nearest + self._cfg.horizon, len(self._path) - 1)]
 
     def _expand(self, control_points: np.ndarray) -> np.ndarray:
         """Linearly interpolate control points into one torque per control step."""
@@ -916,7 +1071,11 @@ class PredictiveSamplingMPC:
             velocities = self._sim.limb.get_joint_velocities()
             squared_distance = limb_error(self._ctx, positions, self._goal) ** 2
             goal_cost += squared_distance
-            velocity_cost += self._velocity_penalty(velocities, squared_distance)
+            # Damp only near the real goal; a subgoal is always close.
+            near = squared_distance
+            if self._path is not None:
+                near = limb_error(self._ctx, positions, self._final_goal) ** 2
+            velocity_cost += self._velocity_penalty(velocities, near)
             regularization_cost += float(np.sum(np.square(velocities)))
             if not self._ctx.in_believed_limits(positions):
                 limit_cost += cfg.joint_limit_violation_weight

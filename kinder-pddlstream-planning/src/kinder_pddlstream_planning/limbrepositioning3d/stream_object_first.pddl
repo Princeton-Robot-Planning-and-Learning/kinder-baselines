@@ -1,0 +1,78 @@
+(define (stream limbrepositioning3d)
+  ; Object first: a limb path is sampled before MPC, which follows it.
+  ; Endless: the default slide both ways up, then random slides.
+  (:stream sample-grasp
+    :inputs (?l)
+    :domain (Limb ?l)
+    :outputs (?g)
+    :certified (Grasp ?l ?g)
+  )
+
+  ; Both limb configurations are inputs: the arm must hold the grasp throughout.
+  (:stream sample-base-pose
+    :inputs (?l ?g ?qL1 ?qL2)
+    :domain (and (Grasp ?l ?g) (InitConf ?l ?qL1) (GoalConf ?l ?qL2))
+    :outputs (?q)
+    :certified (and (BConf ?q)
+                    (Reachable ?l ?g ?q ?qL1)
+                    (Reachable ?l ?g ?q ?qL2))
+  )
+
+  (:stream plan-grasp-motion
+    :inputs (?l ?g ?q ?qL)
+    :domain (and (Reachable ?l ?g ?q ?qL) (InitConf ?l ?qL))
+    :outputs (?at ?s)
+    :certified (and (State ?s)
+                    (StateConf ?s ?qL)
+                    (GraspKin ?l ?g ?q ?at ?s))
+  )
+
+  (:stream plan-base-motion
+    :inputs (?q1 ?q2)
+    :domain (and (BConf ?q1) (BConf ?q2))
+    :outputs (?bt)
+    :certified (BaseMotion ?q1 ?bt ?q2)
+  )
+
+  ; Endless timed limb paths that pass the range-of-motion and human torque checks alone.
+  (:stream sample-limb-path
+    :inputs (?l ?qL1 ?qL2)
+    :domain (and (InitConf ?l ?qL1) (GoalConf ?l ?qL2))
+    :outputs (?xi)
+    :certified (LimbPath ?l ?xi ?qL1 ?qL2)
+  )
+
+  ; Runs predictive-sampling MPC pulled along ?xi, with fresh noise on each retry.
+  (:stream plan-limb-motion
+    :inputs (?l ?s1 ?xi ?qL1 ?qL2)
+    :domain (and (State ?s1) (StateConf ?s1 ?qL1) (LimbPath ?l ?xi ?qL1 ?qL2))
+    :outputs (?tt ?s2)
+    :certified (and (State ?s2)
+                    (StateConf ?s2 ?qL2)
+                    (LimbMotion ?s1 ?qL2 ?tt ?s2))
+  )
+
+  ; Checks the person's range of motion at every configuration ?tt passes through.
+  (:stream check-human-joint-limits
+    :inputs (?s1 ?qL2 ?tt ?s2)
+    :domain (LimbMotion ?s1 ?qL2 ?tt ?s2)
+    :outputs ()
+    :certified (SafeHumanJoints ?tt)
+  )
+
+  ; Checks the torque ?tt puts on the person's own joints, measured by inverse dynamics.
+  (:stream check-human-torque-limits
+    :inputs (?s1 ?qL2 ?tt ?s2)
+    :domain (LimbMotion ?s1 ?qL2 ?tt ?s2)
+    :outputs ()
+    :certified (SafeHumanTorques ?tt)
+  )
+
+  ; Checks whether the limb manipulation trajectory satisfies the robot's torque limits.
+  (:stream check-robot-torque-limits
+    :inputs (?s1 ?qL2 ?tt ?s2)
+    :domain (LimbMotion ?s1 ?qL2 ?tt ?s2)
+    :outputs ()
+    :certified (SafeRobotTorques ?tt)
+  )
+)

@@ -38,6 +38,7 @@ from kinder_pddlstream_planning.limbrepositioning3d.stream import (
     ArmTrajectory,
     LimbConf,
     LimbGrasp,
+    LimbPath,
     LimbStreamContext,
     MPCConfig,
     TorqueTrajectory,
@@ -47,8 +48,10 @@ from kinder_pddlstream_planning.limbrepositioning3d.stream import (
     plan_base_motion,
     plan_grasp_motion,
     plan_limb_motion,
+    plan_limb_motion_along,
     sample_base_pose,
     sample_grasp,
+    sample_limb_path,
 )
 from kinder_pddlstream_planning.limbrepositioning3d.utils import (
     DEFAULT_GRAVITY,
@@ -74,6 +77,7 @@ from kinder_pddlstream_planning.rendering import (
 _HERE = Path(__file__).parent
 DOMAIN_PDDL = read(str(_HERE / "domain.pddl"))
 STREAM_PDDL = read(str(_HERE / "stream.pddl"))
+OBJECT_FIRST_STREAM_PDDL = read(str(_HERE / "stream_object_first.pddl"))
 
 # How far behind its grasp placement the base starts, in meters.
 DEFAULT_START_STANDOFF = 1.0
@@ -199,6 +203,9 @@ def build_stream_context(
     mpc: MPCConfig | None = None,
     check_base_collisions: bool = True,
     check_robot_collisions: bool = True,
+    check_base_furniture_collisions: bool = True,
+    object_first: bool = False,
+    limb_path_steps: int | None = None,
     filter_saturated_bases: bool = True,
     human_torque_limit: float | None = None,
     robot_induced_torque_limit: float = DEFAULT_ROBOT_INDUCED_TORQUE_LIMIT,
@@ -218,6 +225,9 @@ def build_stream_context(
         mpc=mpc or MPCConfig(),
         check_base_collisions=check_base_collisions,
         check_robot_collisions=check_robot_collisions,
+        check_base_furniture_collisions=check_base_furniture_collisions,
+        object_first=object_first,
+        limb_path_steps=limb_path_steps,
         filter_saturated_bases=filter_saturated_bases,
         human_torque_limit=human_torque_limit,
         robot_induced_torque_limit=robot_induced_torque_limit,
@@ -278,6 +288,8 @@ def _describe(obj: Any) -> Any:
         }
     if isinstance(obj, ArmTrajectory):
         return {"type": "arm_trajectory", "waypoints": len(obj.joint_plan)}
+    if isinstance(obj, LimbPath):
+        return {"type": "limb_path", "steps": len(obj.waypoints) - 1}
     if isinstance(obj, TorqueTrajectory):
         return {"type": "torque_trajectory", "steps": len(obj.robot_torques)}
     if isinstance(obj, list):
@@ -338,6 +350,9 @@ def create_problem(ctx: LimbStreamContext) -> PDDLProblem:
         "plan-base-motion": plan_base_motion,
         "plan-limb-motion": plan_limb_motion,
     }
+    if ctx.object_first:
+        gen_fns["sample-limb-path"] = sample_limb_path
+        gen_fns["plan-limb-motion"] = plan_limb_motion_along
     tests: dict[str, Callable[..., Any]] = {
         "check-human-joint-limits": check_human_joint_limits,
         "check-human-torque-limits": check_human_torque_limits,
@@ -351,7 +366,8 @@ def create_problem(ctx: LimbStreamContext) -> PDDLProblem:
         for name, fn in tests.items()
     }
 
-    return PDDLProblem(DOMAIN_PDDL, {}, STREAM_PDDL, stream_map, init, goal)
+    stream_pddl = OBJECT_FIRST_STREAM_PDDL if ctx.object_first else STREAM_PDDL
+    return PDDLProblem(DOMAIN_PDDL, {}, stream_pddl, stream_map, init, goal)
 
 
 def plan_limbrepositioning3d(
@@ -498,6 +514,9 @@ def solve_and_execute(
     mpc: MPCConfig | None = None,
     check_base_collisions: bool = True,
     check_robot_collisions: bool = True,
+    check_base_furniture_collisions: bool = True,
+    object_first: bool = False,
+    limb_path_steps: int | None = None,
     filter_saturated_bases: bool = True,
     human_torque_limit: float | None = None,
     gravity: tuple[float, float, float] = DEFAULT_GRAVITY,
@@ -540,6 +559,9 @@ def solve_and_execute(
             mpc=mpc,
             check_base_collisions=check_base_collisions,
             check_robot_collisions=check_robot_collisions,
+            check_base_furniture_collisions=check_base_furniture_collisions,
+            object_first=object_first,
+            limb_path_steps=limb_path_steps,
             filter_saturated_bases=filter_saturated_bases,
             human_torque_limit=human_torque_limit,
         )
@@ -723,6 +745,24 @@ def main() -> None:
         help=("Check collision between robot arm and furniture/human"),
     )
     parser.add_argument(
+        "--check-base-furniture-collisions",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Check collision between robot base and furniture, in parking and driving.",
+    )
+    parser.add_argument(
+        "--object-first",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Sample a limb path before the grasp and base, and pull MPC along it.",
+    )
+    parser.add_argument(
+        "--limb-path-steps",
+        type=int,
+        default=None,
+        help="Duration of the first limb path, in MPC control steps (object first only).",
+    )
+    parser.add_argument(
         "--filter-saturated-bases",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -816,6 +856,9 @@ def main() -> None:
         "use_gui": args.use_gui,
         "check_base_collisions": args.check_base_collisions,
         "check_robot_collisions": args.check_robot_collisions,
+        "check_base_furniture_collisions": args.check_base_furniture_collisions,
+        "object_first": args.object_first,
+        "limb_path_steps": args.limb_path_steps,
         "filter_saturated_bases": args.filter_saturated_bases,
         "human_torque_limit": args.human_torque_limit,
         "gravity": (0.0, 0.0, args.gravity),
