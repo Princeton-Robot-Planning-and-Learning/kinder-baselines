@@ -6,18 +6,17 @@ from kinder_models.dynamic3d.tossing.coverage import run_trial
 
 
 @pytest.mark.parametrize("extended", [False, True])
-@pytest.mark.parametrize(
-    "seed, speed", [(10125, 360.0), (10126, 380.0), (10127, 358.0)]
-)
-def test_far_receiver_requires_extended_effort(
-    extended: bool, seed: int, speed: float
-) -> None:
+@pytest.mark.parametrize("seed", [10125, 10126, 10127])
+def test_far_receiver_requires_extended_effort(extended: bool, seed: int) -> None:
     """Calibrated cases establish reachability, not an unbiased success rate."""
     row = run_trial(
         seed=seed,
         distance=2.5,
-        speed=speed,
-        release_ms=500.0,
+        # This common recipe was calibrated on separate development scenes after
+        # fixing the observed windup handoff; the former nominal-start tuples
+        # cannot be assumed to retain their calibration under that controller.
+        speed=390.0,
+        release_ms=460.0,
         max_effort=3.0 if extended else 1.0,
     )
     assert row["pickup_holding"], row
