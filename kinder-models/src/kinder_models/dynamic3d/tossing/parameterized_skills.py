@@ -26,6 +26,7 @@ from pybullet_helpers.inverse_kinematics import (
     JointPositions,
     inverse_kinematics,
 )
+from pybullet_helpers.link import get_link_state
 from pybullet_helpers.motion_planning import (
     check_collisions_with_held_object,
     remap_joint_position_plan_to_constant_distance,
@@ -1480,6 +1481,7 @@ class MoveToTossLocationAndTossController(
     MAX_SIMULATION_EFFORT = 3.0
     SPEED_BOUNDS = (np.deg2rad(115.0), TOSS_MAX_VELOCITY * MAX_SIMULATION_EFFORT)
     RELEASE_MS_BOUNDS = (400.0, 840.0)
+    WINDUP_POSITION_TOLERANCE = 0.01
 
     def __init__(
         self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
@@ -1502,7 +1504,10 @@ class MoveToTossLocationAndTossController(
         self._windup_trajectory: np.ndarray = np.array([])
         self._windup_dir: np.ndarray = np.zeros(7)
         self._windup_start_joint_angles: np.ndarray = np.zeros(7)
+        self._windup_target_joint_angles: np.ndarray = np.zeros(7)
         self._windup_step_idx: int = 0
+        self._previous_windup_arm_conf: np.ndarray | None = None
+        self._release_arm_configuration: JointPositions | None = None
 
         # Swing: the throw itself, planned once the windup ends.
         self._swing: TossSwing | None = None
@@ -1544,6 +1549,8 @@ class MoveToTossLocationAndTossController(
         self._gripper_release_ms = int(round(float(current_params[3])))
         self._phase = self.MoveToTossLocationAndTossControllerPhase.BASE_MOTION
         self._windup_step_idx = 0
+        self._previous_windup_arm_conf = None
+        self._release_arm_configuration = None
         self._swing = None
         self._swing_step_idx = 0
         self._has_released = False
@@ -1607,17 +1614,25 @@ class MoveToTossLocationAndTossController(
         arrival, surfaces a planning failure from reset instead of from mid-throw.
         """
         assert self._pybullet_sim is not None
+        sim = self._pybullet_sim
+        held_cube, held_object = self._configure_held_cube(x)
+        collision_bodies = sim.get_collision_bodies(held_object=held_object)
         plan_x = x.copy()
         robot = self.objects[0]
         plan_x.set(robot, "pos_base_x", final_base_pose.x)
         plan_x.set(robot, "pos_base_y", final_base_pose.y)
         plan_x.set(robot, "pos_base_rot", final_base_pose.theta())
-        self._pybullet_sim.set_state(plan_x)
+        sim.set_state(plan_x, held_object=held_cube)
         windup_plan = run_motion_planning(
             self._pybullet_sim.robot,
             self._pybullet_sim.get_robot_joints(),
             list(TOSS_WINDUP_ARM_CONFIGURATION) + [0.0] * 6,
-            collision_bodies=self._pybullet_sim.get_collision_bodies(),
+            collision_bodies=collision_bodies,
+            held_object=held_object,
+            base_link_to_held_obj=sim.base_link_to_held_obj,
+            # The time-parameterized controller follows the straight joint-space
+            # path, so an RRT detour would not describe the executed trajectory.
+            direct_path_only=True,
             seed=0,
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
@@ -1633,15 +1648,19 @@ class MoveToTossLocationAndTossController(
             _ARM_MAX_ACCELERATION,
         )
         self._windup_start_joint_angles = windup_start
+        self._windup_target_joint_angles = np.asarray(windup_plan[-1][:7])
 
         for joint, angle in enumerate(windup_plan[-1][:7], start=1):
             plan_x.set(robot, f"pos_arm_joint{joint}", angle)
-        self._pybullet_sim.set_state(plan_x)
+        sim.set_state(plan_x, held_object=held_cube)
         swing_plan = run_motion_planning(
             self._pybullet_sim.robot,
             self._pybullet_sim.get_robot_joints(),
             list(TOSS_RELEASE_ARM_CONFIGURATION) + [0.0] * 6,
-            collision_bodies=self._pybullet_sim.get_collision_bodies(),
+            collision_bodies=collision_bodies,
+            held_object=held_object,
+            base_link_to_held_obj=sim.base_link_to_held_obj,
+            direct_path_only=True,
             seed=0,
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
@@ -1649,6 +1668,9 @@ class MoveToTossLocationAndTossController(
             logger.debug("MoveToTossLocationAndToss: swing motion planning FAILED")
             raise TrajectorySamplingFailure("Motion planning failed")
         logger.debug("MoveToTossLocationAndToss: swing motion planning ok")
+        self._release_arm_configuration = list(swing_plan[-1])
+        # This reset-time check rejects impossible parameters before moving. The
+        # actual timed swing is rebuilt from the observed, settled windup pose.
         self._swing = plan_toss_swing(
             swing_plan,
             windup_plan[-1],
@@ -1656,6 +1678,62 @@ class MoveToTossLocationAndTossController(
             self._gripper_release_ms,
             max_effort=self.MAX_SIMULATION_EFFORT,
         )
+
+    def _configure_held_cube(self, x: ObjectCentricState) -> tuple[Object, int]:
+        """Set the observed grasp transform used by attached-object planning."""
+        assert self._pybullet_sim is not None
+        sim = self._pybullet_sim
+        # Preserve the observed grasp when moving the base in the planning world.
+        # Leaving the cube at its old world pose turns our own cargo into a static
+        # obstacle; simply dropping it from collision_bodies loses cargo/scene
+        # collisions. The attachment helper uses the end-effector COM frame, not
+        # its link frame, so derive the transform in that same frame.
+        held_cube = self.objects[1]
+        sim.set_state(x)
+        held_object = sim._cubes[held_cube.name]  # pylint: disable=protected-access
+        cube_pose = Pose(
+            tuple(x.get(held_cube, axis) for axis in ("x", "y", "z")),
+            tuple(x.get(held_cube, axis) for axis in ("qx", "qy", "qz", "qw")),
+        )
+        end_effector_pose = get_link_state(
+            sim.robot.robot_id,
+            sim.robot.end_effector_id,
+            sim.physics_client_id,
+        ).com_pose
+        sim.base_link_to_held_obj = multiply_poses(
+            end_effector_pose.invert(), cube_pose
+        )
+        return held_cube, held_object
+
+    def _start_observed_swing(self) -> None:
+        """Recheck and time the throw from the observed settled arm and grasp."""
+        assert self._last_state is not None and self._pybullet_sim is not None
+        assert self._release_arm_configuration is not None
+        sim = self._pybullet_sim
+        _, held_object = self._configure_held_cube(self._last_state)
+        current = self._get_current_robot_arm_conf()
+        swing_plan = run_motion_planning(
+            sim.robot,
+            current,
+            self._release_arm_configuration,
+            collision_bodies=sim.get_collision_bodies(held_object=held_object),
+            held_object=held_object,
+            base_link_to_held_obj=sim.base_link_to_held_obj,
+            direct_path_only=True,
+            seed=0,
+            physics_client_id=self._pybullet_sim.physics_client_id,
+        )
+        if swing_plan is None:
+            raise TrajectorySamplingFailure("Observed swing motion planning failed")
+        self._swing = plan_toss_swing(
+            swing_plan,
+            current,
+            self._release_speed,
+            self._gripper_release_ms,
+            max_effort=self.MAX_SIMULATION_EFFORT,
+        )
+        self._swing_step_idx = 0
+        self._phase = self.MoveToTossLocationAndTossControllerPhase.SWING
 
     def terminated(self) -> bool:
         if self._phase is not self.MoveToTossLocationAndTossControllerPhase.RETURN_HOME:
@@ -1678,6 +1756,10 @@ class MoveToTossLocationAndTossController(
         return self._action_return_home()
 
     def observe(self, x: ObjectCentricState) -> None:
+        if self._phase is self.MoveToTossLocationAndTossControllerPhase.WINDUP:
+            self._previous_windup_arm_conf = np.array(
+                self._get_current_robot_arm_conf()[:7]
+            )
         self._last_state = x
 
     def _action_base_motion(self) -> Array:
@@ -1702,7 +1784,7 @@ class MoveToTossLocationAndTossController(
         action = np.zeros(VELOCITY_ACTION_DIM, dtype=np.float32)
         idx = min(self._windup_step_idx, len(self._windup_trajectory) - 1)
         s = float(self._windup_trajectory[idx])
-        if idx > 0:
+        if 0 < self._windup_step_idx < len(self._windup_trajectory):
             ds = (
                 self._windup_trajectory[idx] - self._windup_trajectory[idx - 1]
             ) / _CONTROL_TIMESTEP
@@ -1711,13 +1793,38 @@ class MoveToTossLocationAndTossController(
         kp = 2.0
         kv = 2.0
         curr = np.array(self._get_current_robot_arm_conf()[:7])
-        target = self._windup_start_joint_angles + self._windup_dir * s
-        action[3:10] = kp * (target - curr)
+        profile_complete = self._windup_step_idx >= len(self._windup_trajectory)
+        target = (
+            self._windup_target_joint_angles
+            if profile_complete
+            else self._windup_start_joint_angles + self._windup_dir * s
+        )
+        error = wrap_arm_joint_difference(target - curr)
+        previous = self._previous_windup_arm_conf
+        settled = (
+            previous is not None
+            and np.max(np.abs(wrap_arm_joint_difference(curr - previous)))
+            < ARM_SETTLE_TOLERANCE
+        )
+        if (
+            profile_complete
+            and np.max(np.abs(error)) < self.WINDUP_POSITION_TOLERANCE
+            and settled
+        ):
+            self._start_observed_swing()
+            return self._action_swing()
+        if profile_complete:
+            # A position-only endpoint hold must not double the observed error:
+            # kp=2 alternates across the target and can prevent settling forever.
+            hold = np.zeros(11, dtype=np.float32)
+            hold[3:10] = error
+            hold[10] = self._get_current_robot_gripper_pose()
+            self._windup_step_idx += 1
+            return hold
+        action[3:10] = kp * error
         action[11:18] = self._windup_dir * (ds * kv)
         action[10] = self._get_current_robot_gripper_pose()
         self._windup_step_idx += 1
-        if self._windup_step_idx >= len(self._windup_trajectory):
-            self._phase = self.MoveToTossLocationAndTossControllerPhase.SWING
         return action
 
     def _action_swing(self) -> Array:
