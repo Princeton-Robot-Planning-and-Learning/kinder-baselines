@@ -1,8 +1,9 @@
 """Base controllers for 3D geometric environments."""
 
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import numpy as np
+import pybullet as p
 from bilevel_planning.structs import (
     GroundParameterizedController,
 )
@@ -36,10 +37,67 @@ GRIPPER_OPEN_THRESHOLD = 0.01
 HOME_JOINT_POSITIONS = np.deg2rad([0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0])
 
 
+def make_linf_arm_distance_fn(arm) -> Callable[[JointPositions, JointPositions], float]:
+    """L-infinity joint distance, matching how the env actually limits actions.
+
+    `remap_joint_position_plan_to_constant_distance` defaults to a WEIGHTED-L1 metric
+    (sum_i 0.9^i |dq_i|), but the environment clips each joint independently at |dq_i|
+    <= max_action_mag. Whenever several joints move together the L1 budget is far
+    tighter than the env's real limit, so the remapped plan takes several times more
+    steps than necessary (measured: mean commanded max|dq| 0.0504 against an allowance
+    of 0.20).
+    """
+    all_joint_infos = arm.get_arm_joint_infos()
+
+    def _dist(q1: JointPositions, q2: JointPositions) -> float:
+        # Plans may or may not carry the gripper joints, so match the length of
+        # the configurations actually being compared.
+        n = min(len(q1), len(q2), len(all_joint_infos))
+        diff = get_jointwise_difference(all_joint_infos[:n], list(q2)[:n], list(q1)[:n])
+        return float(max(abs(d) for d in diff))
+
+    return _dist
+
+
 class BasePlaceController(
     GroundParameterizedController[ObjectCentricState, np.ndarray]
 ):
     """Base class for place controllers with common motion planning logic."""
+
+    def _bodies_touching_robot(self) -> set[int]:
+        """Body ids currently in contact with the robot, per the physics client."""
+        touching: set[int] = set()
+        try:
+            # A mobile manipulator is two bodies (arm and base); check both.
+            robot_ids = {
+                self._sim.robot.arm.robot_id,
+                self._sim.robot.base.robot_id,
+            }
+            for rid in robot_ids:
+                for pt in p.getContactPoints(
+                    bodyA=rid, physicsClientId=self._sim.physics_client_id
+                ):
+                    other = pt[2]
+                    if other not in robot_ids:
+                        touching.add(other)
+        except Exception:  # pylint: disable=broad-except
+            return set()
+        return touching
+
+    def _arm_remap_kwargs(self) -> dict:
+        """Remap settings for arm joint plans.
+
+        Defaults reproduce the original weighted-L1 / half-budget behaviour, so
+        controllers that do not opt in (e.g. Shelf3D) are byte-for-byte unchanged. The
+        Transport3D policy sets `_use_linf_arm_remap` to use the env's real per-joint
+        (L-infinity) limit instead.
+        """
+        if getattr(self, "_use_linf_arm_remap", False):
+            return {
+                "max_distance": 0.9 * self._sim.config.max_action_mag,
+                "distance_fn": make_linf_arm_distance_fn(self._sim.robot.arm),
+            }
+        return {"max_distance": self._sim.config.max_action_mag / 2}
 
     def __init__(
         self,
@@ -76,6 +134,7 @@ class BasePlaceController(
         self._pre_place: bool = False
         self._opened_gripper: bool = False
         self._lifted: bool = False
+        self._retract_rescue_used: bool = False
         self._target_place_pose_se2: SE2Pose | None = None
         self._target_place_pose_world: Pose | None = None
         self._pre_place_pose_world: Pose | None = None
@@ -194,7 +253,7 @@ class BasePlaceController(
             joint_plan = remap_joint_position_plan_to_constant_distance(
                 joint_plan1 + joint_plan2,
                 self._sim.robot.arm,
-                max_distance=self._sim.config.max_action_mag / 2,
+                **self._arm_remap_kwargs(),
             )
 
             # Store the plan (excluding the first state which is the current state).
@@ -252,6 +311,35 @@ class BasePlaceController(
                 hyperparameters=mp_hyperparameters,
             )
 
+            if (
+                joint_plan is None
+                and getattr(self, "_retract_rescue", False)
+                and not getattr(self, "_retract_rescue_used", False)
+            ):
+                # Once per controller instance only. The policy's resample loop
+                # can re-ground a `place` dozens of times, and an extra motion
+                # planning call on each of those made episodes run for tens of
+                # minutes without finishing.
+                self._retract_rescue_used = True
+                # After releasing, the gripper is still down inside the box and
+                # its START configuration counts as in-contact with the box (or
+                # the cube just placed), so the planner rejects the start and
+                # returns None -- even though the env accepted every action that
+                # produced this state. The pick retract already subtracts the
+                # held object; a place has nothing grasped, so subtract whatever
+                # is actually touching the robot and try once more.
+                touching = self._bodies_touching_robot()
+                if touching:
+                    joint_plan = run_motion_planning(  # type: ignore
+                        self._sim.robot.arm,
+                        initial_positions=self._sim.robot.arm.get_joint_positions(),
+                        target_positions=HOME_JOINT_POSITIONS.tolist(),
+                        collision_bodies=set(collision_ids) - touching,
+                        seed=0,
+                        physics_client_id=self._sim.physics_client_id,
+                        hyperparameters=mp_hyperparameters,
+                    )
+
             if joint_plan is None:
                 raise TrajectorySamplingFailure("Motion planning failed")
 
@@ -259,7 +347,7 @@ class BasePlaceController(
             joint_plan = remap_joint_position_plan_to_constant_distance(
                 joint_plan,
                 self._sim.robot.arm,
-                max_distance=self._sim.config.max_action_mag / 2,
+                **self._arm_remap_kwargs(),
             )
 
             # Store the plan (excluding the first state which is the current state).

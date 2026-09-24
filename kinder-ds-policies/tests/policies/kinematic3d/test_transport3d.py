@@ -1,14 +1,38 @@
 """Tests for transport3d.py domain-specific policy."""
 
+from types import SimpleNamespace
+
 import kinder
 import numpy as np
 import pytest
 from gymnasium.wrappers import RecordVideo
 
 from kinder_ds_policies.policies import create_domain_specific_policy
+from kinder_ds_policies.policies.kinematic3d.transport3d import (
+    Transport3DScriptedPolicy,
+)
 from tests.conftest import MAKE_VIDEOS
 
 kinder.register_all_environments()
+
+
+@pytest.mark.parametrize(
+    ("name", "controller", "expected"),
+    [
+        ("pick", SimpleNamespace(_closed_gripper=False), True),
+        ("pick", SimpleNamespace(_closed_gripper=True), False),
+        ("place", SimpleNamespace(_opened_gripper=False), True),
+        ("place", SimpleNamespace(_opened_gripper=True), False),
+    ],
+)
+def test_resampling_stops_after_irreversible_progress(name, controller, expected):
+    """A retry must not discard an already completed grasp or release."""
+    assert (
+        Transport3DScriptedPolicy._can_resample(  # pylint: disable=protected-access
+            name, controller
+        )
+        is expected
+    )
 
 
 def test_transport3d_policy_returns_valid_action():
@@ -58,10 +82,9 @@ def test_transport3d_dynamic_loader():
     env.close()
 
 
-@pytest.mark.parametrize("seed", [123])
+@pytest.mark.parametrize("seed", [123, 1826701614])
 def test_transport3d_o1_policy_solves_task(seed):
     """Test that the policy can solve the Transport3D-o1 task."""
-
     env = kinder.make(
         "kinder/Transport3D-o1-v0",
         render_mode="rgb_array",
@@ -100,10 +123,9 @@ def test_transport3d_o1_policy_solves_task(seed):
     env.close()
 
 
-@pytest.mark.parametrize("seed", [124])
+@pytest.mark.parametrize("seed", [124, 1826701614])
 def test_transport3d_o2_policy_solves_task(seed):
     """Test that the policy can solve the Transport3D-o2 task."""
-
     env = kinder.make(
         "kinder/Transport3D-o2-v0",
         render_mode="rgb_array",
