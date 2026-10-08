@@ -30,7 +30,6 @@ from pybullet_helpers.motion_planning import (
 )
 
 from kinder_pddlstream_planning.limbrepositioning3d.utils import (
-    DEFAULT_ROBOT_INDUCED_TORQUE_LIMIT,
     BestAttempt,
     CoupledState,
     JointTorques,
@@ -44,6 +43,7 @@ from kinder_pddlstream_planning.limbrepositioning3d.utils import (
     commanded_robot_torque,
     control_saturation,
     default_human_torque_limit,
+    default_robot_induced_torque_limit,
     exceeds_human_torque_limits,
     exceeds_robot_torque_limits,
     grasp_ik,
@@ -169,7 +169,7 @@ class LimbStreamContext:
     check_robot_collisions: bool = True
     filter_saturated_bases: bool = True
     human_torque_limit: float | None = None
-    robot_induced_torque_limit: float = DEFAULT_ROBOT_INDUCED_TORQUE_LIMIT
+    robot_induced_torque_limit: float | None = None
     num_ik_attempts: int = 12
     best_attempt: BestAttempt | None = None
     base_rejections: Counter = field(default_factory=Counter)
@@ -199,6 +199,10 @@ class LimbStreamContext:
         self._base_rng = np.random.default_rng(self.motion_seed)
         if self.human_torque_limit is None:
             self.human_torque_limit = default_human_torque_limit(
+                self.sim.limb.get_name()
+            )
+        if self.robot_induced_torque_limit is None:
+            self.robot_induced_torque_limit = default_robot_induced_torque_limit(
                 self.sim.limb.get_name()
             )
         self.true_joint_limits = (
@@ -302,6 +306,7 @@ class LimbStreamContext:
     def human_torque_limits(self) -> tuple[float, float]:
         """The bounds on the total torque and on the robot's share of it."""
         assert self.human_torque_limit is not None  # set in __post_init__
+        assert self.robot_induced_torque_limit is not None
         return (abs(self.human_torque_limit), abs(self.robot_induced_torque_limit))
 
 

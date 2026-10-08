@@ -122,7 +122,7 @@ HUMAN_TORQUE_LIMITS = {
     "arm": 50.0,
     "leg": 100.0,
 }  # Placeholders, to be tuned to realistic human joint limits.
-DEFAULT_ROBOT_INDUCED_TORQUE_LIMIT = 25.0
+ROBOT_INDUCED_TORQUE_LIMITS = {"arm": 25.0, "leg": 50.0}
 ROBOT_TORQUE_LIMITS = (200.0, 200.0, 200.0, 200.0, 100.0, 100.0, 100.0)
 JACOBIAN_DAMPING = 0.1
 SINGULARITY_THRESHOLD = 0.02
@@ -177,6 +177,11 @@ class BestAttempt:
 def default_human_torque_limit(limb_name: str) -> float:
     """The total-torque bound for this limb: legs bear far more than arms."""
     return HUMAN_TORQUE_LIMITS["leg" if "leg" in limb_name else "arm"]
+
+
+def default_robot_induced_torque_limit(limb_name: str) -> float:
+    """The bound on the robot's share of it; a leg's own weight exceeds an arm's."""
+    return ROBOT_INDUCED_TORQUE_LIMITS["leg" if "leg" in limb_name else "arm"]
 
 
 def extend_with_fingers(joints: JointPositions) -> JointPositions:
