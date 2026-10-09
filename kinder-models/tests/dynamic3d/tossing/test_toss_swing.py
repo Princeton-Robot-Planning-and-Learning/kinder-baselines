@@ -159,9 +159,15 @@ def test_toss_release_speed_clamps_the_effort_to_zero_and_one():
 
 
 def test_the_release_speeds_the_sampler_draws_are_never_clamped():
-    """SPEED_BOUNDS' top edge is the clamp point, so it must pass through."""
+    """The composed controller uses its explicit simulation effort ceiling."""
     for speed in np.linspace(*MoveToTossLocationAndTossController.SPEED_BOUNDS, 25):
-        assert np.isclose(toss_profile_limits(speed)[0], speed)
+        assert np.isclose(
+            toss_profile_limits(
+                speed,
+                max_effort=MoveToTossLocationAndTossController.MAX_SIMULATION_EFFORT,
+            )[0],
+            speed,
+        )
 
 
 def test_plan_toss_swing_is_unmoved_by_a_whole_turn_on_a_continuous_joint():
