@@ -118,6 +118,8 @@ REACH_RADIUS_PERCENTILES = (55.0, 90.0)
 IK_PROBE_ORIGIN = (50.0, 50.0)
 CLEARANCE_PROBE_DISTANCE = 0.1
 COLLISION_MARGIN = 0.01
+# Numerical tolerance for contact, not permission to inherit an invalid start pose.
+CONTACT_PENETRATION_TOLERANCE = 0.002
 HUMAN_TORQUE_LIMITS = {
     "arm": 50.0,
     "leg": 100.0,
@@ -706,11 +708,18 @@ def limb_out_of_limits(ctx: LimbStreamContext) -> bool:
 
 
 def human_in_collision(ctx: LimbStreamContext) -> bool:
-    """Whether the limb was driven into the person, past its resting overlap."""
+    """Limb overlap with the person, furniture or base beyond allowed contact."""
     sim = ctx.sim
-    for body_id, resting in ctx.resting_penetration.items():
-        clearance = pair_clearance(sim, sim.limb.robot_id, body_id)
-        if clearance < resting - COLLISION_MARGIN:
+    for body_id in ctx.human_collision_ids:
+        resting = ctx.resting_penetration.get(body_id, 0.0)
+        if pair_clearance(sim, sim.limb.robot_id, body_id) < resting - COLLISION_MARGIN:
+            return True
+    # Furniture and the robot base do not share the anatomical attachment overlap.
+    for body_id in [*ctx.scene_collision_ids, sim.robot.base.robot_id]:
+        if (
+            pair_clearance(sim, sim.limb.robot_id, body_id)
+            < -CONTACT_PENETRATION_TOLERANCE
+        ):
             return True
     return False
 
@@ -738,6 +747,8 @@ def grasp_ik(
     """Collision-free arm joints holding `grasp` at `limb_positions`, or None."""
     sim = ctx.sim
     sim.limb.set_joints(list(limb_positions), joint_velocities=[0.0] * NUM_LIMB_JOINTS)
+    if human_in_collision(ctx):
+        return None
     target_ee_pose = multiply_poses(sim.limb.get_end_effector_pose(), grasp)
     for attempt in range(max(ctx.num_ik_attempts, 1)):
         seed = list(seed_joints) if attempt == 0 else _random_arm_seed(ctx)
