@@ -24,6 +24,7 @@ from scipy.spatial.transform import Rotation
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
+    PickCubeController,
     create_lifted_controllers,
 )
 from kinder_models.dynamic3d.tossing.state_abstractions import (
@@ -212,13 +213,11 @@ _OBSERVED_FAILURES = (
 )
 
 
-@pytest.mark.parametrize("bin_offset,feasible", [(0.0, False), (-0.15, True)])
-def test_pick_cube_recorded_bin_adjacent_missed_grasp(
-    bin_offset, feasible, monkeypatch
-):
-    """Reject the wrist/bin collision; pick successfully when there is clearance."""
+@pytest.mark.parametrize("bin_offset", [0.0, -0.15])
+def test_pick_cube_recorded_bin_adjacent_missed_grasp(bin_offset):
+    """Recover the historical missed grasp without pushing the adjacent bin."""
     recorded = json.loads(
-        Path(__file__).with_name("missed_grasp_state.json").read_text()
+        Path(__file__).with_name("missed_grasp_state.json").read_text(encoding="utf-8")
     )
     env = _make_env()
     try:
@@ -229,23 +228,24 @@ def test_pick_cube_recorded_bin_adjacent_missed_grasp(
             _set_values(state, obj, state.type_features[obj.type], values)
         bin_obj = state.get_object_from_name("bin_0")
         state.set(bin_obj, "x", state.get(bin_obj, "x") + bin_offset)
-        if feasible:
-            _run_pick(env, state)
-        else:
-
-            def unexpected_step(_action):
-                pytest.fail("Unsafe bin-adjacent grasp must be rejected before motion")
-
-            monkeypatch.setattr(env, "step", unexpected_step)
-            with pytest.raises(ValueError, match="No collision-free cube grasp"):
-                _run_pick(env, state)
+        _run_pick(env, state)
+        final = env.observation_space.devectorize(env.unwrapped.get_state())
+        assert (
+            np.linalg.norm(
+                [
+                    final.get(bin_obj, axis) - state.get(bin_obj, axis)
+                    for axis in ("x", "y")
+                ]
+            )
+            < 0.02
+        )
     finally:
         env.close()
 
 
-def _make_env():
+def _make_env(environment_name="Tossing3D"):
     return kinder.make(
-        "kinder/Tossing3D-o1-v0",
+        f"kinder/{environment_name}-o1-v0",
         render_mode="rgb_array",
         num_objects=1,
         allow_state_access=True,
@@ -292,6 +292,7 @@ def _run_pick(env, state: ObjectCentricState, *, max_steps: int = 400) -> None:
         controller = create_lifted_controllers(
             env.action_space, state, pybullet_sim=sim
         )["pick_cube"].ground((robot, cube, barrier))
+        assert isinstance(controller, PickCubeController)
         controller.reset(state, None)
         for _ in range(max_steps):
             obs, _, _, _, _ = env.step(controller.step())
