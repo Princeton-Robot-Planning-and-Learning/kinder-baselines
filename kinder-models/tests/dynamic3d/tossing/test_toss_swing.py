@@ -161,12 +161,13 @@ def test_toss_release_speed_clamps_the_effort_to_zero_and_one():
 
 
 def test_the_release_speeds_the_sampler_draws_are_never_clamped():
-    """The simulation controller explicitly enables its higher-speed profiles."""
-    controller = MoveToTossLocationAndTossController
-    for speed_degrees, _ in controller.THROW_PROFILES:
-        speed = np.deg2rad(speed_degrees)
+    """The composed controller uses its explicit simulation effort ceiling."""
+    for speed in np.linspace(*MoveToTossLocationAndTossController.SPEED_BOUNDS, 25):
         assert np.isclose(
-            toss_profile_limits(speed, max_effort=controller.MAX_SIMULATION_EFFORT)[0],
+            toss_profile_limits(
+                speed,
+                max_effort=MoveToTossLocationAndTossController.MAX_SIMULATION_EFFORT,
+            )[0],
             speed,
         )
 
