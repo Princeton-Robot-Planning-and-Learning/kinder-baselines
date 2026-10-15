@@ -2,7 +2,8 @@
 
 See run.py for the domain design, and utils.py for the simulator helpers these compose.
 
-Streams scratch-mutate the live simulator and restore it via `saved_sim_state`.
+Streams restore scratch changes via `saved_sim_state`; MPC rollouts use a private
+PyBullet world.
 """
 
 from __future__ import annotations
@@ -10,7 +11,9 @@ from __future__ import annotations
 import itertools
 import re
 import time
+import weakref
 from collections import Counter
+from copy import copy
 from dataclasses import dataclass, field
 from typing import Callable, Iterator
 
@@ -19,10 +22,7 @@ from kinder.envs.dynamic3d.limb_utils import NUM_LIMB_JOINTS, NUM_ROBOT_JOINTS
 from kinder.envs.dynamic3d.limbrepositioning3d import (
     ObjectCentricLimbRepositioning3DEnv,
 )
-from pybullet_helpers.geometry import (
-    Pose,
-    SE2Pose,
-)
+from pybullet_helpers.geometry import Pose, SE2Pose
 from pybullet_helpers.joint import JointPositions, JointVelocities
 from pybullet_helpers.motion_planning import (
     run_motion_planning,
@@ -48,14 +48,17 @@ from kinder_pddlstream_planning.limbrepositioning3d.utils import (
     exceeds_robot_torque_limits,
     grasp_ik,
     human_in_collision,
+    inertia_feedback_torque,
     limb_directed_torque,
     limb_error,
     limb_out_of_limits,
     limb_slide_axis,
+    make_rollout_sim,
     pair_clearance,
     record_attempt,
     release_grasp,
     restore_state,
+    robot_motion_violation,
     saved_sim_state,
     slid_grasp,
 )
@@ -122,15 +125,16 @@ class MPCConfig:
 
     Mirrors limb-manipulation's `PredictiveSamplingPlanner`.
 
-    Rollouts are PyBullet steps in the environment itself, not in a surrogate.
+    Rollouts run in a private copy of the PyBullet environment.
     """
 
-    num_rollouts: int = 64
+    num_rollouts: int = 32
     horizon: int = 12
     action_repeat: int = 12
     num_control_points: int = 4
     noise_scale: float = 0.12
     directed_gains: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0)
+    feedback_gains: tuple[float, ...] = (4.0, 8.0, 16.0)
     noise_reference_error: float = 1.2
     min_noise_ratio: float = 0.3
     goal_reaching_weight: float = 100.0
@@ -146,6 +150,9 @@ class MPCConfig:
     collision_penalty: float = 1e4
     terminal_goal_weight: float = 100.0
     velocity_regularization_weight: float = 1.0
+    robot_velocity_regularization_weight: float = 1.0
+    max_robot_velocity: float = 2.0
+    max_motion_time: float = 180.0
     replay_slack: float = 0.05
     commit_steps: int = 1
     max_control_steps: int = 900
@@ -192,6 +199,9 @@ class LimbStreamContext:
     _grasp_rng: np.random.Generator = field(init=False, repr=False)
     _base_rng: np.random.Generator = field(init=False, repr=False)
     _reach_cloud: np.ndarray | None = field(default=None, init=False, repr=False)
+    motion_outcomes: Counter = field(default_factory=Counter)
+    replay_max_joint_error: float = 0.0
+    robot_peak_velocity: float = 0.0
 
     def __post_init__(self) -> None:
         self._ik_rng = np.random.default_rng(self.motion_seed)
@@ -463,6 +473,7 @@ def plan_base_motion(
 
 def _charge_rollout(ctx: LimbStreamContext, outcome: str, start: float) -> None:
     """Record how long this rollout took and why it stopped."""
+    ctx.motion_outcomes[outcome] += 1
     ctx.profile.add(
         f"rollout: {re.sub(r'[0-9]+[.][0-9]+', 'N', outcome)}",
         time.time() - start,
@@ -488,13 +499,13 @@ def plan_limb_motion(
         print("plan-limb-motion: the target is outside the limb's joint limits.")
         return
     goal = np.asarray(q2.positions, dtype=np.float64)
-    mpc = PredictiveSamplingMPC(ctx, goal, s1)
-
     cfg = ctx.mpc
     threshold = max(ctx.goal_atol - cfg.replay_slack, ctx.goal_atol / 2)
-    with saved_sim_state(sim):
+    with saved_sim_state(sim), PredictiveSamplingMPC(ctx, goal, s1) as mpc:
         restore_state(sim, s1)
+        motion_start = time.monotonic()
         robot_torques: list[JointTorques] = []
+        committed_path: list[JointPositions] = []
         plan_seconds: list[float] = []
         reached = False
         giveup = ""
@@ -503,6 +514,9 @@ def plan_limb_motion(
         steps_since_improvement = 0
         control_steps = 0
         while control_steps < cfg.max_control_steps:
+            if time.monotonic() - motion_start >= cfg.max_motion_time:
+                giveup = f"motion attempt exceeded {cfg.max_motion_time:g} s"
+                break
             if error < threshold:
                 reached = True
                 break
@@ -510,10 +524,15 @@ def plan_limb_motion(
                 giveup = f"diverged at an error of {best_error:.3f}"
                 break
             search_start = time.time()
-            committed = mpc.step()
+            try:
+                committed = mpc.step()
+            except NoFeasibleMotion:
+                giveup = "no constraint-valid MPC candidate"
+                break
             elapsed = time.time() - search_start
             ctx.profile.add("mpc_search", elapsed)
             overloaded = saturated = collision = False
+            motion_violation = ""
             for index, torque in enumerate(committed):
                 control_steps += 1
                 for repeat in range(cfg.action_repeat):
@@ -522,20 +541,38 @@ def plan_limb_motion(
                     saturated = exceeds_robot_torque_limits(ctx, commanded)
                     human_torque = advance(sim, commanded)
                     robot_torques.append(list(torque))
+                    committed_path.append(list(sim.limb.get_joint_positions()))
+                    ctx.robot_peak_velocity = max(
+                        ctx.robot_peak_velocity,
+                        float(
+                            np.max(
+                                np.abs(
+                                    sim.robot.arm.get_joint_velocities()[
+                                        :NUM_ROBOT_JOINTS
+                                    ]
+                                )
+                            )
+                        ),
+                    )
                     plan_seconds.append(elapsed if index == 0 and repeat == 0 else 0.0)
                     overloaded = exceeds_human_torque_limits(ctx, human_torque)
                     collision = human_in_collision(ctx) or arm_in_collision(ctx)
                     if collision:
                         giveup = "drove the limb or robot into an obstacle"
-                    if overloaded or saturated or collision:
+                    motion_violation = robot_motion_violation(ctx) or (
+                        "human joint limits" if limb_out_of_limits(ctx) else ""
+                    )
+                    if motion_violation:
+                        giveup = motion_violation
+                    if overloaded or saturated or collision or motion_violation:
                         break
                     error = limb_error(ctx, sim.limb.get_joint_positions(), goal)
                     if error < threshold:
                         reached = True
                         break
-                if overloaded or saturated or collision or reached:
+                if overloaded or saturated or collision or motion_violation or reached:
                     break
-            if collision:
+            if collision or motion_violation:
                 reached = False
                 break
             if overloaded or saturated:
@@ -584,6 +621,20 @@ def plan_limb_motion(
                 human_torques.append(list(human_torque.total))
                 robot_induced.append(list(human_torque.robot))
                 limb_path.append(list(sim.limb.get_joint_positions()))
+                discrepancy = np.max(
+                    np.abs(
+                        np.asarray(limb_path[-1]) - committed_path[len(limb_path) - 2]
+                    )
+                )
+                ctx.replay_max_joint_error = max(
+                    ctx.replay_max_joint_error, float(discrepancy)
+                )
+                if robot_motion_violation(ctx):
+                    reached = False
+                    giveup = "replayed open-loop past the " + robot_motion_violation(
+                        ctx
+                    )
+                    break
                 if human_in_collision(ctx) or arm_in_collision(ctx):
                     reached = False
                     giveup = (
@@ -708,12 +759,16 @@ def check_robot_torque_limits(
     return True
 
 
+class NoFeasibleMotion(RuntimeError):
+    """Every sampled trajectory violates a hard constraint."""
+
+
 class PredictiveSamplingMPC:
     """Predictive-sampling MPC over robot joint torques.
 
     A port of limb-manipulation's `PredictiveSamplingPlanner` to KinDER.
 
-    The dynamics model is the PyBullet environment, snapshotted and restored.
+    Rollouts run in a private copy of the PyBullet environment.
     """
 
     def __init__(
@@ -739,6 +794,40 @@ class PredictiveSamplingMPC:
         ).astype(int)
         self._commit = int(np.clip(self._cfg.commit_steps, 1, self._cfg.horizon))
         self._step_index = 0
+        self._rollout_sim: ObjectCentricLimbRepositioning3DEnv | None = None
+        self._rollout_ctx: LimbStreamContext | None = None
+        self._rollout_start = start
+        self._robot_reference = np.asarray(
+            (start or capture_state(self._sim)).robot_positions[:NUM_ROBOT_JOINTS]
+        )
+        self._rollout_finalizer: weakref.finalize | None = None
+
+    def close(self) -> None:
+        """Release the private rollout world."""
+        if self._rollout_finalizer is not None:
+            self._rollout_finalizer()
+            self._rollout_finalizer = None
+        self._rollout_sim = None
+        self._rollout_ctx = None
+
+    def __enter__(self) -> PredictiveSamplingMPC:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def _ensure_rollout_world(self, start: CoupledState) -> None:
+        if self._rollout_sim is not None:
+            return
+        sim = make_rollout_sim(self._sim)
+        self._rollout_finalizer = weakref.finalize(self, sim.close)
+        self._rollout_sim = sim
+        restore_state(sim, self._rollout_start or start)
+        # copy, not __post_init__, to keep patched belief checks and true limits.
+        self._rollout_ctx = copy(self._ctx)
+        self._rollout_ctx.sim = sim
+        # Same bodies in both clients, so the start baseline carries over.
+        self._rollout_ctx.resting_penetration = dict(self._ctx.resting_penetration)
 
     def step(self) -> list[JointTorques]:
         """Choose the torque to apply in the simulator's current state."""
@@ -747,8 +836,10 @@ class PredictiveSamplingMPC:
             start = capture_state(self._sim)
         candidates = self._sample_candidates(error, start)
         scores = [self._score(start, self._expand(cp)) for cp in candidates]
-        restore_state(self._sim, start, regrasp=False)
-        best = candidates[min(range(len(scores)), key=scores.__getitem__)]
+        index = min(range(len(scores)), key=scores.__getitem__)
+        if scores[index][0]:
+            raise NoFeasibleMotion("all MPC candidates violate constraints")
+        best = candidates[index]
         self._nominal = best
         self._step_index += self._commit
         return [list(torque) for torque in self._expand(best)[: self._commit]]
@@ -800,12 +891,41 @@ class PredictiveSamplingMPC:
                 )
             )
         candidates.extend(self._directed_candidates(scale))
+        if state is not None and self._cfg.feedback_gains:
+            candidates.extend(self._feedback_candidates(state))
         num_samples = max(cfg.num_rollouts - len(candidates), 0)
         noise = self._rng.normal(
             scale=scale,
             size=(num_samples, cfg.num_control_points, NUM_ROBOT_JOINTS),
         )
         candidates.extend(self._clip(nominal + sample) for sample in noise)
+        return candidates
+
+    def _feedback_candidates(self, start: CoupledState) -> list[np.ndarray]:
+        """Candidates from damped feedback controllers, run in the rollout world."""
+        self._ensure_rollout_world(start)
+        sim = self._rollout_sim
+        assert sim is not None
+        candidates = []
+        for gain in self._cfg.feedback_gains:
+            restore_state(sim, start, regrasp=False)
+            controls = []
+            for _ in range(self._cfg.horizon):
+                try:
+                    torque = self._clip(
+                        inertia_feedback_torque(
+                            sim, self._goal, self._robot_reference, gain
+                        )
+                    )
+                except np.linalg.LinAlgError:
+                    break
+                if not np.isfinite(torque).all():
+                    break
+                controls.append(torque)
+                for _ in range(self._cfg.action_repeat):
+                    advance_corrected(sim, torque)
+            if len(controls) == self._cfg.horizon:
+                candidates.append(np.asarray(controls)[self._control_indices])
         return candidates
 
     def _clip(self, robot_torques: np.ndarray) -> np.ndarray:
@@ -815,37 +935,50 @@ class PredictiveSamplingMPC:
         self, start: CoupledState, robot_torques: np.ndarray
     ) -> tuple[int, float]:
         """Roll `robot_torques` out from `start`, rejected flag first, then its cost."""
-        with self._ctx.profile.timed("mpc_state_restore"):
-            restore_state(self._sim, start, regrasp=False)
+        self._ensure_rollout_world(start)
+        sim = self._rollout_sim
+        ctx = self._rollout_ctx
+        assert sim is not None and ctx is not None
+        with ctx.profile.timed("mpc_state_restore"):
+            restore_state(sim, start, regrasp=False)
         cfg = self._cfg
         goal_cost = 0.0
         velocity_cost = 0.0
         regularization_cost = 0.0
+        robot_velocity_cost = 0.0
         limit_cost = 0.0
         squared_distance = 0.0
         violated = False
         for torque in robot_torques:
             overloaded = False
             saturated = False
-            with self._ctx.profile.timed("mpc_physics"):
+            with ctx.profile.timed("mpc_physics"):
                 for _ in range(cfg.action_repeat):
                     # Read before the step: `advance` clips a saturated command away.
-                    commanded = commanded_robot_torque(self._sim, torque)
-                    saturated |= exceeds_robot_torque_limits(self._ctx, commanded)
-                    human_torque = advance(self._sim, commanded)
-                    overloaded |= exceeds_human_torque_limits(self._ctx, human_torque)
-            positions = self._sim.limb.get_joint_positions()
-            velocities = self._sim.limb.get_joint_velocities()
-            squared_distance = limb_error(self._ctx, positions, self._goal) ** 2
+                    commanded = commanded_robot_torque(sim, torque)
+                    saturated |= exceeds_robot_torque_limits(ctx, commanded)
+                    human_torque = advance(sim, commanded)
+                    overloaded |= exceeds_human_torque_limits(ctx, human_torque)
+            positions = sim.limb.get_joint_positions()
+            velocities = sim.limb.get_joint_velocities()
+            squared_distance = limb_error(ctx, positions, self._goal) ** 2
             goal_cost += squared_distance
             velocity_cost += self._velocity_penalty(velocities, squared_distance)
             regularization_cost += float(np.sum(np.square(velocities)))
-            if not self._ctx.in_believed_limits(positions):
+            robot_velocity_cost += float(
+                np.sum(
+                    np.square(sim.robot.arm.get_joint_velocities()[:NUM_ROBOT_JOINTS])
+                )
+            )
+            if not ctx.in_believed_limits(positions):
                 limit_cost += cfg.joint_limit_violation_weight
                 violated = True
-            if not self._sim.robot.arm.check_joint_limits(
-                list(self._sim.robot.arm.get_joint_positions())
+            if not sim.robot.arm.check_joint_limits(
+                list(sim.robot.arm.get_joint_positions())
             ):
+                limit_cost += cfg.robot_joint_limit_violation_weight
+                violated = True
+            if robot_motion_violation(ctx):
                 limit_cost += cfg.robot_joint_limit_violation_weight
                 violated = True
             if overloaded:
@@ -854,17 +987,20 @@ class PredictiveSamplingMPC:
             if saturated:
                 limit_cost += cfg.robot_torque_violation_weight
                 violated = True
-            with self._ctx.profile.timed("mpc_collision_check"):
-                arm_hit = bool(self._obstacles) and arm_in_collision(self._ctx)
-                human_hit = human_in_collision(self._ctx)
+            with ctx.profile.timed("mpc_collision_check"):
+                arm_hit = bool(self._obstacles) and arm_in_collision(ctx)
+                human_hit = human_in_collision(ctx)
             if arm_hit or human_hit:
                 limit_cost += cfg.collision_penalty
                 violated = True
+            if violated and cfg.reject_violations:
+                return (1, limit_cost)
         cost = (
             cfg.goal_reaching_weight * goal_cost
             + cfg.terminal_goal_weight * squared_distance
             + cfg.velocity_penalty_weight * velocity_cost
             + cfg.velocity_regularization_weight * regularization_cost
+            + cfg.robot_velocity_regularization_weight * robot_velocity_cost
             + limit_cost
         )
         return (int(violated and cfg.reject_violations), cost)

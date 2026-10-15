@@ -22,11 +22,7 @@ from kinder.envs.dynamic3d.limbrepositioning3d import (
     ObjectCentricLimbRepositioning3DEnv,
     create_variant_config,
 )
-from kinder.envs.dynamic3d.limbs import (
-    DEFAULT_RANGE_OF_MOTION,
-    MOTION_NAMES,
-    BodyMass,
-)
+from kinder.envs.dynamic3d.limbs import DEFAULT_RANGE_OF_MOTION, MOTION_NAMES, BodyMass
 from pddlstream.algorithms.meta import solve
 from pddlstream.language.constants import PDDLProblem, print_solution
 from pddlstream.language.generator import from_gen_fn, from_test
@@ -56,11 +52,16 @@ from kinder_pddlstream_planning.limbrepositioning3d.utils import (
     apply_limb_joint_damping,
     arm_in_collision,
     base_in_collision,
+    commanded_robot_torque,
     engage_grasp,
+    exceeds_human_torque_limits,
+    exceeds_robot_torque_limits,
     extend_with_fingers,
     human_in_collision,
     is_grasping,
+    limb_out_of_limits,
     release_grasp,
+    robot_motion_violation,
 )
 from kinder_pddlstream_planning.rendering import (
     DEFAULT_GIF_DIR,
@@ -96,6 +97,9 @@ class RunResult:
     plan_time: float = 0.0
     total_time: float = 0.0
     failure_reason: str = ""
+    motion_outcomes: dict[str, int] = dataclasses.field(default_factory=dict)
+    replay_max_joint_error: float = 0.0
+    robot_peak_velocity: float = 0.0
 
 
 # Keep collision checks enabled for every variant. An unsafe placement is a rejected
@@ -371,7 +375,15 @@ def execute_plan(
             _, _, _, _, _, _, torque_trajectory, _ = args
             assert isinstance(torque_trajectory, TorqueTrajectory)
             for i, torque in enumerate(torque_trajectory.robot_torques):
-                advance_corrected(sim, torque)
+                if exceeds_robot_torque_limits(
+                    ctx, commanded_robot_torque(sim, torque)
+                ):
+                    return False
+                human_torque = advance_corrected(sim, torque)
+                if exceeds_human_torque_limits(ctx, human_torque):
+                    return False
+                if robot_motion_violation(ctx) or limb_out_of_limits(ctx):
+                    return False
                 if arm_in_collision(ctx) or human_in_collision(ctx):
                     return False
                 if i % gif_every == 0:
@@ -527,6 +539,10 @@ def solve_and_execute(
                 assert gif_path is not None
                 save_gif(gif_path, frames)
     finally:
+        if ctx is not None:
+            result.motion_outcomes = dict(ctx.motion_outcomes)
+            result.replay_max_joint_error = ctx.replay_max_joint_error
+            result.robot_peak_velocity = ctx.robot_peak_velocity
         sim.close()
 
 
