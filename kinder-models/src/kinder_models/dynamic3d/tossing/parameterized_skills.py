@@ -22,19 +22,24 @@ from kinder.envs.dynamic3d.robots.tidybot_robot_env import (
 )
 from prpl_utils.utils import get_signed_angle_distance
 from pybullet_helpers.geometry import Pose, Quaternion, multiply_poses
-from pybullet_helpers.inverse_kinematics import JointPositions
+from pybullet_helpers.inverse_kinematics import (
+    InverseKinematicsError,
+    JointPositions,
+)
 from pybullet_helpers.link import get_link_state
 from pybullet_helpers.motion_planning import (
     check_collisions_with_held_object,
     remap_joint_position_plan_to_constant_distance,
     run_motion_planning,
 )
+from pybullet_helpers.robots.single_arm import FingeredSingleArmPyBulletRobot
 from relational_structs import (
     Array,
     Object,
     ObjectCentricState,
     Variable,
 )
+from scipy.spatial.transform import Rotation  # type: ignore[import-untyped]
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.tossing.toss_swing import (
@@ -82,6 +87,85 @@ logger = logging.getLogger(__name__)
 PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT = Pose(
     (-0.005, 0.0, 0.03), (0.707, 0.707, 0.0, 0.0)
 )
+
+# Tilts about the gripper's closing axis tried for every cube grasp, untilted first.
+# Tilting about the closing axis keeps both pads parallel to the faces they close on,
+# and leans the wrist, camera and knuckles away from a wall the cube is pressed against.
+PICK_CUBE_GRASP_TILTS_DEGREES = (0.0, 10.0, -10.0, 20.0, -20.0, 30.0, -30.0)
+# Gripper openings tried for every grasp, narrowest first, as margins over the cube's
+# width; capped at the Robotiq 2F-85's 85 mm stroke, which is always tried last.
+PICK_CUBE_OPENING_MARGINS = (0.02, 0.04)
+PICK_CUBE_FULL_OPENING = 0.085
+
+# The 2F-85's inner pad gap (m) against its finger command, measured in each model with
+# no object between the pads. The planner's PyBullet fingers close faster than MuJoCo's
+# for the same driver angle, so each model is commanded by the gap, not by the angle.
+# MuJoCo: `action[-1]` (0 open .. 1 closed), settled with gravity off.
+MUJOCO_GRIPPER_GAPS = (0.0851, 0.0777, 0.0698, 0.0615, 0.0529, 0.0440)
+MUJOCO_GRIPPER_COMMANDS = (0.0, 0.1, 0.2, 0.3, 0.4, 0.5)
+# PyBullet: `finger_state_to_joints` state (0 open .. 0.8 closed), closest points
+# between the two inner finger pads.
+PYBULLET_GRIPPER_GAPS = (
+    0.0860,
+    0.0816,
+    0.0771,
+    0.0723,
+    0.0674,
+    0.0624,
+    0.0572,
+    0.0520,
+    0.0466,
+)
+PYBULLET_FINGER_STATES = (0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4)
+
+
+def gripper_command_for_opening(opening: float) -> float:
+    """The MuJoCo gripper command that opens the pads to `opening` metres."""
+    if opening >= PICK_CUBE_FULL_OPENING:
+        return 0.0
+    return float(
+        np.interp(opening, MUJOCO_GRIPPER_GAPS[::-1], MUJOCO_GRIPPER_COMMANDS[::-1])
+    )
+
+
+def finger_state_for_opening(opening: float) -> float:
+    """The PyBullet finger state that opens the pads to `opening` metres."""
+    if opening >= PICK_CUBE_FULL_OPENING:
+        return 0.0
+    return float(
+        np.interp(opening, PYBULLET_GRIPPER_GAPS[::-1], PYBULLET_FINGER_STATES[::-1])
+    )
+
+
+class PickCubeGraspCandidate:
+    """One grasp the pick may try: a cube-symmetric yaw, a tilt about the gripper's
+    closing axis, and how far the gripper is opened for the approach."""
+
+    def __init__(self, yaw_quat: Quaternion, tilt: float, opening: float) -> None:
+        self.yaw_quat = yaw_quat
+        self.tilt = tilt
+        self.opening = opening
+        # The grasp frame (before PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT) rotated about
+        # its own y axis, which the transform maps onto the tool's closing axis. The
+        # Hamilton product is written out so that a zero tilt returns `yaw_quat`
+        # bit for bit, and the untilted grasp is exactly the one used before tilts.
+        x, y, z, w = yaw_quat
+        s, c = float(np.sin(tilt / 2)), float(np.cos(tilt / 2))
+        self.grasp_quat: Quaternion = (
+            x * c - z * s,
+            y * c + w * s,
+            z * c + x * s,
+            w * c - y * s,
+        )
+        self.finger_state = finger_state_for_opening(opening)
+        self.gripper_command = gripper_command_for_opening(opening)
+
+    def __repr__(self) -> str:
+        return (
+            f"PickCubeGraspCandidate(tilt={np.rad2deg(self.tilt):+.0f}deg, "
+            f"opening={self.opening * 1000:.0f}mm)"
+        )
+
 
 # Per-joint motion between consecutive control steps below which the arm counts as
 # stopped. A stand-in for joint velocity, which the state does not expose for the arm.
@@ -894,7 +978,9 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         self._last_gripper_state: float = 0.0
         self._closed_gripper: bool = False
         self._lifted: bool = False
-        self._grasp_quat: Quaternion | None = None
+        # The grasp reset() chose, and how many it tried to find it.
+        self.grasp_candidate: PickCubeGraspCandidate | None = None
+        self.candidates_tried = 0
         self._held_collision_threshold = self.HELD_OBJECT_COLLISION_THRESHOLD
         self._planned_cube_position: np.ndarray | None = None
         # Previous tick's arm conf, for the settling check in _robot_arm_has_settled.
@@ -960,16 +1046,30 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             ),
         )
 
+    def _with_fingers(
+        self, joints: JointPositions, finger_state: float
+    ) -> JointPositions:
+        """`joints`' arm, with the planning model's fingers at `finger_state`."""
+        assert self._pybullet_sim is not None
+        robot = self._pybullet_sim.robot
+        assert isinstance(robot, FingeredSingleArmPyBulletRobot)
+        return list(joints[:7]) + list(robot.finger_state_to_joints(finger_state))
+
     def _plan_motions(
         self,
         x: ObjectCentricState,
         extend_xy_magnitude: float,
         extend_rot_magnitude: float,
         *,
-        grasp_quat: Quaternion,
+        candidate: PickCubeGraspCandidate,
         held_object_collision_threshold: float,
+        base_plans: dict[Quaternion, list[SE2] | None],
     ) -> bool:
-        """Populate all trajectories for one grasp, returning False if infeasible."""
+        """Populate all trajectories for one grasp, returning False if infeasible.
+
+        `base_plans` caches the base path per yaw: it depends on nothing else, and
+        every planning call is seeded, so a cached path is the one replanning returns.
+        """
         assert self._pybullet_sim is not None
 
         # The cube is always index 1. Objects 2 onward are colliders to avoid; the
@@ -980,16 +1080,19 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         # BASE_MOTION planning
         robot = self.objects[0]
 
-        base_motion_plan = self._plan_base_motion(
-            x,
-            cube_to_pick_up,
-            extend_xy_magnitude,
-            extend_rot_magnitude,
-            grasp_quat,
-        )
-
-        if base_motion_plan is None:
+        if candidate.yaw_quat not in base_plans:
+            base_plans[candidate.yaw_quat] = self._plan_base_motion(
+                x,
+                cube_to_pick_up,
+                extend_xy_magnitude,
+                extend_rot_magnitude,
+                candidate.yaw_quat,
+            )
+        cached_base_plan = base_plans[candidate.yaw_quat]
+        if cached_base_plan is None:
             return False
+        # Execution pops waypoints off the plan it is given.
+        base_motion_plan = list(cached_base_plan)
         # MOVE_ARM_TO_HOVER_OVER_CUBE planning
         # Get the last state from the BASE_MOTION plan so that next steps can build on it
         state_after_base_motion = x.copy()
@@ -1005,28 +1108,40 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         self._pybullet_sim.set_state(state_after_base_motion)
 
         # The arm approach must match the grasp orientation used for base planning.
+        # Hover 12 cm beyond the cube's top surface along the grasp's own approach
+        # axis: straight above the cube when untilted, leaning with the tilt otherwise.
+        # "z" is the cube's centre, so add half its height ("bb_z").
+        # Added in the original's order, so the untilted hover is unchanged bit for bit.
+        hover_position = np.array(
+            [state_after_base_motion.get(cube_to_pick_up, k) for k in ("x", "y", "z")]
+        )
+        approach = Rotation.from_quat(candidate.grasp_quat)
+        for distance in (
+            state_after_base_motion.get(cube_to_pick_up, "bb_z") / 2,
+            0.12,
+        ):
+            hover_position = hover_position + approach.apply((0.0, 0.0, distance))
+        hover_x, hover_y, hover_z = (float(v) for v in hover_position)
         target_hover_end_effector_pose = Pose(
-            (
-                state_after_base_motion.get(cube_to_pick_up, "x"),
-                state_after_base_motion.get(cube_to_pick_up, "y"),
-                state_after_base_motion.get(cube_to_pick_up, "z")
-                + state_after_base_motion.get(cube_to_pick_up, "bb_z") / 2
-                # 12 cm above the cube's top surface. "z" is the cube's centre, so
-                # we add half its height ("bb_z").
-                + 0.12,
-            ),
-            grasp_quat,
+            (hover_x, hover_y, hover_z), candidate.grasp_quat
         )
         target_hover_end_effector_pose = multiply_poses(
             target_hover_end_effector_pose, PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT
         )  # Offset by the intended grasp location
-        target_hover_joints = inverse_kinematics_fixed_effort(
-            self._pybullet_sim.robot, target_hover_end_effector_pose, set_joints=False
-        )
+        try:
+            target_hover_joints = inverse_kinematics_fixed_effort(
+                self._pybullet_sim.robot,
+                target_hover_end_effector_pose,
+                set_joints=False,
+            )
+        except InverseKinematicsError:
+            return False
         hover_plan = run_motion_planning(
             self._pybullet_sim.robot,
-            self._pybullet_sim.get_robot_joints(),
-            target_hover_joints,
+            self._with_fingers(
+                self._pybullet_sim.get_robot_joints(), candidate.finger_state
+            ),
+            self._with_fingers(target_hover_joints, candidate.finger_state),
             # Includes the cube to grasp, because we have not grasped it yet.
             collision_bodies=self._pybullet_sim.get_collision_bodies(),
             seed=0,
@@ -1043,7 +1158,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         return self._plan_grasp_and_lift(
             state_after_base_motion,
             hover_plan[-1],
-            grasp_quat,
+            candidate,
             held_object_collision_threshold,
         )
 
@@ -1051,12 +1166,17 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         self,
         state: ObjectCentricState,
         start_joints: JointPositions,
-        grasp_quat: Quaternion,
+        candidate: PickCubeGraspCandidate,
         held_object_collision_threshold: float,
     ) -> bool:
-        """Plan descent and lift from the observed cube pose and arm configuration."""
+        """Plan descent and lift from the observed cube pose and arm configuration.
+
+        The fingers are held at the candidate's opening throughout: that is how far the
+        gripper is opened for the approach, and a closed hand is never wider.
+        """
         assert self._pybullet_sim is not None
         self._pybullet_sim.set_state(state)
+        start_joints = self._with_fingers(start_joints, candidate.finger_state)
         cube_to_pick_up = self.objects[1]
         self._planned_cube_position = np.array(
             [state.get(cube_to_pick_up, axis) for axis in ("x", "y", "z")]
@@ -1068,16 +1188,22 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 state.get(cube_to_pick_up, "y"),
                 state.get(cube_to_pick_up, "z"),
             ),
-            grasp_quat,
+            candidate.grasp_quat,
         )
         target_around_cube_end_effector_pose = multiply_poses(
             target_around_cube_end_effector_pose, PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT
         )  # Offset by the intended grasp location
-        target_around_joints = inverse_kinematics_fixed_effort(
-            self._pybullet_sim.robot,
-            target_around_cube_end_effector_pose,
-            set_joints=False,
-        )
+        try:
+            target_around_joints = self._with_fingers(
+                inverse_kinematics_fixed_effort(
+                    self._pybullet_sim.robot,
+                    target_around_cube_end_effector_pose,
+                    set_joints=False,
+                ),
+                candidate.finger_state,
+            )
+        except InverseKinematicsError:
+            return False
         sim = self._pybullet_sim
         # pylint: disable-next=protected-access
         target_cube = sim._cubes[cube_to_pick_up.name]
@@ -1121,14 +1247,22 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         held_object = self._pybullet_sim._cubes[
             cube_to_pick_up.name
         ]  # For collision detection
+        # For Motion planning so it knows to avoid bonking the cube on things. A tilted
+        # grasp holds the cube untilted: the tilt is undone, or the held cube would be
+        # imagined rotated into the floor and walls it is resting against.
         self._pybullet_sim.base_link_to_held_obj = (
             PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT.invert()
-        )  # For Motion planning so it knows to avoid bonking the cube on things
+            if candidate.tilt == 0.0
+            else multiply_poses(
+                PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT.invert(),
+                Pose.from_rpy((0.0, 0.0, 0.0), (0.0, -candidate.tilt, 0.0)),
+            )
+        )
         lift_plan = run_motion_planning(
             self._pybullet_sim.robot,
             # Again where the previous plan ends, not the IK target it aimed at.
             around_plan[-1],
-            self.home_joints.tolist(),
+            self._with_fingers(self.home_joints.tolist(), candidate.finger_state),
             collision_bodies=self._pybullet_sim.get_collision_bodies(
                 held_object=held_object
             ),
@@ -1160,7 +1294,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         extend_xy_magnitude: float = 0.025,
         extend_rot_magnitude: float = np.pi / 8,
     ) -> None:
-        """Retry the complete pickup plan for all four grasp orientations."""
+        """Plan the complete pickup for each grasp candidate in turn, keeping the first
+        that plans; refuse if none does."""
         del params
         colliders = self.objects[2:]
         bins = [obj for obj in colliders if obj.name.startswith("bin_")]
@@ -1183,20 +1318,45 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             if bins
             else self.HELD_OBJECT_COLLISION_THRESHOLD
         )
-        cube = self.objects[1]
-        cube_quat = tuple(x.get(cube, key) for key in ("qx", "qy", "qz", "qw"))
-        for grasp_quat in upright_grasp_rotations(cube_quat):
+        self.candidates_tried = 0
+        self.grasp_candidate = None
+        base_plans: dict[Quaternion, list[SE2] | None] = {}
+        for candidate in self.grasp_candidates(x):
+            self.candidates_tried += 1
             if self._plan_motions(
                 x,
                 extend_xy_magnitude,
                 extend_rot_magnitude,
-                grasp_quat=grasp_quat,
+                candidate=candidate,
                 held_object_collision_threshold=collision_threshold,
+                base_plans=base_plans,
             ):
-                self._grasp_quat = grasp_quat
+                self.grasp_candidate = candidate
                 self._held_collision_threshold = collision_threshold
                 return
         raise ValueError("No collision-free cube grasp")
+
+    def grasp_candidates(self, x: ObjectCentricState) -> list[PickCubeGraspCandidate]:
+        """Every grasp `reset` may try, in the order it tries them.
+
+        Untilted before tilted, and less tilt before more, so a cube with room around
+        it keeps the top-down grasp; within a tilt, the four cube-symmetric yaws
+        nearest first; within a yaw, the narrowest opening first, since a partly opened
+        hand is the smaller one to fit beside a wall.
+        """
+        cube = self.objects[1]
+        cube_quat = tuple(x.get(cube, key) for key in ("qx", "qy", "qz", "qw"))
+        width = max(x.get(cube, "bb_x"), x.get(cube, "bb_y"))
+        openings = sorted(
+            {min(width + m, PICK_CUBE_FULL_OPENING) for m in PICK_CUBE_OPENING_MARGINS}
+            | {PICK_CUBE_FULL_OPENING}
+        )
+        return [
+            PickCubeGraspCandidate(yaw_quat, float(np.deg2rad(tilt)), opening)
+            for tilt in PICK_CUBE_GRASP_TILTS_DEGREES
+            for yaw_quat in upright_grasp_rotations(cube_quat)
+            for opening in openings
+        ]
 
     def step(self) -> Array:
         if self.current_phase == self.PickCubeControllerPhase.OPEN_GRIPPER:
@@ -1239,7 +1399,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             self.current_phase = self.PickCubeControllerPhase.BASE_MOTION
             return self._step_base_motion()
         action = np.zeros(self.ACTION_DIM, dtype=np.float32)
-        action[GRIPPER_ACTION_INDEX] = 0
+        action[GRIPPER_ACTION_INDEX] = self._gripper_open_command()
         return bound_declared_action(action)
 
     def _step_base_motion(self) -> Array:
@@ -1304,7 +1464,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 # Reset objects may still be falling when reset() plans the approach.
                 # Refresh the grasp after hovering, using the now-observed cube pose
                 # rather than closing around its obsolete airborne location.
-                assert self._last_state is not None and self._grasp_quat is not None
+                assert self._last_state is not None
+                assert self.grasp_candidate is not None
                 cube_position = np.array(
                     [
                         self._last_state.get(self.objects[1], axis)
@@ -1318,7 +1479,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                     and not self._plan_grasp_and_lift(
                         self._last_state,
                         self._get_current_robot_arm_conf(),
-                        self._grasp_quat,
+                        self.grasp_candidate,
                         self._held_collision_threshold,
                     )
                 ):
@@ -1379,12 +1540,25 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         ]
 
     def _get_current_robot_gripper_pose(self) -> float:
+        """The command that keeps the gripper as it is: closed, or open to the chosen
+        grasp's opening.
+
+        `pos_gripper` reads back the last command, so a partial opening reads as
+        itself; "closed" is anything clearly past it.
+        """
         x = self._last_state
         assert x is not None
         robot_obj = self.objects[0]  # Robot is first parameter
-        if x.get(robot_obj, "pos_gripper") > 0.2:
+        open_command = self._gripper_open_command()
+        if x.get(robot_obj, "pos_gripper") > max(0.2, open_command + 0.1):
             return GRASP_CLOSE_THRESHOLD
-        return 0.0
+        return open_command
+
+    def _gripper_open_command(self) -> float:
+        """How far the gripper opens for the chosen grasp: 0 is fully open."""
+        if self.grasp_candidate is None:
+            return 0.0
+        return self.grasp_candidate.gripper_command
 
     def _robot_is_close_to_pose(
         self, pose: SE2, atol: float = WAYPOINT_TOLERANCE
@@ -1415,15 +1589,16 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
     def _robot_gripper_is_open(
         self, atol: float = GRIPPER_OPEN_COMMAND_TOLERANCE
     ) -> bool:
-        """Whether the gripper is commanded open.
+        """Whether the gripper is commanded open to the chosen grasp's opening.
 
         Reads pos_gripper directly rather than through _get_current_robot_gripper_pose,
-        which quantises to 0.0 / GRASP_CLOSE_THRESHOLD and so cannot distinguish "open"
-        from "nearly open".
+        which quantises to the open command / GRASP_CLOSE_THRESHOLD and so cannot
+        distinguish "open" from "nearly open".
         """
         x = self._last_state
         assert x is not None
-        return bool(x.get(self.objects[0], "pos_gripper") < atol)
+        opening = x.get(self.objects[0], "pos_gripper")
+        return bool(abs(opening - self._gripper_open_command()) < atol)
 
     def _record_arm_conf(self, conf: np.ndarray) -> None:
         """Remember this tick's arm conf, so the next tick can measure motion."""

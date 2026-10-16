@@ -7,6 +7,7 @@ import types
 from pathlib import Path
 
 import kinder
+import mujoco
 import numpy as np
 import pybullet as p
 import pybullet_helpers.ikfast.utils as ikfast_utils
@@ -23,6 +24,7 @@ from kinder.envs.dynamic3d.object_types import (
 )
 from kinder.envs.dynamic3d.robots.tidybot_robot_env import TidyBot3DRobotActionSpace
 from pybullet_helpers.geometry import Pose
+from pybullet_helpers.robots import create_pybullet_robot
 from relational_structs import GroundAtom, Object, ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
 from relational_structs.utils import create_state_from_dict
@@ -31,10 +33,13 @@ from spatialmath import SE2
 from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     GRIPPER_ACTION_INDEX,
+    PICK_CUBE_GRASP_TILTS_DEGREES,
     MoveToTossLocationAndTossController,
     PickCubeController,
     create_lifted_controllers,
+    finger_state_for_opening,
     get_target_robot_pose_from_parameters,
+    gripper_command_for_opening,
 )
 from kinder_models.dynamic3d.tossing.state_abstractions import (
     Holding,
@@ -57,6 +62,7 @@ from kinder_models.dynamic3d.utils import (
     MOVE_TO_TARGET_DISTANCE_BOUNDS,
     PyBulletSim,
     _trapezoidal_motion_profile,
+    upright_grasp_rotations,
 )
 
 kinder.register_all_environments()
@@ -1467,6 +1473,103 @@ def test_pick_cube_takes_no_continuous_parameters():
     env.close()
 
 
+def _pad_gap(physics_client_id, robot_id, names):
+    points = p.getClosestPoints(
+        robot_id,
+        robot_id,
+        0.2,
+        names["left_inner_finger_pad"],
+        names["right_inner_finger_pad"],
+        physicsClientId=physics_client_id,
+    )
+    return min(point[8] for point in points)
+
+
+@pytest.mark.parametrize("opening", [0.055, 0.07, 0.08, 0.085])
+def test_pick_cube_planning_fingers_open_to_the_requested_gap(opening):
+    """The pick plans with the PyBullet fingers at the opening it will command."""
+    client = p.connect(p.DIRECT)
+    try:
+        robot = create_pybullet_robot("kinova-gen3", client, fixed_base=True)
+        names = {
+            p.getJointInfo(robot.robot_id, j, physicsClientId=client)[12].decode(): j
+            for j in range(p.getNumJoints(robot.robot_id, physicsClientId=client))
+        }
+        home = list(robot.default_home_joint_positions[:7])
+        robot.set_joints(
+            home + robot.finger_state_to_joints(finger_state_for_opening(opening))
+        )
+        assert abs(_pad_gap(client, robot.robot_id, names) - opening) < 1.5e-3
+    finally:
+        p.disconnect(client)
+
+
+@pytest.mark.parametrize("opening", [0.055, 0.07, 0.08, 0.085])
+def test_pick_cube_gripper_command_opens_mujoco_pads_to_the_requested_gap(opening):
+    """MuJoCo's 2F-85, commanded for an opening, settles with its pads that far apart."""
+    # pylint: disable=no-member
+    model = mujoco.MjModel.from_xml_path(
+        str(
+            Path(kinder.__file__).parent
+            / "envs/dynamic3d/models/kinova_gen3/gen3_2f85.xml"
+        )
+    )
+    data = mujoco.MjData(model)
+    mujoco.mj_resetDataKeyframe(model, data, 0)
+    model.opt.gravity[:] = 0
+    actuator = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_ACTUATOR, "fingers_actuator"
+    )
+    data.ctrl[actuator] = 255 * gripper_command_for_opening(opening)
+    for _ in range(3000):
+        mujoco.mj_step(model, data)
+    pads = {}
+    for side in ("left", "right"):
+        geoms = [
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"{side}_pad{i}")
+            for i in (1, 2)
+        ]
+        pads[side] = (data.geom_xpos[geoms].mean(axis=0), geoms[0])
+    between = pads["left"][0] - pads["right"][0]
+    axis = between / np.linalg.norm(between)
+    geom = pads["left"][1]
+    thickness = 2 * abs(
+        model.geom_size[geom] @ np.abs(data.geom_xmat[geom].reshape(3, 3).T @ axis)
+    )
+    assert abs(np.linalg.norm(between) - thickness - opening) < 1.5e-3
+
+
+def test_pick_cube_tries_the_untilted_grasp_first_and_tilts_in_increasing_steps():
+    """Top-down at the nearest yaw and narrowest opening first; then each tilt, both
+    ways, in increasing size, every yaw and opening within it."""
+    env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
+    try:
+        obs, _ = env.reset(seed=125)
+        state = env.observation_space.devectorize(obs)
+        robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+        cube = state.get_object_from_name("cube_0")
+        barrier = state.get_object_from_name("cuboid_barrier")
+        controller = create_lifted_controllers(env.action_space, state)[
+            "pick_cube"
+        ].ground((robot, cube, barrier))
+        candidates = controller.grasp_candidates(state)
+        width = state.get(cube, "bb_x")
+        openings = sorted({min(width + 0.02, 0.085), min(width + 0.04, 0.085), 0.085})
+        yaws = upright_grasp_rotations(
+            tuple(state.get(cube, k) for k in ("qx", "qy", "qz", "qw"))
+        )
+        assert len(candidates) == len(PICK_CUBE_GRASP_TILTS_DEGREES) * 4 * len(openings)
+        first = candidates[0]
+        assert first.tilt == 0.0 and first.yaw_quat == yaws[0]
+        assert first.grasp_quat == yaws[0]
+        assert first.opening == openings[0]
+        tilts = [np.rad2deg(c.tilt) for c in candidates]
+        assert [abs(t) for t in tilts] == sorted(abs(t) for t in tilts)
+        assert {round(t) for t in tilts} == {0, 10, -10, 20, -20, 30, -30}
+    finally:
+        env.close()
+
+
 def test_pick_cube_stands_head_on_within_the_shelf_picks_reach():
     """No rotation offset from the cube's own facing, at a distance the shelf pick used
     to sample -- not a range, since the pick zone has nothing to route around."""
@@ -2058,7 +2161,7 @@ def test_pick_retries_false_planning_canary(monkeypatch):
     attempts = []
 
     def _plan(*_args, **kwargs):
-        attempts.append(kwargs["grasp_quat"])
+        attempts.append(kwargs["candidate"])
         return next(outcomes)
 
     monkeypatch.setattr(PickCubeController, "_plan_motions", _plan)
@@ -2071,6 +2174,7 @@ def test_pick_retries_false_planning_canary(monkeypatch):
     )
     controller.reset(state, None)
     assert len(attempts) == 4
+    assert controller.grasp_candidate is attempts[-1]
 
 
 def test_pick_cube_retrieves_from_bin_after_toss(tmp_path):
