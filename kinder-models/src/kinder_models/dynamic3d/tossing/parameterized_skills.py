@@ -89,11 +89,16 @@ PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT = Pose(
 # Tilts about the gripper's closing axis tried for every cube grasp, untilted first.
 # Tilting about the closing axis keeps both pads parallel to the faces they close on,
 # and leans the wrist, camera and knuckles away from a wall the cube is pressed against.
-PICK_CUBE_GRASP_TILTS_DEGREES = (0.0, 10.0, -10.0, 20.0, -20.0, 30.0, -30.0)
-# Gripper openings tried for every grasp, narrowest first, as margins over the cube's
-# width; capped at the Robotiq 2F-85's 85 mm stroke, which is always tried last.
-PICK_CUBE_OPENING_MARGINS = (0.02, 0.04)
+# Measured on the Tossing3D pick benchmark against 0/+-10/+-20/+-30: 13/475 fewer picks,
+# but bin pushes 10/475 against 24/475 (the +-20 grasps dragged the held cube along
+# the wall) and a faster dry run.
+PICK_CUBE_GRASP_TILTS_DEGREES = (0.0, 15.0, -15.0, 30.0, -30.0)
+# The partial opening tried at every tilt, as a margin over the cube's width.
+PICK_CUBE_OPENING_MARGINS = (0.02,)
+# The Robotiq 2F-85's full stroke, tried after the partial opening, and only for a
+# tilted grasp: no untilted plan was measured to need it.
 PICK_CUBE_FULL_OPENING = 0.085
+PICK_CUBE_FULL_OPENING_MIN_TILT_DEGREES = 15.0
 
 # The 2F-85's inner pad gap (m) against its finger command, measured in each model with
 # no object between the pads. The planner's PyBullet fingers close faster than MuJoCo's
@@ -1297,21 +1302,26 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
 
         Untilted before tilted, and less tilt before more, so a cube with room around
         it keeps the top-down grasp; within a tilt, the four cube-symmetric yaws
-        nearest first; within a yaw, the narrowest opening first, since a partly opened
-        hand is the smaller one to fit beside a wall.
+        nearest first; within a yaw, the partial opening first, since a partly opened
+        hand is the smaller one to fit beside a wall, then (tilted only) full open.
         """
         cube = self.objects[1]
         cube_quat = tuple(x.get(cube, key) for key in ("qx", "qy", "qz", "qw"))
         width = max(x.get(cube, "bb_x"), x.get(cube, "bb_y"))
-        openings = sorted(
+        partial = sorted(
             {min(width + m, PICK_CUBE_FULL_OPENING) for m in PICK_CUBE_OPENING_MARGINS}
-            | {PICK_CUBE_FULL_OPENING}
         )
+
+        def openings(tilt: float) -> list[float]:
+            if abs(tilt) < PICK_CUBE_FULL_OPENING_MIN_TILT_DEGREES:
+                return partial
+            return sorted(set(partial) | {PICK_CUBE_FULL_OPENING})
+
         return [
             PickCubeGraspCandidate(yaw_quat, float(np.deg2rad(tilt)), opening)
             for tilt in PICK_CUBE_GRASP_TILTS_DEGREES
             for yaw_quat in upright_grasp_rotations(cube_quat)
-            for opening in openings
+            for opening in openings(tilt)
         ]
 
     def step(self) -> Array:
