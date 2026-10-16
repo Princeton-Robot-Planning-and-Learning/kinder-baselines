@@ -1,9 +1,11 @@
 """Test utils for dynamic3d models."""
 
 from pathlib import Path
+from xml.etree import ElementTree
 
 import kinder
 import numpy as np
+import pybullet as p
 from kinder.envs.dynamic3d.envs import TidyBot3DEnv
 from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
 from matplotlib import pyplot as plt
@@ -338,5 +340,51 @@ def test_the_circular_arm_joints_are_the_ones_the_robot_reports():
         index for index, info in enumerate(joint_infos[:7]) if info.is_circular
     )
     assert reported == CIRCULAR_ARM_JOINT_INDICES
+    sim.close()
+    env.close()
+
+
+def test_pybullet_sim_plans_with_the_wrist_mujoco_executes_with():
+    """The planner's bracelet carries the vision module, as the MuJoCo TidyBot's does.
+
+    The stock pybullet_helpers Kinova collides a bare bracelet plus a RealSense box on
+    the gripper base; the TidyBot has neither, but its bracelet holds the vision module
+    whose housing reaches 3.7 cm further out. Planning against the stock wrist accepts
+    arm motions that drive that housing into bins and walls once MuJoCo executes them.
+    """
+    model_path = (
+        Path(kinder.__file__).parent
+        / "envs"
+        / "dynamic3d"
+        / "models"
+        / "stanford_tidybot"
+        / "tidybot.xml"
+    )
+    bracelet = ElementTree.parse(model_path).find(".//body[@name='bracelet_link']")
+    assert bracelet is not None
+    mujoco_meshes = {
+        geom.get("mesh")
+        for geom in bracelet.findall("geom")
+        if geom.get("class", "").endswith("collision")
+    }
+    assert mujoco_meshes == {"bracelet_with_vision_link"}
+
+    env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    sim = PyBulletSim(env.observation_space.devectorize(obs))
+    robot = sim.robot
+
+    def collision_files(link_name: str) -> list[str]:
+        shapes = p.getCollisionShapeData(
+            robot.robot_id,
+            robot.link_from_name(link_name),
+            physicsClientId=robot.physics_client_id,
+        )
+        return [Path(shape[4].decode()).stem for shape in shapes]
+
+    assert collision_files("bracelet_link") == ["bracelet_with_vision_link"]
+    # Only the gripper's own mesh: no box for a RealSense the robot does not have.
+    assert collision_files("robotiq_arg2f_base_link") == ["robotiq_arg2f_base_link"]
     sim.close()
     env.close()
