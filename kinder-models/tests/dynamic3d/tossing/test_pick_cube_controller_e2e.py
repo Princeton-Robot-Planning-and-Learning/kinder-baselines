@@ -24,6 +24,7 @@ from scipy.spatial.transform import Rotation
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
+    PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT,
     create_lifted_controllers,
 )
 from kinder_models.dynamic3d.tossing.state_abstractions import (
@@ -36,6 +37,7 @@ from kinder_models.dynamic3d.utils import (
     MINIMUM_HOLDING_HEIGHT,
     PyBulletSim,
     run_base_motion_planning,
+    upright_grasp_rotations,
 )
 
 kinder.register_all_environments()
@@ -212,11 +214,14 @@ _OBSERVED_FAILURES = (
 )
 
 
-@pytest.mark.parametrize("bin_offset,feasible", [(0.0, False), (-0.15, True)])
-def test_pick_cube_recorded_bin_adjacent_missed_grasp(
-    bin_offset, feasible, monkeypatch
-):
-    """Reject the wrist/bin collision; pick successfully when there is clearance."""
+@pytest.mark.parametrize("bin_offset", [0.0, -0.15])
+def test_pick_cube_recorded_bin_adjacent_missed_grasp(bin_offset):
+    """Pick the recorded cube beside the bin, and with the bin moved clear.
+
+    Beside the bin, every straight-down grasp brings the wrist into the bin, and the
+    pick used to be refused here. A partly opened grasp tilted away from the bin wall
+    clears it, so the pick is now planned and holds the cube.
+    """
     recorded = json.loads(
         Path(__file__).with_name("missed_grasp_state.json").read_text()
     )
@@ -229,16 +234,7 @@ def test_pick_cube_recorded_bin_adjacent_missed_grasp(
             _set_values(state, obj, state.type_features[obj.type], values)
         bin_obj = state.get_object_from_name("bin_0")
         state.set(bin_obj, "x", state.get(bin_obj, "x") + bin_offset)
-        if feasible:
-            _run_pick(env, state)
-        else:
-
-            def unexpected_step(_action):
-                pytest.fail("Unsafe bin-adjacent grasp must be rejected before motion")
-
-            monkeypatch.setattr(env, "step", unexpected_step)
-            with pytest.raises(ValueError, match="No collision-free cube grasp"):
-                _run_pick(env, state)
+        _run_pick(env, state)
     finally:
         env.close()
 
@@ -475,5 +471,120 @@ def test_pick_cube_after_unsettled_reset(height):
             ).as_quat()
             _set_values(state, cube, _CUBE_POSE_FEATURES, (x, y, height, *quaternion))
             _run_pick(env, state)
+    finally:
+        env.close()
+
+
+# Where Tossing3D practice left the bin in a run whose in-bin cube was refused (the cube
+# 0.035-0.043 m from an inner wall). A cube centred in it is picked top-down.
+_PRACTICE_BIN_XY = (-0.262, -1.5252)
+_BIN_WALLS = [(0, 1.0), (0, -1.0), (1, 1.0), (1, -1.0)]
+
+
+def _cube_in_practice_bin(env, *, offset_xy=(0.0, 0.0)) -> ObjectCentricState:
+    """Seed 125 with the bin at `_PRACTICE_BIN_XY` and the cube upright on its floor,
+    `offset_xy` from the bin's centre."""
+    obs, _ = env.reset(seed=125)
+    state = env.observation_space.devectorize(obs)
+    scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    thickness = scene.get_object("bin_0").wall_thickness
+    bin_obj = state.get_object_from_name("bin_0")
+    cube = state.get_object_from_name("cube_0")
+    _set_values(state, bin_obj, ("x", "y", "z"), (*_PRACTICE_BIN_XY, 0.0))
+    _set_values(state, bin_obj, ("qx", "qy", "qz", "qw"), (0.0, 0.0, 0.0, 1.0))
+    xy = np.add(_PRACTICE_BIN_XY, offset_xy)
+    z = thickness + state.get(cube, "bb_z") / 2
+    _set_values(state, cube, _CUBE_POSE_FEATURES, (*xy, z, 0.0, 0.0, 0.0, 1.0))
+    return state
+
+
+def _cube_beside_bin_wall(env, *, axis: int, sign: float, gap: float = 0.015):
+    """The cube `gap` from the inner face of the bin wall at `sign` along `axis`."""
+    scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    geometry = scene.get_object("bin_0")
+    inner = (geometry.length if axis == 0 else geometry.width) / 2
+    state = _cube_in_practice_bin(env)
+    cube = state.get_object_from_name("cube_0")
+    offset = inner - geometry.wall_thickness - gap - state.get(cube, "bb_x") / 2
+    coordinate = ("x", "y")[axis]
+    state.set(cube, coordinate, state.get(cube, coordinate) + sign * offset)
+    return state
+
+
+def _reset_pick_controller(env, state: ObjectCentricState):
+    """Restore `state` and reset a bin-aware pick controller on it (planning only)."""
+    env.unwrapped.set_state(env.observation_space.vectorize(state))
+    state = env.observation_space.devectorize(env.unwrapped.get_state())
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    sim = _create_bin_aware_sim(state, scene)
+    controller = create_lifted_controllers(env.action_space, state, pybullet_sim=sim)[
+        "pick_cube"
+    ].ground((robot, cube, barrier))
+    controller.reset(state, None)
+    return controller, sim
+
+
+@pytest.mark.parametrize(("axis", "sign"), _BIN_WALLS)
+def test_pick_cube_plans_a_cube_beside_a_bin_wall(axis, sign):
+    """A cube 1.5 cm from an inner bin wall must be plannable.
+
+    Fully open and straight down, the wrist or a knuckle comes within the 1 cm
+    clearance of the wall at every yaw. A partly opened gripper tilted about its
+    closing axis, away from the wall, fits.
+    """
+    env = _make_env()
+    try:
+        _, sim = _reset_pick_controller(
+            env, _cube_beside_bin_wall(env, axis=axis, sign=sign)
+        )
+        sim.close()
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize(("axis", "sign"), _BIN_WALLS)
+def test_pick_cube_picks_a_cube_beside_a_bin_wall(axis, sign):
+    """That plan executes in MuJoCo and the cube is held."""
+    env = _make_env()
+    try:
+        _run_pick(env, _cube_beside_bin_wall(env, axis=axis, sign=sign))
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize("where", ["spawn", "bin centre"])
+def test_pick_cube_with_clear_space_still_grasps_straight_down(where):
+    """Where the untilted grasp fits it is the one used: the descent ends with the
+    tool pointing straight down at the cube's nearest upright yaw, and the pick
+    executes."""
+    env = _make_env()
+    try:
+        if where == "spawn":
+            obs, _ = env.reset(seed=125)
+            state = env.observation_space.devectorize(obs)
+        else:
+            state = _cube_in_practice_bin(env)
+        controller, sim = _reset_pick_controller(env, state)
+        try:
+            phase = controller.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE
+            sim.robot.set_joints(list(controller.plans[phase][-1]))
+            tool = Rotation.from_quat(sim.get_ee_pose().orientation)
+            np.testing.assert_allclose(
+                tool.apply([0.0, 0.0, 1.0]), [0.0, 0.0, -1.0], atol=2e-3
+            )
+            cube = state.get_object_from_name("cube_0")
+            nearest = upright_grasp_rotations(
+                tuple(state.get(cube, k) for k in ("qx", "qy", "qz", "qw"))
+            )[0]
+            expected = Rotation.from_quat(nearest) * Rotation.from_quat(
+                PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT.orientation
+            )
+            assert (expected.inv() * tool).magnitude() < 5e-3
+        finally:
+            sim.close()
+        _run_pick(env, state)
     finally:
         env.close()
