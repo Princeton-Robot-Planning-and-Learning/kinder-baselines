@@ -530,9 +530,11 @@ class PyBulletSim:
         # the sim stays reachable and is never collected. See close().
         self._finalizer = weakref.finalize(self, p.disconnect, self._physics_client_id)
 
-        # Create the robot, assuming that it is a kinova gen3.
+        # Create the robot, assuming that it is a kinova gen3. The vision variant's
+        # bracelet carries the camera housing MuJoCo's TidyBot collides, and it has
+        # no RealSense box on the gripper.
         self._robot = create_pybullet_robot(
-            "kinova-gen3",
+            "kinova-gen3-vision",
             self._physics_client_id,
             fixed_base=False,
             control_mode="reset",
