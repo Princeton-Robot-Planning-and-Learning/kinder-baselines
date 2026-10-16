@@ -30,7 +30,6 @@ from spatialmath import SE2
 from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     GRIPPER_ACTION_INDEX,
-    PICK_CUBE_GRASP_TILTS_DEGREES,
     MoveToTossLocationAndTossController,
     PickCubeController,
     create_lifted_controllers,
@@ -1591,8 +1590,9 @@ def test_pick_cube_gripper_command_opens_mujoco_pads_to_the_requested_gap(openin
 
 
 def test_pick_cube_tries_the_untilted_grasp_first_and_tilts_in_increasing_steps():
-    """Top-down at the nearest yaw and narrowest opening first; then each tilt, both
-    ways, in increasing size, every yaw and opening within it."""
+    """36 candidates: top-down at the nearest yaw first; then 15 and 30 degrees about the
+    closing axis, each both ways. Every tilt tries the partial opening; only a tilted
+    grasp also tries 85 mm, which no untilted plan was measured to need."""
     env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
     try:
         obs, _ = env.reset(seed=125)
@@ -1604,19 +1604,26 @@ def test_pick_cube_tries_the_untilted_grasp_first_and_tilts_in_increasing_steps(
             "pick_cube"
         ].ground((robot, cube, barrier))
         candidates = controller.grasp_candidates(state)
-        width = state.get(cube, "bb_x")
-        openings = sorted({min(width + 0.02, 0.085), min(width + 0.04, 0.085), 0.085})
+        partial = state.get(cube, "bb_x") + 0.02
         yaws = upright_grasp_rotations(
             tuple(state.get(cube, k) for k in ("qx", "qy", "qz", "qw"))
         )
-        assert len(candidates) == len(PICK_CUBE_GRASP_TILTS_DEGREES) * 4 * len(openings)
+        assert len(candidates) == 36
         first = candidates[0]
         assert first.tilt == 0.0 and first.yaw_quat == yaws[0]
         assert first.grasp_quat == yaws[0]
-        assert first.opening == openings[0]
+        assert first.opening == pytest.approx(partial)
         tilts = [np.rad2deg(c.tilt) for c in candidates]
         assert [abs(t) for t in tilts] == sorted(abs(t) for t in tilts)
-        assert {round(t) for t in tilts} == {0, 10, -10, 20, -20, 30, -30}
+        assert {round(t) for t in tilts} == {0, 15, -15, 30, -30}
+        by_tilt = {}
+        for c in candidates:
+            by_tilt.setdefault(round(np.rad2deg(c.tilt)), set()).add(
+                round(c.opening, 4)
+            )
+        assert by_tilt[0] == {round(partial, 4)}
+        for tilt in (15, -15, 30, -30):
+            assert by_tilt[tilt] == {round(partial, 4), 0.085}
     finally:
         env.close()
 
