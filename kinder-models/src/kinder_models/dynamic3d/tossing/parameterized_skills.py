@@ -95,7 +95,7 @@ PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT = Pose(
 PICK_CUBE_GRASP_TILTS_DEGREES = (0.0, 15.0, -15.0, 30.0, -30.0)
 # The partial opening tried at every tilt, as a margin over the cube's width.
 PICK_CUBE_OPENING_MARGINS = (0.02,)
-# The Robotiq 2F-85's full stroke, tried after the partial opening, and only for a
+# The Robotiq 2F-85's full stroke, tried before the partial opening, and only for a
 # tilted grasp: no untilted plan was measured to need it.
 PICK_CUBE_FULL_OPENING = 0.085
 PICK_CUBE_FULL_OPENING_MIN_TILT_DEGREES = 15.0
@@ -1326,8 +1326,10 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
 
         Untilted before tilted, and less tilt before more, so a cube with room around
         it keeps the top-down grasp; within a tilt, the four cube-symmetric yaws
-        nearest first; within a yaw, the partial opening first, since a partly opened
-        hand is the smaller one to fit beside a wall, then (tilted only) full open.
+        nearest first; within a tilted yaw, 85 mm and then the partial opening: on the
+        Tossing3D pick benchmark the order picks as many states as partial-first at low
+        pose noise, and under 6 mm of noise picks more (200/475 vs 187/475) with fewer
+        planned-but-failed picks (15/215 vs 28/215).
         """
         cube = self.objects[1]
         cube_quat = tuple(x.get(cube, key) for key in ("qx", "qy", "qz", "qw"))
@@ -1339,7 +1341,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         def openings(tilt: float) -> list[float]:
             if abs(tilt) < PICK_CUBE_FULL_OPENING_MIN_TILT_DEGREES:
                 return partial
-            return sorted(set(partial) | {PICK_CUBE_FULL_OPENING})
+            return sorted(set(partial) | {PICK_CUBE_FULL_OPENING}, reverse=True)
 
         return [
             PickCubeGraspCandidate(yaw_quat, float(np.deg2rad(tilt)), opening)
