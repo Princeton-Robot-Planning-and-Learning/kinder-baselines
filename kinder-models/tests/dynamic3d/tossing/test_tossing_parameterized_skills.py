@@ -1541,7 +1541,8 @@ def test_pick_cube_gripper_command_opens_mujoco_pads_to_the_requested_gap(openin
 def test_pick_cube_tries_the_untilted_grasp_first_and_tilts_in_increasing_steps():
     """36 candidates: top-down at the nearest yaw first; then 15 and 30 degrees about the
     closing axis, each both ways. Every tilt tries the partial opening; only a tilted
-    grasp also tries 85 mm, which no untilted plan was measured to need."""
+    grasp also tries 85 mm, which no untilted plan was measured to need, and it tries
+    85 mm first: under 6 mm of pose noise the wider hand's planned picks fail less."""
     env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
     try:
         obs, _ = env.reset(seed=125)
@@ -1573,6 +1574,9 @@ def test_pick_cube_tries_the_untilted_grasp_first_and_tilts_in_increasing_steps(
         assert by_tilt[0] == {round(partial, 4)}
         for tilt in (15, -15, 30, -30):
             assert by_tilt[tilt] == {round(partial, 4), 0.085}
+        for c, d in zip(candidates[:-1], candidates[1:], strict=True):
+            if c.tilt != 0.0 and c.tilt == d.tilt and c.yaw_quat == d.yaw_quat:
+                assert c.opening > d.opening, "85 mm must come before 70 mm"
     finally:
         env.close()
 
