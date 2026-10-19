@@ -11,10 +11,12 @@ from kinder_models.dynamic3d.tossing.toss_swing import (
 
 
 def test_default_effort_ceiling_is_unchanged() -> None:
+    """An effort above the default ceiling is clamped to it."""
     assert toss_profile_limits(3 * TOSS_MAX_VELOCITY) == toss_profile_limits()
 
 
 def test_extended_effort_scales_all_limits_and_still_caps() -> None:
+    """An explicit ceiling scales all three limits together and still clamps."""
     nominal = np.array(toss_profile_limits())
     np.testing.assert_allclose(
         toss_profile_limits(2 * TOSS_MAX_VELOCITY, max_effort=2.5),
@@ -28,11 +30,13 @@ def test_extended_effort_scales_all_limits_and_still_caps() -> None:
 
 @pytest.mark.parametrize("max_effort", [0.0, -1.0, float("inf"), float("nan")])
 def test_invalid_effort_ceiling_is_rejected(max_effort: float) -> None:
+    """A non-positive or non-finite ceiling is refused."""
     with pytest.raises(ValueError, match="max_effort"):
         toss_profile_limits(max_effort=max_effort)
 
 
 def test_swing_propagates_explicit_ceiling() -> None:
+    """plan_toss_swing passes the explicit ceiling through to the profile."""
     start = [0.0] * 7
     end = [1.0] * 7
     nominal = plan_toss_swing([start, end], start, 2 * TOSS_MAX_VELOCITY)

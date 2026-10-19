@@ -10,6 +10,7 @@ import json
 import time
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 import kinder
 import numpy as np
@@ -67,10 +68,12 @@ def run_trial(
     phase = "pickup"
     stage = "reset"
     try:
-        scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+        # pylint: disable-next=protected-access
+        scene = env.unwrapped._object_centric_env  # type: ignore[attr-defined]
+        observation_space: Any = env.observation_space
         abstractor = Tossing3DStateAbstractor(scene)
         obs, _ = env.reset(seed=seed)
-        state = env.observation_space.devectorize(obs)
+        state = observation_space.devectorize(obs)
         if bin_reset_region is not None or cube_reset_region is not None:
             # Use the production reset sampler, including room/furniture clearance.
             regions = {}
@@ -118,8 +121,10 @@ def run_trial(
                     height=geometry.height,
                     wall_thickness=geometry.wall_thickness,
                 )
-            controller = create_lifted_controllers(
-                env.action_space, init_constant_state=state, pybullet_sim=sim
+            controller: Any = create_lifted_controllers(
+                env.action_space,  # type: ignore[arg-type]
+                init_constant_state=state,
+                pybullet_sim=sim,
             )[key].ground((robot, cube, barrier))
             if phase == "toss":
                 # Instance override: paired trials never mutate global defaults.
@@ -128,7 +133,7 @@ def run_trial(
             stage = "execution"
             for step in range(step_limit):
                 obs, _, _, _, _ = env.step(controller.step())
-                state = env.observation_space.devectorize(obs)
+                state = observation_space.devectorize(obs)
                 result[f"{phase}_steps"] = step + 1
                 controller.observe(state)
                 if controller.terminated():
@@ -158,7 +163,7 @@ def run_trial(
         )
         for sim in sims:
             sim.close()
-        env.close()
+        env.close()  # type: ignore[no-untyped-call]
     return result
 
 
@@ -214,7 +219,10 @@ def main() -> None:
     parser.add_argument(
         "--find-solutions",
         action="store_true",
-        help="Stop each seed/effort search at its first success; exit 2 if any has no witness.",
+        help=(
+            "Stop each seed/effort search at its first success; "
+            "exit 2 if any has no witness."
+        ),
     )
     args = parser.parse_args()
     if args.find_solutions:
