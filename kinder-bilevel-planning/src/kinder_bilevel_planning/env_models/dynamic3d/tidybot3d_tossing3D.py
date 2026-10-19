@@ -119,7 +119,8 @@ def create_bilevel_planning_models(
     # Pick the cube up off the ground.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     cube = Variable("?cube", MujocoMovableObjectType)
-    barrier = Variable("?barrier", MujocoMovableObjectType)
+    # Upstream fixes the barrier in place, so it is any MuJoCo object, not a movable.
+    barrier = Variable("?barrier", MujocoObjectType)
 
     PickCubeOperator = LiftedOperator(
         "pick_cube",
@@ -140,7 +141,8 @@ def create_bilevel_planning_models(
     # Drive to a pose to throw from, and throw.
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     held = Variable("?held", MujocoMovableObjectType)
-    barrier = Variable("?barrier", MujocoMovableObjectType)
+    # Upstream fixes the barrier in place, so it is any MuJoCo object, not a movable.
+    barrier = Variable("?barrier", MujocoObjectType)
 
     MoveToTossLocationAndTossOperator = LiftedOperator(
         "move_to_toss_location_and_toss",
