@@ -4,6 +4,7 @@ import itertools
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 # Force the workstation's headless GPU backend before importing/registering Kinder;
 # registration otherwise selects OSMesa and contaminates other Dynamic3D tests collected
@@ -11,6 +12,7 @@ from pathlib import Path
 os.environ["MUJOCO_GL"] = "egl"
 os.environ["PYOPENGL_PLATFORM"] = "egl"
 
+# pylint: disable=wrong-import-position,protected-access
 import kinder
 import numpy as np
 import pytest
@@ -20,7 +22,7 @@ from kinder.envs.dynamic3d.object_types import (
 )
 from pybullet_helpers.geometry import Pose, get_pose
 from relational_structs import GroundAtom, ObjectCentricState
-from scipy.spatial.transform import Rotation
+from scipy.spatial.transform import Rotation  # type: ignore[import-untyped]
 from spatialmath import SE2
 
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
@@ -218,7 +220,7 @@ def test_pick_cube_recorded_bin_adjacent_missed_grasp(
 ):
     """Reject the wrist/bin collision; pick successfully when there is clearance."""
     recorded = json.loads(
-        Path(__file__).with_name("missed_grasp_state.json").read_text()
+        Path(__file__).with_name("missed_grasp_state.json").read_text(encoding="utf-8")
     )
     env = _make_env()
     try:
@@ -299,10 +301,12 @@ def _run_pick(env, state: ObjectCentricState, *, max_steps: int = 400) -> None:
             controller.observe(state)
             if controller.terminated():
                 break
+        pick: Any = controller  # PickCubeController internals, for the message only
+        base_motion = pick.PickCubeControllerPhase.BASE_MOTION
         assert controller.terminated(), (
-            f"stuck in {controller.current_phase.name}; "
-            f"base={controller._get_current_robot_pose()}; "
-            f"remaining={controller.plans[controller.PickCubeControllerPhase.BASE_MOTION]}"
+            f"stuck in {pick.current_phase.name}; "
+            f"base={pick._get_current_robot_pose()}; "
+            f"remaining={pick.plans[base_motion]}"
         )
         # Termination is not enough: hold the terminal command long enough to expose a
         # cube that was merely knocked upward or only momentarily pinched.
@@ -320,7 +324,7 @@ def _run_pick(env, state: ObjectCentricState, *, max_steps: int = 400) -> None:
         ), f"cube returned to z={state.get(cube, 'z'):.4f} after the stability hold"
         assert all(
             delta < END_EFFECTOR_TO_OBJECT_HOLDING_TOLERANCE for delta in ee_delta
-        ), f"lifted cube escaped the gripper after the stability hold: ee_delta={ee_delta}"
+        ), f"lifted cube escaped the gripper after the stability hold: {ee_delta=}"
         live_contacts = scene.get_gripper_object_contacts(cube.name)
         assert live_contacts, "Lifted cube has no live MuJoCo gripper contact"
         replay_contacts = scene.get_gripper_object_contacts(cube.name, state=state)
@@ -399,7 +403,7 @@ def test_room_colliders_reach_navigation_and_arm_planning():
                 )
         finally:
             sim.close()
-        kwargs = dict(state=state, x_bounds=(-2, 4), y_bounds=(-3, 3), seed=0)
+        kwargs = {"state": state, "x_bounds": (-2, 4), "y_bounds": (-3, 3), "seed": 0}
         assert (
             run_base_motion_planning(target_base_pose=SE2(-1.33, -1.9, 0), **kwargs)
             is None

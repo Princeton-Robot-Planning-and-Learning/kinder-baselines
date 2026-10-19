@@ -1652,7 +1652,8 @@ def test_pick_cube_terminates_from_observed_practice_failure_states(
     )
     for name, value in zip(robot_names, robot_values, strict=True):
         state.set(robot, name, value)
-    for name, value in zip(("x", "y", "z", "qx", "qy", "qz", "qw"), cube_values, strict=True):
+    cube_features = ("x", "y", "z", "qx", "qy", "qz", "qw")
+    for name, value in zip(cube_features, cube_values, strict=True):
         state.set(cube, name, value)
     for name, value in zip(("x", "y", "z"), bin_xyz, strict=True):
         state.set(bin_obj, name, value)
