@@ -97,10 +97,13 @@ PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT = Pose(
 PICK_CUBE_GRASP_TILTS_DEGREES = (0.0, 15.0, -15.0, 30.0, -30.0)
 # The partial opening tried at every tilt, as a margin over the cube's width.
 PICK_CUBE_OPENING_MARGINS = (0.02,)
-# The Robotiq 2F-85's full stroke, tried before the partial opening, and only for a
-# tilted grasp: no untilted plan was measured to need it.
+# The Robotiq 2F-85's full stroke, tried before the partial opening at every tilt. An
+# untilted grasp needs it too: a partly opened first pick holds the cube differently,
+# and the bin-retrieval toss then lands it under 1 cm from a wall, where no grasp plans.
+# Opening untilted grasps fully first left the Tossing3D pick benchmark unchanged
+# (234/475 either way, no case changed its outcome).
 PICK_CUBE_FULL_OPENING = 0.085
-PICK_CUBE_FULL_OPENING_MIN_TILT_DEGREES = 15.0
+PICK_CUBE_FULL_OPENING_MIN_TILT_DEGREES = 0.0
 
 # The 2F-85's inner pad gap (m) against its finger command, measured in each model with
 # no object between the pads. The planner's PyBullet fingers close faster than MuJoCo's
@@ -1346,10 +1349,10 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
 
         Untilted before tilted, and less tilt before more, so a cube with room around
         it keeps the top-down grasp; within a tilt, the four cube-symmetric yaws
-        nearest first; within a tilted yaw, 85 mm and then the partial opening: on the
-        Tossing3D pick benchmark the order picks as many states as partial-first at low
-        pose noise, and under 6 mm of noise picks more (200/475 vs 187/475) with fewer
-        planned-but-failed picks (15/215 vs 28/215).
+        nearest first; within a yaw, 85 mm and then the partial opening: on the
+        Tossing3D pick benchmark the order, measured on tilted grasps, picks as many
+        states as partial-first at low pose noise, and under 6 mm of noise picks more
+        (200/475 vs 187/475) with fewer planned-but-failed picks (15/215 vs 28/215).
         """
         cube = self.objects[1]
         cube_quat = tuple(x.get(cube, key) for key in ("qx", "qy", "qz", "qw"))

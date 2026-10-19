@@ -1539,10 +1539,11 @@ def test_pick_cube_gripper_command_opens_mujoco_pads_to_the_requested_gap(openin
 
 
 def test_pick_cube_tries_the_untilted_grasp_first_and_tilts_in_increasing_steps():
-    """36 candidates: top-down at the nearest yaw first; then 15 and 30 degrees about the
-    closing axis, each both ways. Every tilt tries the partial opening; only a tilted
-    grasp also tries 85 mm, which no untilted plan was measured to need, and it tries
-    85 mm first: under 6 mm of pose noise the wider hand's planned picks fail less."""
+    """40 candidates: top-down at the nearest yaw first; then 15 and 30 degrees about the
+    closing axis, each both ways. Every grasp tries 85 mm and then the partial opening.
+    Tilted: under 6 mm of pose noise the wider hand's planned picks fail less. Untilted:
+    a partly opened first pick holds the cube differently, and the bin-retrieval toss
+    then lands it under 1 cm from a wall, where no grasp plans."""
     env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
     try:
         obs, _ = env.reset(seed=125)
@@ -1558,11 +1559,13 @@ def test_pick_cube_tries_the_untilted_grasp_first_and_tilts_in_increasing_steps(
         yaws = upright_grasp_rotations(
             tuple(state.get(cube, k) for k in ("qx", "qy", "qz", "qw"))
         )
-        assert len(candidates) == 36
-        first = candidates[0]
+        assert len(candidates) == 40
+        first, second = candidates[:2]
         assert first.tilt == 0.0 and first.yaw_quat == yaws[0]
         assert first.grasp_quat == yaws[0]
-        assert first.opening == pytest.approx(partial)
+        assert first.opening == 0.085
+        assert second.tilt == 0.0 and second.yaw_quat == yaws[0]
+        assert second.opening == pytest.approx(partial)
         tilts = [np.rad2deg(c.tilt) for c in candidates]
         assert [abs(t) for t in tilts] == sorted(abs(t) for t in tilts)
         assert {round(t) for t in tilts} == {0, 15, -15, 30, -30}
@@ -1571,11 +1574,10 @@ def test_pick_cube_tries_the_untilted_grasp_first_and_tilts_in_increasing_steps(
             by_tilt.setdefault(round(np.rad2deg(c.tilt)), set()).add(
                 round(c.opening, 4)
             )
-        assert by_tilt[0] == {round(partial, 4)}
-        for tilt in (15, -15, 30, -30):
+        for tilt in (0, 15, -15, 30, -30):
             assert by_tilt[tilt] == {round(partial, 4), 0.085}
         for c, d in zip(candidates[:-1], candidates[1:], strict=True):
-            if c.tilt != 0.0 and c.tilt == d.tilt and c.yaw_quat == d.yaw_quat:
+            if c.tilt == d.tilt and c.yaw_quat == d.yaw_quat:
                 assert c.opening > d.opening, "85 mm must come before 70 mm"
     finally:
         env.close()
