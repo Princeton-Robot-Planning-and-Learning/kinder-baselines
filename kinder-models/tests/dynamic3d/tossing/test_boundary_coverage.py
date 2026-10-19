@@ -2,11 +2,12 @@
 
 import importlib.util
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
 
-def _module():
+def _module() -> ModuleType:
     path = Path(__file__).parents[3] / "scripts" / "check_toss_boundaries.py"
     spec = importlib.util.spec_from_file_location("check_toss_boundaries", path)
     assert spec is not None and spec.loader is not None

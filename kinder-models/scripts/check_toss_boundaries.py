@@ -70,15 +70,15 @@ def main() -> None:
             stream.flush()
 
         record(
-            dict(
-                kind="config",
-                regions=regions,
-                seed=args.seed,
-                candidates=short + long,
-                max_effort=3,
-                rotation=0,
-                cube_region=cube_region,
-            )
+            {
+                "kind": "config",
+                "regions": regions,
+                "seed": args.seed,
+                "candidates": short + long,
+                "max_effort": 3,
+                "rotation": 0,
+                "cube_region": cube_region,
+            }
         )
         for family, region in regions.items():
             cells = (
@@ -104,7 +104,7 @@ def main() -> None:
                         bin_reset_region=region if cube_region else cell,
                         cube_reset_region=cell if cube_region else None,
                     )
-                    record(dict(kind="trial", family=family, case=case, **row))
+                    record({"kind": "trial", "family": family, "case": case, **row})
                     if row["status"] == "success":
                         outcome, witness = "solved", row
                         break
@@ -119,13 +119,16 @@ def main() -> None:
                         break
                     if row["status"].startswith("pickup_"):
                         break  # Toss parameters cannot repair the identical pickup.
-                result = dict(
-                    family=family, case=case, outcome=outcome, witness=witness
-                )
+                result = {
+                    "family": family,
+                    "case": case,
+                    "outcome": outcome,
+                    "witness": witness,
+                }
                 results.append(result)
-                record(dict(kind="case_result", **result))
+                record({"kind": "case_result", **result})
                 print(f"{family} {case}: {outcome}", flush=True)
-        record(dict(kind="summary", cases=results))
+        record({"kind": "summary", "cases": results})
     if any(r["outcome"] != "solved" for r in results):
         raise SystemExit(2)
 
