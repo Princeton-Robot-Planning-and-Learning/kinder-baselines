@@ -10,6 +10,7 @@ import pybullet as p
 import pytest
 from bilevel_planning.structs import GroundParameterizedController
 from conftest import MAKE_VIDEOS
+from gymnasium.envs.registration import EnvSpec
 from gymnasium.wrappers import RecordVideo
 from kinder.envs.dynamic3d.envs import TidyBot3DConfig, TidyBot3DEnv
 from kinder.envs.dynamic3d.object_types import (
@@ -2038,11 +2039,19 @@ def test_pick_cube_retrieves_from_bin_after_toss(tmp_path):
     )
     task_path = tmp_path / "bin-retrieval.json"
     task_path.write_text(json.dumps(config), encoding="utf-8")
-    env = TidyBot3DEnv(
-        num_objects=1,
-        config=TidyBot3DConfig(use_arm_velocities=True),
+    # The registered Tossing3D family derives its task JSON from num_objects; a custom
+    # layout uses the robot environment beneath it, with the family's 18-D actions.
+    env = kinder.make(
+        EnvSpec(
+            id="kinder/Tossing3D-o1-v0",
+            entry_point="kinder.envs.dynamic3d.envs:TidyBot3DEnv",
+            kwargs={
+                "task_config_path": str(task_path),
+                "scene_render_camera": "task_view",
+                "config": TidyBot3DConfig(use_arm_velocities=True),
+            },
+        ),
         render_mode="rgb_array",
-        task_config_path=str(task_path),
     )
     sim = None
     try:
