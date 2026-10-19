@@ -1060,11 +1060,9 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             set_joints=False,
         )
         sim = self._pybullet_sim
-        non_target_obstacles = sim.get_collision_bodies(
-            held_object=sim._cubes[
-                cube_to_pick_up.name
-            ]  # pylint: disable=protected-access
-        )
+        # pylint: disable-next=protected-access
+        target_cube = sim._cubes[cube_to_pick_up.name]
+        non_target_obstacles = sim.get_collision_bodies(held_object=target_cube)
 
         def has_grasp_clearance(joints: JointPositions) -> bool:
             return not check_collisions_with_held_object(
