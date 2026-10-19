@@ -50,6 +50,7 @@ from kinder_models.dynamic3d.tossing.toss_swing import (
 from kinder_models.dynamic3d.utils import (
     _CONTROL_TIMESTEP,
     GRASP_CLOSE_THRESHOLD,
+    MINIMUM_HOLDING_HEIGHT,
     MOVE_TO_TARGET_DISTANCE_BOUNDS,
     PyBulletSim,
     _trapezoidal_motion_profile,
@@ -1908,17 +1909,21 @@ def test_move_to_toss_location_and_toss_plans_every_phase_in_reset():
     """As pick_shelf does: a planning failure surfaces from reset rather than from the
     middle of a throw, where a refiner would see a crash instead of a rejected
     sample."""
-    num_cubes = 1
-    env = kinder.make(
-        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
-    )
-    obs, _ = env.reset(seed=125)
-    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
-    state = env.observation_space.devectorize(obs)
-    controllers = create_lifted_controllers(env.action_space)
-    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    # Toss from a state the robot really reaches: holding the cube after a pick. The
+    # planner carries the cube at its observed grasp, so planning from the reset state
+    # (cube still on the floor) would swing it through the now-fixed barrier.
+    env, state, robot, pick = _ground_pick_cube_on_seed_125()
+    for _ in range(1000):
+        obs, _, _, _, _ = env.step(pick.step())
+        state = env.observation_space.devectorize(obs)
+        pick.observe(state)
+        if pick.terminated():
+            break
     cube = state.get_object_from_name("cube_0")
     barrier = state.get_object_from_name("cuboid_barrier")
+    assert pick.terminated()
+    assert state.get(cube, "z") > MINIMUM_HOLDING_HEIGHT
+    controllers = create_lifted_controllers(env.action_space)
     controller = controllers["move_to_toss_location_and_toss"].ground(
         (robot, cube, barrier)
     )
