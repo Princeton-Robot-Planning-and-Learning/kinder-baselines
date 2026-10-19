@@ -1772,6 +1772,14 @@ def test_pick_cube_never_unwinds_a_joint_by_a_whole_turn():
     env.close()
 
 
+# Both states were recorded before KINDER's Tossing3D room walls collided (#198). The
+# bin, and in the second state the cube, sat beyond the rear chamfer (x + y < -3.5),
+# where the room can no longer hold them, so the configuration is translated by
+# (+0.45, +0.45) m into the room. Relative robot/cube/bin geometry is unchanged. The
+# second state, a cube on its side 3.8 cm from the bin wall, needs the tilted grasps.
+_ROOM_SHIFT = 0.45
+
+
 @pytest.mark.parametrize(
     ("robot_values", "cube_values", "bin_xyz"),
     [
@@ -1779,7 +1787,15 @@ def test_pick_cube_never_unwinds_a_joint_by_a_whole_turn():
             (-0.0279723, 0.0288277, -0.0777655, 0.0, -0.3490659, 3.1415927,
              -2.5481806, 0.0, -0.8726646, 1.5707963, 0.0),
             (0.5677592, -0.2490022, 0.0200937, 0.9788500, 0.0, 0.0, 0.2045794),
-            (-2.0916207, -1.9016471, -0.0003950),
+            (-2.0916207 + _ROOM_SHIFT, -1.9016471 + _ROOM_SHIFT, -0.0003950),
+        ),
+        (
+            (-0.6984256 + _ROOM_SHIFT, -1.8892152 + _ROOM_SHIFT, 3.1501957,
+             0.0016308, -0.3307114, 3.1403164, -2.5350375, -0.0017452,
+             -0.8825281, 1.5725152, 0.0),
+            (-1.8790059 + _ROOM_SHIFT, -1.9021316 + _ROOM_SHIFT, 0.0248922,
+             0.0007560, 0.7071064, -0.0007560, 0.7071064),
+            (-2.0916207 + _ROOM_SHIFT, -1.9016471 + _ROOM_SHIFT, -0.0001078),
         ),
     ],
 )
