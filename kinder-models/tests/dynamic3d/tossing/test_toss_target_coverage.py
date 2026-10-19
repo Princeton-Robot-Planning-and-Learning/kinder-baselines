@@ -6,6 +6,7 @@ These tests establish reachable release poses, not successful ballistic throws.
 import kinder
 import numpy as np
 import pytest
+from relational_structs.spaces import ObjectCentricBoxSpace
 
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     MoveToTossLocationAndTossController,
@@ -26,6 +27,7 @@ def test_sample_domain_contains_reachable_far_side_release_pose(*, seed: int) ->
     env = kinder.make("kinder/Tossing3D-o1-v0", allow_state_access=True)
     try:
         obs, _ = env.reset(seed=seed)
+        assert isinstance(env.observation_space, ObjectCentricBoxSpace)
         state = env.observation_space.devectorize(obs)
         bin_object = state.get_object_from_name("bin_0")
         bin_pose = get_overhead_object_se2_pose(state, bin_object)
@@ -45,4 +47,4 @@ def test_sample_domain_contains_reachable_far_side_release_pose(*, seed: int) ->
         assert plan is not None, (seed, bin_pose, distance, target)
         np.testing.assert_allclose(plan[-1].t, target.t, atol=1e-6)
     finally:
-        env.close()
+        env.close()  # type: ignore[no-untyped-call]
