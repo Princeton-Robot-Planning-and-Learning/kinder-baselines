@@ -1,14 +1,18 @@
 """Select tight cells on the furnished production sampler's feasible-bin boundary."""
 
+# This script reads the scene's placement internals directly.
+# pylint: disable=protected-access
+
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 import kinder
 import numpy as np
 from kinder.envs.dynamic3d.envs import _object_world_axis_aligned_bbox
-from shapely import Polygon, box, union_all
-from shapely.geometry import mapping
+from shapely import Polygon, box, union_all  # type: ignore[import-untyped]
+from shapely.geometry import mapping  # type: ignore[import-untyped]
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--regions", type=Path, required=True)
@@ -20,7 +24,7 @@ if args.output.exists() or args.output.with_suffix(".polygons.json").exists():
 kinder.register_all_environments()
 env = kinder.make("kinder/Tossing3D-o1-v0", allow_state_access=True, scene_bg=True)
 env.reset(seed=args.seed)
-scene = env.unwrapped._object_centric_env
+scene: Any = env.unwrapped._object_centric_env  # type: ignore[attr-defined]
 bin_geometry = scene.get_object("bin_0")
 assert np.allclose(
     [bin_geometry.length, bin_geometry.width, bin_geometry.height], [0.3, 0.3, 0.2]
@@ -86,4 +90,4 @@ for family, region in regions.items():
 args.output.write_text(json.dumps(cells, indent=2))
 args.output.with_suffix(".polygons.json").write_text(json.dumps(polygons, indent=2))
 print({family: sum(k.startswith(family) for k in cells) for family in regions})
-env.close()
+env.close()  # type: ignore[no-untyped-call]
