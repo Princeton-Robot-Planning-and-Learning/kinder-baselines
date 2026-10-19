@@ -14,12 +14,14 @@ from generate_topological_order import get_topological_order
 # kindergarden would break every package that depends on that package), so
 # the git pin lives here instead of in the pyprojects.
 #
-# kindergarden: pinned to the merge of #173 (explicit board heights,
-# per-cylinder radii, staging boxes for the real restock scene), not yet in
-# a PyPI release. Remove at the next kindergarden release.
+# kindergarden: pinned to 0dac89e, the tip of the kindergarden stack this builds on
+# (#211 -> #203 gripper-object contacts -> #197 reset regions -> #204 static planning
+# colliders -> #205 bin stiffness -> #207 -> #214), kept reachable by the
+# keep-alive/0dac89e branch. Move to a merge commit once that stack lands, and remove
+# at the next kindergarden release.
 PREINSTALL_REQUIREMENTS = [
     "kindergarden @ git+https://github.com/Princeton-Robot-Planning-and-Learning/"
-    "kindergarden.git@582aaeb6fd96d1d9a56b4cf02d0061b8e6ce6df5",
+    "kindergarden.git@0dac89eb57aceab4f655b108411be5efefb466c1",
 ]
 
 
