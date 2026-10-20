@@ -26,6 +26,7 @@ from spatialmath import SE2
 
 from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
+    GRIPPER_ACTION_INDEX,
     MoveToTossLocationAndTossController,
     PickCubeController,
     create_lifted_controllers,
@@ -1796,6 +1797,42 @@ def test_move_to_toss_location_and_toss_samples_four_parameters():
     env.close()
 
 
+@pytest.mark.parametrize("use_arm_velocities", [False, True])
+def test_pick_cube_sizes_its_actions_to_the_declared_action_space(use_arm_velocities):
+    """The pick is shared with environments that declare the 11-D TidyBot action (the
+    shelf scenes) and Tossing3D, which declares 18-D: it must emit the declared shape,
+    with zero velocity targets and the gripper at KINDER's index 10."""
+    action_space = TidyBot3DRobotActionSpace(use_arm_velocities)
+    env, state, robot, _ = _ground_pick_cube_on_seed_125()
+    cube = state.get_object_from_name("cube_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    sim = _create_bin_aware_sim(state, scene)
+    pick = create_lifted_controllers(action_space, state, pybullet_sim=sim)[
+        "pick_cube"
+    ].ground((robot, cube, barrier))
+    pick.reset(state, None)
+    action = pick.step()
+    assert action.shape == action_space.shape
+    assert np.all(action[GRIPPER_ACTION_INDEX + 1 :] == 0)
+    env.close()
+
+
+def test_pick_cube_built_directly_emits_the_11d_action():
+    """Built without an action space, as the shelf skills build it, the pick emits
+    KINDER's base 11-D action."""
+    env, state, robot, _ = _ground_pick_cube_on_seed_125()
+    cube = state.get_object_from_name("cube_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    pick = PickCubeController(
+        [robot, cube, barrier], pybullet_sim=_create_bin_aware_sim(state, scene)
+    )
+    pick.reset(state, None)
+    assert pick.step().shape == (11,)
+    env.close()
+
+
 def test_open_gripper_commands_open_until_the_gripper_reads_open():
     """The controller predates this branch and had no test of its own."""
     num_cubes = 1
@@ -1814,8 +1851,8 @@ def test_open_gripper_commands_open_until_the_gripper_reads_open():
     controller.reset(shut)
     assert not controller.terminated()
     action = controller.step()
-    assert action.shape == (11,)
-    assert action[-1] == 0
+    assert action.shape == env.action_space.shape
+    assert action[GRIPPER_ACTION_INDEX] == 0
 
     opened = state.copy()
     opened.set(robot, "pos_gripper", 0.0)
@@ -1845,7 +1882,7 @@ def test_no_op_controller_terminates_immediately_and_holds_the_gripper_command()
     controller.reset(open_gripper)
     assert controller.terminated()
     action = controller.step()
-    assert action.shape == (11,)
+    assert action.shape == env.action_space.shape
     assert np.all(action == 0)
 
     closed_gripper = state.copy()
@@ -1853,8 +1890,8 @@ def test_no_op_controller_terminates_immediately_and_holds_the_gripper_command()
     controller.reset(closed_gripper)
     assert controller.terminated()
     action = controller.step()
-    assert action[:-1].tolist() == [0.0] * (action.shape[0] - 1)
-    assert action[-1] == GRASP_CLOSE_THRESHOLD
+    assert np.all(np.delete(action, GRIPPER_ACTION_INDEX) == 0)
+    assert action[GRIPPER_ACTION_INDEX] == GRASP_CLOSE_THRESHOLD
     env.close()
 
 

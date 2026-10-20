@@ -2,7 +2,7 @@
 
 import enum
 import logging
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 from bilevel_planning.structs import (
@@ -93,6 +93,16 @@ ARM_SETTLE_TOLERANCE = 5e-3
 # waypoints: handing off to the gripper at 4e-2 leaves the grasp ~2.8cm off the cube.
 ARM_FINAL_CONF_TOLERANCE = 5e-3
 
+# KINDER's TidyBot action layout: base (3), arm joint deltas (7), the gripper command at
+# index 10, then, in action spaces that declare them (Tossing3D's), arm joint velocity
+# targets (7). Position-only commands take the declared size, ACTION_DIM, which
+# create_lifted_controllers sets from the env's action space; built directly, a
+# controller emits the base 11-D action. Zero velocity targets are exactly the robot's
+# 11-D damping mode. Commands that carry velocity targets are always 18-D.
+GRIPPER_ACTION_INDEX = 10
+POSITION_ACTION_DIM = 11
+VELOCITY_ACTION_DIM = 18
+
 
 class MoveToTargetGroundController(
     GroundParameterizedController[ObjectCentricState, Array]
@@ -113,6 +123,8 @@ class MoveToTargetGroundController(
     continuous parameters. Note that the robot will always be facing directly towards
     the target object.
     """
+
+    ACTION_DIM: ClassVar[int] = POSITION_ACTION_DIM
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -175,11 +187,11 @@ class MoveToTargetGroundController(
         dx = next_pose.x - robot_pose.x
         dy = next_pose.y - robot_pose.y
         drot = get_signed_angle_distance(next_pose.theta(), robot_pose.theta())
-        action = np.zeros(11, dtype=np.float32)
+        action = np.zeros(self.ACTION_DIM, dtype=np.float32)
         action[0] = dx
         action[1] = dy
         action[2] = drot
-        action[-1] = self._get_current_robot_gripper_pose()
+        action[GRIPPER_ACTION_INDEX] = self._get_current_robot_gripper_pose()
         return action
 
     def observe(self, x: ObjectCentricState) -> None:
@@ -232,6 +244,8 @@ class MoveArmToConfController(GroundParameterizedController[ObjectCentricState, 
 
     The controller uses motion planning in pybullet.
     """
+
+    ACTION_DIM: ClassVar[int] = POSITION_ACTION_DIM
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -329,7 +343,7 @@ class MoveArmToConfController(GroundParameterizedController[ObjectCentricState, 
 
     def step(self) -> Array:
         gripper_pose = self._get_current_robot_gripper_pose()
-        action = np.zeros(18, dtype=np.float32)
+        action = np.zeros(VELOCITY_ACTION_DIM, dtype=np.float32)
 
         idx = min(self._step_idx, len(self._trajectory) - 1)
         s = float(self._trajectory[idx])
@@ -397,6 +411,8 @@ class TossController(GroundParameterizedController[ObjectCentricState, Array]):
 
     The controller uses motion planning in pybullet.
     """
+
+    ACTION_DIM: ClassVar[int] = POSITION_ACTION_DIM
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -534,6 +550,8 @@ class MoveArmToEndEffectorController(
     The controller uses motion planning in pybullet.
     """
 
+    ACTION_DIM: ClassVar[int] = POSITION_ACTION_DIM
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._last_state: ObjectCentricState | None = None
@@ -622,7 +640,7 @@ class MoveArmToEndEffectorController(
 
     def step(self) -> Array:
         gripper_pose = self._get_current_robot_gripper_pose()
-        action = np.zeros(18, dtype=np.float32)
+        action = np.zeros(VELOCITY_ACTION_DIM, dtype=np.float32)
 
         idx = min(self._step_idx, len(self._trajectory) - 1)
         s = float(self._trajectory[idx])
@@ -683,6 +701,8 @@ class CloseGripperController(GroundParameterizedController[ObjectCentricState, A
         robot: The robot itself.
     """
 
+    ACTION_DIM: ClassVar[int] = POSITION_ACTION_DIM
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._last_state: ObjectCentricState | None = None
@@ -702,8 +722,8 @@ class CloseGripperController(GroundParameterizedController[ObjectCentricState, A
 
     def step(self) -> Array:
         self.last_gripper_state = self._get_current_gripper_pose()
-        action = np.zeros(11, dtype=np.float32)
-        action[-1] = 1
+        action = np.zeros(self.ACTION_DIM, dtype=np.float32)
+        action[GRIPPER_ACTION_INDEX] = 1
         return action
 
     def observe(self, x: ObjectCentricState) -> None:
@@ -730,6 +750,8 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
         robot: The robot itself.
     """
 
+    ACTION_DIM: ClassVar[int] = POSITION_ACTION_DIM
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._last_state: ObjectCentricState | None = None
@@ -749,8 +771,8 @@ class OpenGripperController(GroundParameterizedController[ObjectCentricState, Ar
 
     def step(self) -> Array:
         self.last_gripper_state = self._get_current_gripper_pose()
-        action = np.zeros(11, dtype=np.float32)
-        action[-1] = 0
+        action = np.zeros(self.ACTION_DIM, dtype=np.float32)
+        action[GRIPPER_ACTION_INDEX] = 0
         return action
 
     def observe(self, x: ObjectCentricState) -> None:
@@ -781,6 +803,8 @@ class NoOpController(GroundParameterizedController[ObjectCentricState, Array]):
     currently holding something.
     """
 
+    ACTION_DIM: ClassVar[int] = POSITION_ACTION_DIM
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._last_state: ObjectCentricState | None = None
@@ -797,8 +821,8 @@ class NoOpController(GroundParameterizedController[ObjectCentricState, Array]):
         return True
 
     def step(self) -> Array:
-        action = np.zeros(11, dtype=np.float32)
-        action[-1] = self._get_current_gripper_pose()
+        action = np.zeros(self.ACTION_DIM, dtype=np.float32)
+        action[GRIPPER_ACTION_INDEX] = self._get_current_gripper_pose()
         return action
 
     def observe(self, x: ObjectCentricState) -> None:
@@ -814,6 +838,8 @@ class NoOpController(GroundParameterizedController[ObjectCentricState, Array]):
 
 class PickCubeController(GroundParameterizedController[ObjectCentricState, Array]):
     """Plan and execute cube pickup from the floor or a registered bin."""
+
+    ACTION_DIM: ClassVar[int] = POSITION_ACTION_DIM
 
     TARGET_DISTANCE = 0.55
     TARGET_ROTATION = 0.0
@@ -1195,8 +1221,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         if self._robot_gripper_is_open():
             self.current_phase = self.PickCubeControllerPhase.BASE_MOTION
             return self._step_base_motion()
-        action = np.zeros(11, dtype=np.float32)
-        action[-1] = 0
+        action = np.zeros(self.ACTION_DIM, dtype=np.float32)
+        action[GRIPPER_ACTION_INDEX] = 0
         return action
 
     def _step_base_motion(self) -> Array:
@@ -1222,11 +1248,11 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         dx = next_pose.x - robot_pose.x
         dy = next_pose.y - robot_pose.y
         drot = get_signed_angle_distance(next_pose.theta(), robot_pose.theta())
-        action = np.zeros(11, dtype=np.float32)
+        action = np.zeros(self.ACTION_DIM, dtype=np.float32)
         action[0] = dx
         action[1] = dy
         action[2] = drot
-        action[-1] = self._get_current_robot_gripper_pose()
+        action[GRIPPER_ACTION_INDEX] = self._get_current_robot_gripper_pose()
         return action
 
     def _step_trajectory_phase(
@@ -1247,7 +1273,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         kp = 2.0
         curr = np.array(self._get_current_robot_arm_conf()[:7])
         target = np.array(target_waypoint[:7])
-        action = np.zeros(11, dtype=np.float32)
+        action = np.zeros(self.ACTION_DIM, dtype=np.float32)
         # Wrapped, so a continuous joint sitting a whole turn from the waypoint's
         # representative is commanded to stay put rather than to unwind to it. The
         # plans are chained by their own endpoints (see reset), so this should never
@@ -1255,7 +1281,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         # through the scene, and _robot_is_close_to_conf compares wrapped and so
         # cannot see it.
         action[3:10] = kp * wrap_arm_joint_difference(target - curr)
-        action[-1] = self._get_current_robot_gripper_pose()
+        action[GRIPPER_ACTION_INDEX] = self._get_current_robot_gripper_pose()
         if idx >= len(plan) - 1 and self._robot_is_close_to_conf(target_waypoint):
             if phase == self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE:
                 # Reset objects may still be falling when reset() plans the approach.
@@ -1294,8 +1320,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         ):
             self._closed_gripper = True
             self.current_phase = self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME
-        action = np.zeros(11, dtype=np.float32)
-        action[-1] = 1
+        action = np.zeros(self.ACTION_DIM, dtype=np.float32)
+        action[GRIPPER_ACTION_INDEX] = 1
         self._last_gripper_state = self._get_current_robot_gripper_pose()
         return action
 
@@ -1423,6 +1449,8 @@ class MoveToTossLocationAndTossController(
     the windup, then the swing. The swing is planned at the windup's end rather than
     in reset, because it has to start from the arm conf actually reached.
     """
+
+    ACTION_DIM: ClassVar[int] = POSITION_ACTION_DIM
 
     class MoveToTossLocationAndTossControllerPhase(enum.Enum):
         """Which leg of drive-then-throw step() is currently stepping."""
@@ -1663,15 +1691,15 @@ class MoveToTossLocationAndTossController(
             self._phase = self.MoveToTossLocationAndTossControllerPhase.WINDUP
         robot_pose = self._get_current_robot_pose()
         next_pose = self._current_base_motion_plan[0]
-        action = np.zeros(11, dtype=np.float32)
+        action = np.zeros(self.ACTION_DIM, dtype=np.float32)
         action[0] = next_pose.x - robot_pose.x
         action[1] = next_pose.y - robot_pose.y
         action[2] = get_signed_angle_distance(next_pose.theta(), robot_pose.theta())
-        action[-1] = self._get_current_robot_gripper_pose()
+        action[GRIPPER_ACTION_INDEX] = self._get_current_robot_gripper_pose()
         return action
 
     def _action_windup(self) -> Array:
-        action = np.zeros(18, dtype=np.float32)
+        action = np.zeros(VELOCITY_ACTION_DIM, dtype=np.float32)
         idx = min(self._windup_step_idx, len(self._windup_trajectory) - 1)
         s = float(self._windup_trajectory[idx])
         if idx > 0:
@@ -1720,7 +1748,7 @@ class MoveToTossLocationAndTossController(
         kp = 2.0
         curr = np.array(self._get_current_robot_arm_conf()[:7])
         target = self._return_home_arm_config[:7]
-        action = np.zeros(18, dtype=np.float32)
+        action = np.zeros(self.ACTION_DIM, dtype=np.float32)
         action[3:10] = kp * wrap_arm_joint_difference(target - curr)
         action[10] = self._get_current_robot_gripper_pose()
         return action
@@ -1760,7 +1788,11 @@ def create_lifted_controllers(
     pybullet_sim: PyBulletSim | None = None,
 ) -> dict[str, LiftedParameterizedController]:
     """Create lifted parameterized controllers for the TidyBot3D ground environment."""
-    del action_space
+    action_dim = int(action_space.shape[0])
+
+    def sized(cls: type[GroundParameterizedController]) -> type:
+        """`cls`, emitting the declared action size."""
+        return type(cls.__name__, (cls,), {"ACTION_DIM": action_dim})
 
     # Controllers.
 
@@ -1770,7 +1802,7 @@ def create_lifted_controllers(
     LiftedMoveToTargetController: LiftedParameterizedController = (
         LiftedParameterizedController(
             [robot, target],
-            MoveToTargetGroundController,
+            sized(MoveToTargetGroundController),
         )
     )
 
@@ -1781,7 +1813,7 @@ def create_lifted_controllers(
     LiftedMoveToTargetFromOtherTargetController: LiftedParameterizedController = (
         LiftedParameterizedController(
             [robot, target, prev_target],
-            MoveToTargetGroundController,
+            sized(MoveToTargetGroundController),
         )
     )
 
@@ -1791,7 +1823,7 @@ def create_lifted_controllers(
     LiftedMoveArmToConfController: LiftedParameterizedController = (
         LiftedParameterizedController(
             [robot],
-            MoveArmToConfController,
+            sized(MoveArmToConfController),
         )
     )
 
@@ -1800,7 +1832,7 @@ def create_lifted_controllers(
 
     LiftedTossController: LiftedParameterizedController = LiftedParameterizedController(
         [robot],
-        TossController,
+        sized(TossController),
     )
 
     # Move arm to end effector controller.
@@ -1809,7 +1841,7 @@ def create_lifted_controllers(
     LiftedMoveArmToEndEffectorController: LiftedParameterizedController = (
         LiftedParameterizedController(
             [robot],
-            MoveArmToEndEffectorController,
+            sized(MoveArmToEndEffectorController),
         )
     )
 
@@ -1819,7 +1851,7 @@ def create_lifted_controllers(
     LiftedCloseGripperController: LiftedParameterizedController = (
         LiftedParameterizedController(
             [robot],
-            CloseGripperController,
+            sized(CloseGripperController),
         )
     )
 
@@ -1829,7 +1861,7 @@ def create_lifted_controllers(
     LiftedOpenGripperController: LiftedParameterizedController = (
         LiftedParameterizedController(
             [robot],
-            OpenGripperController,
+            sized(OpenGripperController),
         )
     )
 
@@ -1838,7 +1870,7 @@ def create_lifted_controllers(
 
     LiftedNoOpController: LiftedParameterizedController = LiftedParameterizedController(
         [robot],
-        NoOpController,
+        sized(NoOpController),
     )
 
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
@@ -1847,6 +1879,8 @@ def create_lifted_controllers(
 
     class PickCube(PickCubeController):
         """Inject the shared simulator and remaining movable collision context."""
+
+        ACTION_DIM = action_dim
 
         def __init__(self, objects):
             grounded_objects = list(objects)
@@ -1875,6 +1909,8 @@ def create_lifted_controllers(
 
     class MoveToTossLocationAndToss(MoveToTossLocationAndTossController):
         """Composed move-and-toss with pre-configured PyBullet sim."""
+
+        ACTION_DIM = action_dim
 
         def __init__(self, objects):
             super().__init__(objects, pybullet_sim=pybullet_sim)
