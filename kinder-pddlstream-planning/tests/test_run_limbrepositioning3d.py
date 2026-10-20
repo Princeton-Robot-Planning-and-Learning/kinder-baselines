@@ -398,9 +398,11 @@ def test_mpc_rollouts_leave_the_live_simulator_alone(limb_env):
                 for _ in range(12):
                     advance_corrected(sim, torque)
                 actual = capture_state(sim)
+                # The contact solver's own noise, as in the restore round-trip test;
+                # a rollout leaking into the live world moves the limb by ~1e-3.
                 for field in fields:
                     assert np.allclose(
-                        getattr(actual, field), getattr(expected, field), atol=1e-9
+                        getattr(actual, field), getattr(expected, field), atol=1e-6
                     )
             # pylint: disable-next=protected-access
             rollout_client = mpc._rollout_sim.physics_client_id
