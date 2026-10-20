@@ -121,6 +121,8 @@ class GroundPickController(Kinematic2dRobotController):
         return waypoint_plan + plan_suffix
 
 
+# An intermediate base: subclasses supply the remaining abstract methods.
+# pylint: disable-next=abstract-method
 class _GroundPlaceController(Kinematic2dRobotController):
     """Controller for placing a held block.
 

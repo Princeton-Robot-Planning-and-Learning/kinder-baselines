@@ -36,6 +36,8 @@ GRIPPER_OPEN_THRESHOLD = 0.01
 HOME_JOINT_POSITIONS = np.deg2rad([0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0])
 
 
+# An intermediate base: subclasses supply the remaining abstract methods.
+# pylint: disable-next=abstract-method
 class BasePlaceController(
     GroundParameterizedController[ObjectCentricState, np.ndarray]
 ):

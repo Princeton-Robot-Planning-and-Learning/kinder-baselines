@@ -16,6 +16,9 @@ RewardFn = Callable[
 ]
 
 
+# render_state is inherited as-is; pylint 4.1 reads its NotImplementedError
+# body as abstract.
+# pylint: disable-next=abstract-method
 class SafeKinderTrajOptProblem(KinderTrajOptProblem):
     """TrajOpt wrapper for reward-grounded planning.
 
