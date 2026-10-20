@@ -39,6 +39,7 @@ from kinder_pddlstream_planning.limbrepositioning3d.stream import (
     sample_grasp,
 )
 from kinder_pddlstream_planning.limbrepositioning3d.utils import (
+    _gravity_torque,
     advance_corrected,
     arm_in_collision,
     base_in_collision,
@@ -694,6 +695,42 @@ def test_holding_the_limb_still_costs_the_person_nothing_extra(limb_env):
         assert np.abs(human.robot).max() < 1e-2, "the robot adds nothing while holding"
     finally:
         reset_to_start(ctx)
+
+
+def test_gravity_torque_holds_a_limb_on_a_tilted_base():
+    """The gravity torque holds the limb still even when its base is not upright.
+
+    PyBullet's inverse dynamics assumes an upright base, so world gravity alone leaves a
+    tilted limb (a person lying in bed) sagging under its own estimate.
+    """
+    sim = create_env(VARIANT)
+    try:
+        sim.reset(seed=0)
+        release_grasp(sim)
+        limb, client = sim.limb, sim.physics_client_id
+        position, _ = p.getBasePositionAndOrientation(
+            limb.robot_id, physicsClientId=client
+        )
+        p.resetBasePositionAndOrientation(
+            limb.robot_id,
+            position,
+            p.getQuaternionFromEuler((np.pi / 2, 0.0, 0.0)),
+            physicsClientId=client,
+        )
+        limb.set_joints(
+            list(limb.get_joint_positions()), joint_velocities=[0.0] * NUM_LIMB_JOINTS
+        )
+        p.setJointMotorControlArray(
+            limb.robot_id,
+            sorted(limb.arm_joints),
+            p.TORQUE_CONTROL,
+            forces=list(_gravity_torque(sim, limb)),
+            physicsClientId=client,
+        )
+        p.stepSimulation(physicsClientId=client)
+        assert np.abs(limb.get_joint_velocities()).max() < 1e-6
+    finally:
+        sim.close()
 
 
 def test_limb_motions_that_leave_the_range_of_motion_are_rejected(limb_env):
