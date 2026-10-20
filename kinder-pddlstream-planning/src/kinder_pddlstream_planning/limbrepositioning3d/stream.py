@@ -214,13 +214,13 @@ class LimbStreamContext:
         self.refresh_collision_baseline()
 
     def refresh_collision_baseline(self) -> None:
-        """Record how far the grasped limb overlaps each body it starts out touching.
+        """Record anatomical attachment overlap with the torso and other limbs.
 
         Call this only in the start state, as `reset_to_start` does.
         """
         self.resting_penetration = {
             body_id: min(0.0, pair_clearance(self.sim, self.sim.limb.robot_id, body_id))
-            for body_id in self.human_collision_ids + self.scene_collision_ids
+            for body_id in self.human_collision_ids
         }
 
     @property
@@ -259,11 +259,15 @@ class LimbStreamContext:
 
     @property
     def base_obstacle_ids(self) -> list[int]:
-        """What the mobile base must not be parked in.
+        """The entire person, including the manipulated limb, and furniture.
 
         Kept separate from `check_robot_collisions`, which governs the arm.
         """
-        return self.human_collision_ids + self.scene_collision_ids
+        return (
+            [self.sim.limb.robot_id]
+            + self.human_collision_ids
+            + self.scene_collision_ids
+        )
 
     @staticmethod
     def _within(
@@ -449,7 +453,7 @@ def plan_base_motion(
                 sim.robot,
                 q1,
                 q2,
-                collision_bodies=ctx.obstacle_ids or ctx.scene_collision_ids,
+                collision_bodies=ctx.base_obstacle_ids,
                 seed=ctx.motion_seed,
             )
     if base_plan is None:
@@ -509,7 +513,7 @@ def plan_limb_motion(
             committed = mpc.step()
             elapsed = time.time() - search_start
             ctx.profile.add("mpc_search", elapsed)
-            overloaded = saturated = False
+            overloaded = saturated = collision = False
             for index, torque in enumerate(committed):
                 control_steps += 1
                 for repeat in range(cfg.action_repeat):
@@ -520,14 +524,20 @@ def plan_limb_motion(
                     robot_torques.append(list(torque))
                     plan_seconds.append(elapsed if index == 0 and repeat == 0 else 0.0)
                     overloaded = exceeds_human_torque_limits(ctx, human_torque)
-                    if overloaded or saturated:
+                    collision = human_in_collision(ctx) or arm_in_collision(ctx)
+                    if collision:
+                        giveup = "drove the limb or robot into an obstacle"
+                    if overloaded or saturated or collision:
                         break
                     error = limb_error(ctx, sim.limb.get_joint_positions(), goal)
                     if error < threshold:
                         reached = True
                         break
-                if overloaded or saturated or reached:
+                if overloaded or saturated or collision or reached:
                     break
+            if collision:
+                reached = False
+                break
             if overloaded or saturated:
                 reached = False
                 giveup = (
@@ -540,7 +550,7 @@ def plan_limb_motion(
                 reached = False
                 giveup = "bent a joint of the limb past its anatomical limit"
                 break
-            if ctx.resting_penetration and human_in_collision(ctx):
+            if human_in_collision(ctx):
                 reached = False
                 giveup = "drove the limb into the person or the furniture"
                 break
@@ -574,6 +584,12 @@ def plan_limb_motion(
                 human_torques.append(list(human_torque.total))
                 robot_induced.append(list(human_torque.robot))
                 limb_path.append(list(sim.limb.get_joint_positions()))
+                if human_in_collision(ctx) or arm_in_collision(ctx):
+                    reached = False
+                    giveup = (
+                        "replayed open-loop into the person, furniture or robot base"
+                    )
+                    break
                 # The replay drifts from the closed-loop run, so it is checked
                 # separately, and here at every step rather than every control step.
                 if limb_out_of_limits(ctx):
@@ -597,7 +613,7 @@ def plan_limb_motion(
                 giveup = (
                     f"replayed open-loop to {replay_error:.3f}, outside the tolerance"
                 )
-            elif ctx.resting_penetration and human_in_collision(ctx):
+            elif human_in_collision(ctx):
                 reached = False
                 giveup = "replayed open-loop into the person or the furniture"
 
@@ -840,13 +856,10 @@ class PredictiveSamplingMPC:
                 violated = True
             with self._ctx.profile.timed("mpc_collision_check"):
                 arm_hit = bool(self._obstacles) and arm_in_collision(self._ctx)
-                human_hit = bool(self._ctx.resting_penetration) and human_in_collision(
-                    self._ctx
-                )
-            if arm_hit:
+                human_hit = human_in_collision(self._ctx)
+            if arm_hit or human_hit:
                 limit_cost += cfg.collision_penalty
-            if human_hit:
-                limit_cost += cfg.collision_penalty
+                violated = True
         cost = (
             cfg.goal_reaching_weight * goal_cost
             + cfg.terminal_goal_weight * squared_distance
