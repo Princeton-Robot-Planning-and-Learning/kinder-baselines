@@ -17,12 +17,7 @@ from kinder.envs.dynamic3d.limb_utils import (
 from kinder.envs.dynamic3d.limbrepositioning3d import (
     ObjectCentricLimbRepositioning3DEnv,
 )
-from pybullet_helpers.geometry import (
-    Pose,
-    SE2Pose,
-    matrix_from_quat,
-    multiply_poses,
-)
+from pybullet_helpers.geometry import Pose, SE2Pose, matrix_from_quat, multiply_poses
 from pybullet_helpers.inverse_kinematics import (
     InverseKinematicsError,
     check_body_collisions,
@@ -134,6 +129,16 @@ DEFAULT_LIMB_JOINT_DAMPING = 0.5
 
 
 @dataclass(eq=False)
+class GraspFrame:
+    """A grasp weld's frames, kept rather than refitted to a loaded grasp."""
+
+    parent: Pose
+    child: Pose
+    max_force: float
+    erp: float
+
+
+@dataclass(eq=False)
 class CoupledState:
     """A full coupled state of the robot and limb, base pose included for the weld."""
 
@@ -143,6 +148,7 @@ class CoupledState:
     limb_positions: JointPositions
     limb_velocities: JointVelocities
     approach: ArmTrajectory | None = None
+    grasp_frame: GraspFrame | None = None
 
     def __repr__(self) -> str:
         return f"s{id(self) % 10000}"
@@ -210,9 +216,37 @@ def release_grasp(sim: ObjectCentricLimbRepositioning3DEnv) -> None:
     sim._grasp_constraint_id = None  # type: ignore[assignment]
 
 
-def engage_grasp(sim: ObjectCentricLimbRepositioning3DEnv) -> None:
+def engage_grasp(
+    sim: ObjectCentricLimbRepositioning3DEnv, frame: GraspFrame | None = None
+) -> None:
     """(Re)weld the end effector to the limb where they stand, at zero error."""
     release_grasp(sim)
+    if frame is not None:
+        constraint = p.createConstraint(
+            sim.robot.arm.robot_id,
+            sim.robot.arm.end_effector_id,
+            sim.limb.robot_id,
+            sim.limb.end_effector_id,
+            jointType=p.JOINT_FIXED,
+            jointAxis=(0.0, 0.0, 0.0),
+            parentFramePosition=frame.parent.position,
+            childFramePosition=frame.child.position,
+            parentFrameOrientation=frame.parent.orientation,
+            childFrameOrientation=frame.child.orientation,
+            physicsClientId=sim.physics_client_id,
+        )
+        p.changeConstraint(
+            constraint,
+            maxForce=frame.max_force,
+            physicsClientId=sim.physics_client_id,
+        )
+        # ERP 0 means no per-constraint override in Bullet.
+        if frame.erp > 0.0:
+            p.changeConstraint(
+                constraint, erp=frame.erp, physicsClientId=sim.physics_client_id
+            )
+        sim._grasp_constraint_id = constraint  # pylint: disable=protected-access
+        return
     sim._grasp_constraint_id = (  # pylint: disable=protected-access
         sim._create_grasp_constraint()  # pylint: disable=protected-access
     )
@@ -220,12 +254,22 @@ def engage_grasp(sim: ObjectCentricLimbRepositioning3DEnv) -> None:
 
 def capture_state(sim: ObjectCentricLimbRepositioning3DEnv) -> CoupledState:
     """Snapshot the full coupled state of the simulator."""
+    frame = None
+    if is_grasping(sim):
+        info = p.getConstraintInfo(
+            sim._grasp_constraint_id,  # pylint: disable=protected-access
+            physicsClientId=sim.physics_client_id,
+        )
+        frame = GraspFrame(
+            Pose(info[6], info[8]), Pose(info[7], info[9]), info[10], info[14]
+        )
     return CoupledState(
         base_pose=sim.robot.get_base(),
         robot_positions=list(sim.robot.arm.get_joint_positions()),
         robot_velocities=list(sim.robot.arm.get_joint_velocities()),
         limb_positions=list(sim.limb.get_joint_positions()),
         limb_velocities=list(sim.limb.get_joint_velocities()),
+        grasp_frame=frame,
     )
 
 
@@ -249,7 +293,7 @@ def restore_state(
         list(state.limb_positions), joint_velocities=list(state.limb_velocities)
     )
     if regrasp:
-        engage_grasp(sim)
+        engage_grasp(sim, state.grasp_frame)
 
 
 @contextmanager
@@ -261,6 +305,8 @@ def saved_sim_state(sim: ObjectCentricLimbRepositioning3DEnv) -> Iterator[None]:
         yield
     finally:
         if p.isConnected(physicsClientId=sim.physics_client_id):
+            if not was_grasping:
+                release_grasp(sim)
             restore_state(sim, saved, regrasp=was_grasping)
 
 
@@ -329,6 +375,9 @@ def apply_limb_joint_damping(
     damping: float = DEFAULT_LIMB_JOINT_DAMPING,
 ) -> None:
     """Give the limb's joints the damping `_prepare_torque_control` zeroes out."""
+    # Stashed for rollout clones: getJointInfo reports only URDF damping.
+    # pylint: disable-next=protected-access
+    sim._planner_limb_joint_damping = damping  # type: ignore[attr-defined]
     for joint in sim.limb.arm_joints:
         p.changeDynamics(
             sim.limb.robot_id,
@@ -336,6 +385,59 @@ def apply_limb_joint_damping(
             jointDamping=damping,
             physicsClientId=sim.physics_client_id,
         )
+
+
+def make_rollout_sim(
+    sim: ObjectCentricLimbRepositioning3DEnv,
+) -> ObjectCentricLimbRepositioning3DEnv:
+    """Create an independent physics world with the same configured dynamics."""
+    clone = ObjectCentricLimbRepositioning3DEnv(
+        variant=sim.variant, config=sim.config, use_gui=False
+    )
+    try:
+        params = p.getPhysicsEngineParameters(physicsClientId=sim.physics_client_id)
+        p.setPhysicsEngineParameter(
+            **{
+                key: params[key]
+                for key in (
+                    "fixedTimeStep",
+                    "numSubSteps",
+                    "numSolverIterations",
+                    "numNonContactInnerIterations",
+                )
+                if key in params
+            },
+            physicsClientId=clone.physics_client_id,
+        )
+        for source, target in (
+            (sim.limb, clone.limb),
+            (sim.robot.arm, clone.robot.arm),
+        ):
+            for link in range(
+                -1,
+                p.getNumJoints(source.robot_id, physicsClientId=sim.physics_client_id),
+            ):
+                info = p.getDynamicsInfo(
+                    source.robot_id, link, physicsClientId=sim.physics_client_id
+                )
+                p.changeDynamics(
+                    target.robot_id,
+                    link,
+                    mass=info[0],
+                    localInertiaDiagonal=info[2],
+                    lateralFriction=info[1],
+                    restitution=info[5],
+                    rollingFriction=info[6],
+                    spinningFriction=info[7],
+                    physicsClientId=clone.physics_client_id,
+                )
+        apply_limb_joint_damping(
+            clone, getattr(sim, "_planner_limb_joint_damping", 0.0)
+        )
+        return clone
+    except BaseException:
+        clone.close()
+        raise
 
 
 def _gravity_torque(sim: ObjectCentricLimbRepositioning3DEnv, body) -> np.ndarray:
@@ -453,6 +555,70 @@ def limb_directed_torque(
     chain."""
     error = np.asarray(goal) - np.asarray(sim.limb.get_joint_positions())
     return _robot_torque_for_limb_load(sim, gain * error)
+
+
+def inertia_feedback_torque(
+    sim: ObjectCentricLimbRepositioning3DEnv,
+    goal: np.ndarray,
+    robot_reference: np.ndarray,
+    gain: float,
+) -> np.ndarray:
+    """Damped limb acceleration control, including the reflected robot inertia."""
+    q, velocity = _limb_state(sim)
+    robot_q = list(sim.robot.arm.get_joint_positions())
+    robot_velocity = np.asarray(sim.robot.arm.get_joint_velocities()[:NUM_ROBOT_JOINTS])
+    robot_mass = np.asarray(
+        p.calculateMassMatrix(
+            sim.robot.arm.robot_id, robot_q, physicsClientId=sim.physics_client_id
+        )
+    )[:NUM_ROBOT_JOINTS, :NUM_ROBOT_JOINTS]
+    limb_mass = np.asarray(
+        p.calculateMassMatrix(
+            sim.limb.robot_id, q, physicsClientId=sim.physics_client_id
+        )
+    )
+    robot_jacobian = _tool_jacobian(sim, sim.robot.arm)[:, :NUM_ROBOT_JOINTS]
+    limb_jacobian = _tool_jacobian(sim, sim.limb)
+    transform = _base_twist_transform(sim)
+    offset = matrix_from_quat(
+        sim.robot.arm.get_base_pose().orientation
+    ).T @ np.subtract(
+        sim.limb.get_end_effector_pose().position,
+        sim.robot.arm.get_end_effector_pose().position,
+    )
+    x, y, z = offset
+    skew = np.asarray(((0.0, -z, y), (z, 0.0, -x), (-y, x, 0.0)))
+    transform[:3, 3:] = -transform[:3, :3] @ skew
+    coupled_jacobian = transform @ robot_jacobian
+    inverse_mass = np.linalg.solve(robot_mass, np.eye(NUM_ROBOT_JOINTS))
+    operational_mass = np.linalg.pinv(
+        coupled_jacobian @ inverse_mass @ coupled_jacobian.T, rcond=1e-7
+    )
+    coupling = inverse_mass @ coupled_jacobian.T @ operational_mass @ limb_jacobian
+    effective_mass = limb_mass + coupling.T @ robot_mass @ coupling
+    error = np.arctan2(np.sin(goal - q), np.cos(goal - q))
+    acceleration = gain * error - 2 * np.sqrt(gain) * np.asarray(velocity)
+    torque = _robot_torque_for_limb_load(sim, effective_mass @ acceleration)
+    nullspace = np.eye(NUM_ROBOT_JOINTS) - (
+        coupled_jacobian.T @ operational_mass @ coupled_jacobian @ inverse_mass
+    )
+    posture_error = robot_reference - np.asarray(robot_q[:NUM_ROBOT_JOINTS])
+    posture_error = np.arctan2(np.sin(posture_error), np.cos(posture_error))
+    # Inertia-scaled gains: uniform ones make light wrist joints stiff.
+    torque += nullspace @ (robot_mass @ (2 * posture_error - 4 * robot_velocity))
+    torque -= 0.5 * (robot_mass @ robot_velocity)
+    return torque
+
+
+def robot_motion_violation(ctx: LimbStreamContext) -> str:
+    """The arm's joint-limit or speed violation, or an empty string."""
+    arm = ctx.sim.robot.arm
+    if not arm.check_joint_limits(list(arm.get_joint_positions())):
+        return "robot joint limits"
+    velocity = np.asarray(arm.get_joint_velocities()[:NUM_ROBOT_JOINTS])
+    if np.abs(velocity).max() > ctx.mpc.max_robot_velocity:
+        return "robot velocity limit"
+    return ""
 
 
 def limb_hold_torque(sim: ObjectCentricLimbRepositioning3DEnv) -> np.ndarray:
