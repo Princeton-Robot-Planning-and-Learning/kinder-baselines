@@ -1814,7 +1814,7 @@ class MoveToTossLocationAndTossController(
         if profile_complete:
             # A position-only endpoint hold must not double the observed error:
             # kp=2 alternates across the target and can prevent settling forever.
-            hold = np.zeros(11, dtype=np.float32)
+            hold = np.zeros(self.ACTION_DIM, dtype=np.float32)
             hold[3:10] = error
             hold[10] = self._get_current_robot_gripper_pose()
             self._windup_step_idx += 1
