@@ -1,5 +1,6 @@
 """Base controllers for 3D geometric environments."""
 
+import abc
 from typing import Any, Sequence
 
 import numpy as np
@@ -37,7 +38,7 @@ HOME_JOINT_POSITIONS = np.deg2rad([0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0,
 
 
 class BasePlaceController(
-    GroundParameterizedController[ObjectCentricState, np.ndarray]
+    GroundParameterizedController[ObjectCentricState, np.ndarray], abc.ABC
 ):
     """Base class for place controllers with common motion planning logic."""
 
