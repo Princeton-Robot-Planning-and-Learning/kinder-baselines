@@ -14,11 +14,11 @@ from generate_topological_order import get_topological_order
 # kindergarden would break every package that depends on that package), so
 # the git pin lives here instead of in the pyprojects.
 #
-# kindergarden: pinned to the merge of #198 on main (the Tossing room geometry).
-# Remove the pin at the next kindergarden release.
+# kindergarden: pinned to the merge of #200 on main (the Tossing geometry from
+# #198 and the 18D interface from #200). Remove the pin at the next release.
 PREINSTALL_REQUIREMENTS = [
     "kindergarden @ git+https://github.com/Princeton-Robot-Planning-and-Learning/"
-    "kindergarden.git@a0fc896ffbbbeaab112f7ac270b167499903cba4",
+    "kindergarden.git@432004655d46a32c760866ddccd4baedc5b9da8c",
 ]
 
 

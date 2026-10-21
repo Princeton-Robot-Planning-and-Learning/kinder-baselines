@@ -1,0 +1,14 @@
+env_name: "tidybot3d_tossing3D"
+
+make_kwargs:
+  id: "kinder/Tossing3D-o1-v0"
+  max_episode_steps: 1000
+
+env_model_kwargs:
+  num_objects: 1
+
+# Pickup and move-and-toss each contain several motion phases.
+max_skill_horizon: 400
+max_abstract_plans: 10
+samples_per_step: 10
+planning_timeout: 120

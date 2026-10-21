@@ -4,7 +4,8 @@ Two operators over five predicates. The base move and the throw are one skill, s
 predicate has to name the pose between them; the pick takes no continuous parameters,
 so refinement backtracks over the throw alone.
 
-TODO: only Tossing3D-o1 is supported; no operator says which cube a throw is aimed at.
+Each pick and throw binds its own cube, so completed cubes remain goals while the
+robot returns for the remaining cubes.
 """
 
 # MuJoCo exposes its API through a C extension.
@@ -62,12 +63,6 @@ def create_bilevel_planning_models(
     """Create the env models for TidyBot Tossing3D."""
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, TidyBot3DRobotActionSpace)
-    if num_objects != 1:
-        raise NotImplementedError(
-            f"Tossing3D bilevel planning supports one cube, got {num_objects}. The "
-            "operators do not say which cube a throw is aimed at."
-        )
-
     task_config_path = str(
         Path(kinder.__file__).parent
         / "envs"
@@ -94,14 +89,46 @@ def create_bilevel_planning_models(
         """Convert the vectors back into (hashable) object-centric states."""
         return observation_space.devectorize(o)
 
+    robot_env = sim._robot_env  # pylint: disable=protected-access
+    assert robot_env is not None
+    model = robot_env.sim.model.mj_model
+    data = robot_env.sim.data.mj_data
+    state_spec = mujoco.mjtState.mjSTATE_INTEGRATION
+    state_size = mujoco.mj_stateSize(model, state_spec)
+
+    def snapshot() -> NDArray[np.float64]:
+        result = np.empty(state_size)
+        mujoco.mj_getState(model, data, result, state_spec)
+        return result
+
+    reset_snapshot = snapshot()
+    snapshots: dict[tuple[tuple[str, str, bytes], ...], NDArray[np.float64]] = {}
+
     def transition_fn(
         x: ObjectCentricState,
         u: NDArray[np.float32],
     ) -> ObjectCentricState:
-        """Simulate the action."""
-        state = x.copy()
-        sim.set_state(state)
+        """Simulate with complete physics state, including on search backtracking.
+
+        Object observations omit finger positions and contact solver state. Restoring
+        only those observations at every step changes the grasp and the resulting
+        throw. Preserve integration snapshots for states reached by this model.
+        """
+        key = tuple((obj.name, obj.type.name, x[obj].tobytes()) for obj in x)
+        if key not in snapshots:
+            # A new external observation starts a new planning problem. Initialize
+            # its unobserved state from reset, not a previous failed refinement.
+            snapshots.clear()
+            mujoco.mj_setState(model, data, reset_snapshot, state_spec)
+            sim.set_state(x.copy())
+            snapshots[key] = snapshot()
+        else:
+            mujoco.mj_setState(model, data, snapshots[key], state_spec)
+            mujoco.mj_forward(model, data)
         obs, _, _, _, _ = sim.step(u)
+        snapshots[
+            tuple((obj.name, obj.type.name, obs[obj].tobytes()) for obj in obs)
+        ] = snapshot()
         return obs.copy()
 
     types = {
