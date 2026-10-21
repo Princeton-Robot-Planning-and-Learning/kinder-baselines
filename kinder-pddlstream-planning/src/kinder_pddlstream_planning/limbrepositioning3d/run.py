@@ -50,7 +50,6 @@ from kinder_pddlstream_planning.limbrepositioning3d.stream import (
 from kinder_pddlstream_planning.limbrepositioning3d.utils import (
     DEFAULT_GRAVITY,
     DEFAULT_LIMB_JOINT_DAMPING,
-    DEFAULT_ROBOT_INDUCED_TORQUE_LIMIT,
     ROBOT_TORQUE_LIMITS,
     StreamProfile,
     advance_corrected,
@@ -197,7 +196,7 @@ def build_stream_context(
     check_robot_collisions: bool = True,
     filter_saturated_bases: bool = True,
     human_torque_limit: float | None = None,
-    robot_induced_torque_limit: float = DEFAULT_ROBOT_INDUCED_TORQUE_LIMIT,
+    robot_induced_torque_limit: float | None = None,
 ) -> LimbStreamContext:
     """Precompute the context every stream shares.
 

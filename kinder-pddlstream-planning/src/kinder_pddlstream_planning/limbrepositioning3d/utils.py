@@ -122,7 +122,7 @@ HUMAN_TORQUE_LIMITS = {
     "arm": 50.0,
     "leg": 100.0,
 }  # Placeholders, to be tuned to realistic human joint limits.
-DEFAULT_ROBOT_INDUCED_TORQUE_LIMIT = 25.0
+ROBOT_INDUCED_TORQUE_LIMITS = {"arm": 25.0, "leg": 50.0}
 ROBOT_TORQUE_LIMITS = (200.0, 200.0, 200.0, 200.0, 100.0, 100.0, 100.0)
 JACOBIAN_DAMPING = 0.1
 SINGULARITY_THRESHOLD = 0.02
@@ -177,6 +177,11 @@ class BestAttempt:
 def default_human_torque_limit(limb_name: str) -> float:
     """The total-torque bound for this limb: legs bear far more than arms."""
     return HUMAN_TORQUE_LIMITS["leg" if "leg" in limb_name else "arm"]
+
+
+def default_robot_induced_torque_limit(limb_name: str) -> float:
+    """The bound on the robot's share of it; a leg's own weight exceeds an arm's."""
+    return ROBOT_INDUCED_TORQUE_LIMITS["leg" if "leg" in limb_name else "arm"]
 
 
 def extend_with_fingers(joints: JointPositions) -> JointPositions:
@@ -338,15 +343,35 @@ def _gravity_torque(sim: ObjectCentricLimbRepositioning3DEnv, body) -> np.ndarra
         body.robot_id, joints, physicsClientId=sim.physics_client_id
     )
     rest = [0.0] * len(joints)
-    return np.asarray(
-        p.calculateInverseDynamics(
-            body.robot_id,
-            [state[0] for state in states],
-            rest,
-            rest,
-            physicsClientId=sim.physics_client_id,
-        )
+    return _inverse_dynamics(
+        sim, body.robot_id, [state[0] for state in states], rest, rest
     )
+
+
+def _inverse_dynamics(
+    sim: ObjectCentricLimbRepositioning3DEnv,
+    body_id: int,
+    positions: JointPositions,
+    velocities: JointVelocities,
+    accelerations: list[float],
+) -> np.ndarray:
+    """Inverse dynamics for a body whose base may be tilted.
+
+    PyBullet reads gravity as if the base were upright, so it is given in the base
+    frame.
+    """
+    client = sim.physics_client_id
+    gravity = np.asarray(sim.config.gravity, dtype=np.float64)
+    _, orientation = p.getBasePositionAndOrientation(body_id, physicsClientId=client)
+    p.setGravity(*(matrix_from_quat(orientation).T @ gravity), physicsClientId=client)
+    try:
+        return np.asarray(
+            p.calculateInverseDynamics(
+                body_id, positions, velocities, accelerations, physicsClientId=client
+            )
+        )
+    finally:
+        p.setGravity(*gravity, physicsClientId=client)
 
 
 def _tool_jacobian(sim: ObjectCentricLimbRepositioning3DEnv, body) -> np.ndarray:
@@ -478,14 +503,8 @@ def measure_human_torques(
     """The torque on each limb joint over the step just run, from inverse dynamics."""
     _, new_velocities = _limb_state(sim)
     accelerations = np.subtract(new_velocities, velocities) / sim.config.dt
-    total = np.asarray(
-        p.calculateInverseDynamics(
-            sim.limb.robot_id,
-            list(positions),
-            list(velocities),
-            list(accelerations),
-            physicsClientId=sim.physics_client_id,
-        )
+    total = _inverse_dynamics(
+        sim, sim.limb.robot_id, list(positions), list(velocities), list(accelerations)
     )
     return HumanTorques(
         total=total,
