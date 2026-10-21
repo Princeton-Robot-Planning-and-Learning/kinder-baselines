@@ -14,13 +14,11 @@ from pybullet_helpers.inverse_kinematics import (
 )
 
 from kinder_pddlstream_planning.limbrepositioning3d.run import (
-    _VARIANT_OVERRIDES,
     LIMB_NAME,
     build_stream_context,
     create_env,
     reset_to_start,
     start_base_pose,
-    variant_kwargs,
 )
 from kinder_pddlstream_planning.limbrepositioning3d.stream import (
     DEFAULT_GRASP_SLIDE,
@@ -51,6 +49,7 @@ from kinder_pddlstream_planning.limbrepositioning3d.utils import (
     limb_hold_torque,
     limb_is_controllable,
     limb_out_of_limits,
+    pair_clearance,
     release_grasp,
     restore_state,
 )
@@ -81,19 +80,6 @@ def _confs(ctx):
         LimbConf(tuple(scene.limb_init_joint_positions)),
         LimbConf(tuple(scene.limb_goal_joint_positions)),
     )
-
-
-def test_the_sweep_applies_the_per_variant_overrides():
-    """One shared setting cannot solve all sixteen, so the sweep fills in per
-    variant."""
-    # Asserted against the table rather than a fixed list, which empties as variants
-    # stop needing an override.
-    for variant, overrides in _VARIANT_OVERRIDES.items():
-        merged = variant_kwargs(variant, **dict.fromkeys(overrides, "shared"))
-        assert all(merged[name] == value for name, value in overrides.items())
-
-    # Variants the defaults already solve are passed through untouched.
-    assert variant_kwargs("isolated-right-arm", seed=0) == {"seed": 0}
 
 
 def test_start_pose_is_behind_the_variant_placement():
@@ -592,6 +578,34 @@ def test_human_collisions_are_measured_against_the_resting_overlap(leg_env):
         assert human_in_collision(ctx), "the leg is driven into the torso here"
     finally:
         reset_to_start(ctx)
+
+
+def test_the_limb_may_not_sink_into_the_furniture():
+    """Furniture gets only a small contact tolerance, not the person's collision margin.
+
+    A few millimetres into the bed is already a collision, though the same overlap
+    between two parts of the person is not.
+    """
+    sim = create_env("bed-left-leg")
+    try:
+        sim.reset(seed=0)
+        ctx = build_stream_context(sim, motion_seed=0)
+        reset_to_start(ctx)
+        assert not human_in_collision(ctx), "resting on the bed is not a collision"
+
+        client = sim.physics_client_id
+        position, orientation = p.getBasePositionAndOrientation(
+            sim.limb.robot_id, physicsClientId=client
+        )
+        lowered = (position[0], position[1], position[2] - 0.01)
+        p.resetBasePositionAndOrientation(
+            sim.limb.robot_id, lowered, orientation, physicsClientId=client
+        )
+        (bed,) = ctx.scene_collision_ids
+        assert -0.01 < pair_clearance(sim, sim.limb.robot_id, bed) < -0.002
+        assert human_in_collision(ctx), "the leg is pushed into the bed"
+    finally:
+        sim.close()
 
 
 def _trajectory(*limb_path):

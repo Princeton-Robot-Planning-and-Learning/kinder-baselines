@@ -54,8 +54,11 @@ from kinder_pddlstream_planning.limbrepositioning3d.utils import (
     StreamProfile,
     advance_corrected,
     apply_limb_joint_damping,
+    arm_in_collision,
+    base_in_collision,
     engage_grasp,
     extend_with_fingers,
+    human_in_collision,
     is_grasping,
     release_grasp,
 )
@@ -95,13 +98,9 @@ class RunResult:
     failure_reason: str = ""
 
 
-# Variants whose shipped placement the defaults cannot solve
-_VARIANT_OVERRIDES: dict[str, dict[str, Any]] = {
-    "wheelchair-left-leg": {"check_base_collisions": False},
-    "wheelchair-right-leg": {"check_base_collisions": False},
-    "bed-left-leg": {"check_base_collisions": False},
-    "bed-right-leg": {"check_base_collisions": False},
-}
+# Keep collision checks enabled for every variant. An unsafe placement is a rejected
+# candidate, rather than a reason to turn off collision checking for an entire scene.
+_VARIANT_OVERRIDES: dict[str, dict[str, Any]] = {}
 
 
 def variant_kwargs(variant: str, **kwargs: Any) -> dict[str, Any]:
@@ -184,6 +183,10 @@ def create_env(
         variant=variant, config=config, use_gui=use_gui
     )
     apply_limb_joint_damping(sim, damping=limb_joint_damping)
+    # RRT must have finite sampling bounds when a straight drive is obstructed.
+    home = sim.robot.get_base()
+    sim.robot.base.pose_lower_bound = SE2Pose(home.x - 3.0, home.y - 3.0, -np.pi)
+    sim.robot.base.pose_upper_bound = SE2Pose(home.x + 3.0, home.y + 3.0, np.pi)
     return sim
 
 
@@ -349,6 +352,8 @@ def execute_plan(
             release_grasp(sim)
             for target_base in base_plan[1:]:
                 sim.robot.set_base(target_base)
+                if ctx.check_base_collisions and base_in_collision(ctx):
+                    return False
                 capture()
         elif name == "grasp":
             _, _, base_conf, arm_trajectory, _ = args
@@ -356,6 +361,8 @@ def execute_plan(
             sim.robot.set_base(base_conf)
             for waypoint in arm_trajectory.joint_plan:
                 sim.robot.arm.set_joints(list(waypoint))
+                if arm_in_collision(ctx) or human_in_collision(ctx):
+                    return False
                 capture()
 
             engage_grasp(sim)
@@ -365,6 +372,8 @@ def execute_plan(
             assert isinstance(torque_trajectory, TorqueTrajectory)
             for i, torque in enumerate(torque_trajectory.robot_torques):
                 advance_corrected(sim, torque)
+                if arm_in_collision(ctx) or human_in_collision(ctx):
+                    return False
                 if i % gif_every == 0:
                     capture()
             capture()
