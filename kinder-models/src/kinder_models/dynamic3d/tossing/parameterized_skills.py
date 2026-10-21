@@ -63,6 +63,7 @@ from kinder_models.dynamic3d.utils import (
     WORLD_Y_BOUNDS,
     PyBulletSim,
     _compute_per_joint_profile,
+    get_bounding_box,
     get_overhead_object_se2_pose,
     get_target_robot_pose_from_parameters,
     run_base_motion_planning,
@@ -894,6 +895,12 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             extend_xy_magnitude=extend_xy_magnitude,
             extend_rot_magnitude=extend_rot_magnitude,
             disable_collision_objects=[cube_to_pick_up.name],
+            bounding_boxes=(
+                self._pybullet_sim.bounding_boxes if self._pybullet_sim else None
+            ),
+            static_obstacles=(
+                self._pybullet_sim.static_base_obstacles if self._pybullet_sim else ()
+            ),
         )
 
     def _plan_motions(
@@ -1339,24 +1346,23 @@ class MoveToTossLocationAndTossController(
         # known-good starting pose instead of wherever the release left the arm.
         RETURN_HOME = enum.auto()
 
-    # Where a throw is possible; the upper part does not score.
-    TARGET_DISTANCE_BOUNDS = (1.25, 1.45)
+    # Leave room for the physical chassis on the launch side of the fixed barrier.
+    LAUNCH_CLEARANCE_BOUNDS = (0.025, 0.055)
 
-    # Widest rotation that stays within half of WAYPOINT_TOLERANCE at max standoff.
-    MAX_TARGET_ROTATION = float(
-        np.arcsin(0.5 * WAYPOINT_TOLERANCE / TARGET_DISTANCE_BOUNDS[1])
+    # Coupled speed/release candidates for the farther simulated receiver. Faster
+    # swings need earlier release; sampling these independently wastes refinements.
+    # Every instance uses the same candidates, selected with the planner's RNG.
+    THROW_PROFILES = (
+        (190.0, 680.0),
+        (220.0, 590.0),
+        (230.0, 590.0),
+        (250.0, 550.0),
+        (280.0, 550.0),
+        (320.0, 520.0),
+        (360.0, 500.0),
+        (400.0, 480.0),
     )
-    TARGET_ROTATION_BOUNDS = (-MAX_TARGET_ROTATION, MAX_TARGET_ROTATION)
-
-    # TossController's two dials, opened up as sampled parameters. Narrowed from the
-    # originally-shipped (60, TOSS_MAX_VELOCITY) / (600, 840): measured directly
-    # (toss_param_probe4.py, isolated toss draws from a real post-pick state, 480
-    # draws across 16 seeds) that every scoring draw fell in speed_deg [117.5, 140.0]
-    # and release_ms [710.4, 836.1] -- the wide bounds spent the large majority of
-    # the sampler's budget on combinations that can never score. A few degrees/ms of
-    # margin below the measured minimums, since 480 draws is not exhaustive.
-    SPEED_BOUNDS = (np.deg2rad(115.0), TOSS_MAX_VELOCITY)
-    RELEASE_MS_BOUNDS = (700.0, 840.0)
+    MAX_SWING_VELOCITY = np.deg2rad(400.0)
 
     def __init__(
         self, *args, pybullet_sim: PyBulletSim | None = None, **kwargs
@@ -1394,13 +1400,23 @@ class MoveToTossLocationAndTossController(
         )
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
-        del x  # not used
+        assert self._pybullet_sim is not None
+        robot, _, barrier = self.objects[:3]
+        barrier_width = self._pybullet_sim.bounding_boxes[barrier.name][0]
+        robot_width = get_bounding_box(x, robot)[0]
+        launch_x = x.get(barrier, "x") - (barrier_width + robot_width) / 2
+        launch_x -= rng.uniform(*self.LAUNCH_CLEARANCE_BOUNDS)
+        receiver = x.get_object_from_name("bin_0")
+        distance = x.get(receiver, "x") - launch_x
+        speed_degrees, release_ms = self.THROW_PROFILES[
+            rng.integers(len(self.THROW_PROFILES))
+        ]
         return np.array(
             [
-                rng.uniform(*self.TARGET_DISTANCE_BOUNDS),
-                rng.uniform(*self.TARGET_ROTATION_BOUNDS),
-                rng.uniform(*self.SPEED_BOUNDS),
-                rng.uniform(*self.RELEASE_MS_BOUNDS),
+                distance,
+                0.0,  # Aim along the receiver axis.
+                np.deg2rad(speed_degrees),
+                release_ms,
             ]
         )
 
@@ -1460,6 +1476,12 @@ class MoveToTossLocationAndTossController(
             extend_xy_magnitude=extend_xy_magnitude,
             extend_rot_magnitude=extend_rot_magnitude,
             disable_collision_objects=disable_collision_objects,
+            bounding_boxes=(
+                self._pybullet_sim.bounding_boxes if self._pybullet_sim else None
+            ),
+            static_obstacles=(
+                self._pybullet_sim.static_base_obstacles if self._pybullet_sim else ()
+            ),
         )
         if base_motion_plan is None:
             logger.debug(
@@ -1531,6 +1553,7 @@ class MoveToTossLocationAndTossController(
             windup_plan[-1],
             self._release_speed,
             self._gripper_release_ms,
+            max_velocity=self.MAX_SWING_VELOCITY,
         )
 
     def terminated(self) -> bool:
@@ -1747,7 +1770,7 @@ def create_lifted_controllers(
 
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     cube = Variable("?cube", MujocoMovableObjectType)
-    barrier = Variable("?barrier", MujocoMovableObjectType)
+    barrier = Variable("?barrier", MujocoObjectType)
 
     class PickCube(PickCubeController):
         """Inject the shared simulator and remaining movable collision context."""
@@ -1785,7 +1808,7 @@ def create_lifted_controllers(
 
     robot = Variable("?robot", MujocoTidyBotRobotObjectType)
     held = Variable("?held", MujocoMovableObjectType)
-    barrier = Variable("?barrier", MujocoMovableObjectType)
+    barrier = Variable("?barrier", MujocoObjectType)
 
     LiftedMoveToTossLocationAndTossController: LiftedParameterizedController = (
         LiftedParameterizedController(
