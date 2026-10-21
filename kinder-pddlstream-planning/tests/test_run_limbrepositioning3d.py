@@ -27,6 +27,7 @@ from kinder_pddlstream_planning.limbrepositioning3d.stream import (
     NUM_SAMPLED_GRASPS,
     LimbConf,
     MPCConfig,
+    NoFeasibleMotion,
     PredictiveSamplingMPC,
     TorqueTrajectory,
     check_human_joint_limits,
@@ -45,6 +46,7 @@ from kinder_pddlstream_planning.limbrepositioning3d.utils import (
     engage_grasp,
     grasp_ik,
     human_in_collision,
+    is_grasping,
     limb_directed_torque,
     limb_hold_torque,
     limb_is_controllable,
@@ -52,6 +54,7 @@ from kinder_pddlstream_planning.limbrepositioning3d.utils import (
     pair_clearance,
     release_grasp,
     restore_state,
+    saved_sim_state,
 )
 
 # A variant with no furniture, so the tests that build an environment stay fast and are
@@ -312,6 +315,117 @@ def test_state_restore_round_trips_through_the_grasp(limb_env):
     for field in ("robot_positions", "limb_positions", "limb_velocities"):
         assert np.allclose(getattr(first, field), getattr(second, field), atol=1e-6)
     reset_to_start(ctx)
+
+
+def _grasped_state(ctx):
+    """The coupled state at the end of the first planned grasp approach."""
+    init_conf, goal_conf = _confs(ctx)
+    (grasp,) = next(sample_grasp(ctx, LIMB_NAME))
+    _, _, state = next(plan_grasp_motion(ctx, LIMB_NAME, grasp, init_conf, goal_conf))
+    return state
+
+
+def test_restore_keeps_the_weld_frames_of_a_loaded_grasp(limb_env):
+    """A grasp restored under load is rewelded where it was, not refitted at rest."""
+    sim, ctx = limb_env
+    restore_state(sim, _grasped_state(ctx))
+    try:
+        for _ in range(120):
+            advance_corrected(sim, [0.2] * NUM_ROBOT_JOINTS)
+        state = capture_state(sim)
+        frame = state.grasp_frame
+        assert frame is not None
+        release_grasp(sim)
+        restore_state(sim, state)
+        restored = capture_state(sim).grasp_frame
+        assert restored is not None
+        assert restored.parent == frame.parent
+        assert restored.child == frame.child
+        assert restored.max_force == frame.max_force
+    finally:
+        reset_to_start(ctx)
+
+
+def test_leaving_a_saved_ungrasped_state_removes_a_new_weld(limb_env):
+    """A grasp made inside `saved_sim_state` does not outlive it."""
+    sim, ctx = limb_env
+    state = _grasped_state(ctx)
+    # At the grasp's own base pose, or moving the base would drop the weld anyway.
+    restore_state(sim, state)
+    release_grasp(sim)
+    try:
+        with saved_sim_state(sim):
+            restore_state(sim, state)
+            assert is_grasping(sim)
+        assert not is_grasping(sim)
+    finally:
+        reset_to_start(ctx)
+
+
+def test_mpc_rollouts_leave_the_live_simulator_alone(limb_env):
+    """Candidate search runs in a private world, so it cannot change what is executed.
+
+    The rollout world is released when the MPC is closed.
+    """
+    sim, ctx = limb_env
+    state = _grasped_state(ctx)
+    torque = [0.1] * NUM_ROBOT_JOINTS
+    restore_state(sim, state)
+    reference = []
+    for _ in range(5):
+        for _ in range(12):
+            advance_corrected(sim, torque)
+        reference.append(capture_state(sim))
+
+    fields = (
+        "robot_positions",
+        "robot_velocities",
+        "limb_positions",
+        "limb_velocities",
+    )
+    saved_mpc = ctx.mpc
+    ctx.mpc = MPCConfig(num_rollouts=4, horizon=2, num_control_points=2)
+    restore_state(sim, state)
+    goal = np.asarray(sim.config.scene.limb_goal_joint_positions)
+    try:
+        with PredictiveSamplingMPC(ctx, goal, state) as mpc:
+            for expected in reference:
+                before = capture_state(sim)
+                mpc.step()  # The recommendation is ignored; the same torque is run.
+                after = capture_state(sim)
+                for field in fields:
+                    assert getattr(before, field) == getattr(after, field)
+                for _ in range(12):
+                    advance_corrected(sim, torque)
+                actual = capture_state(sim)
+                # The contact solver's own noise, as in the restore round-trip test;
+                # a rollout leaking into the live world moves the limb by ~1e-3.
+                for field in fields:
+                    assert np.allclose(
+                        getattr(actual, field), getattr(expected, field), atol=1e-6
+                    )
+            # pylint: disable-next=protected-access
+            rollout_client = mpc._rollout_sim.physics_client_id
+        assert not p.isConnected(physicsClientId=rollout_client)
+    finally:
+        ctx.mpc = saved_mpc
+        reset_to_start(ctx)
+
+
+def test_mpc_refuses_to_commit_when_every_candidate_is_invalid(limb_env, monkeypatch):
+    """The least bad of a set of invalid candidates is still not executed."""
+    sim, ctx = limb_env
+    state = _grasped_state(ctx)
+    restore_state(sim, state)
+    goal = np.asarray(sim.config.scene.limb_goal_joint_positions)
+    try:
+        with PredictiveSamplingMPC(ctx, goal, state) as mpc:
+            monkeypatch.setattr(mpc, "_score", lambda *_args: (1, 0.0))
+            with pytest.raises(NoFeasibleMotion):
+                mpc.step()
+        assert sim.limb.get_joint_positions() == state.limb_positions
+    finally:
+        reset_to_start(ctx)
 
 
 def test_mpc_makes_progress_toward_the_goal(limb_env):
