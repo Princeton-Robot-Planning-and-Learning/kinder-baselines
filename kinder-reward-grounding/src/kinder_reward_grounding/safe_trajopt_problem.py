@@ -16,7 +16,9 @@ RewardFn = Callable[
 ]
 
 
-class SafeKinderTrajOptProblem(KinderTrajOptProblem):
+# `render_state` is left as KinderTrajOptProblem's NotImplementedError: this wrapper
+# only replaces rewards and guards invalid transitions; it adds no rendering.
+class SafeKinderTrajOptProblem(KinderTrajOptProblem):  # pylint: disable=abstract-method
     """TrajOpt wrapper for reward-grounded planning.
 
     This keeps reward-grounding-specific reward replacement and invalid dynamic

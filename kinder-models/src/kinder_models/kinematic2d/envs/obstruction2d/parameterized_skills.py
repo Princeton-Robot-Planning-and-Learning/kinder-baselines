@@ -1,5 +1,6 @@
 """Parameterized skills for the Obstruction2D environment."""
 
+import abc
 from typing import Sequence
 
 import numpy as np
@@ -121,7 +122,7 @@ class GroundPickController(Kinematic2dRobotController):
         return waypoint_plan + plan_suffix
 
 
-class _GroundPlaceController(Kinematic2dRobotController):
+class _GroundPlaceController(Kinematic2dRobotController, abc.ABC):
     """Controller for placing a held block.
 
     This controller uses waypoints rather than doing motion planning. This is just
