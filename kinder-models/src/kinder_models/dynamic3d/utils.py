@@ -53,6 +53,9 @@ _CONTROL_TIMESTEP = 0.1
 # reachable one stops earlier, at 100 candidates.
 IKFAST_MAX_ATTEMPTS = 1500
 
+# Where bin_wall_clearance's wall bodies wait between queries, out of every other one.
+_PARKED_POSITION = (0.0, 0.0, -1000.0)
+
 # Robot geometry.
 ROBOT_ARM_POSE_TO_BASE = Pose((0.12, 0.0, 0.4))
 
@@ -540,6 +543,7 @@ class PyBulletSim:
         # Create all the cubes.
         self._bins: dict[str, int] = {}
         self._bin_walls: dict[str, int] = {}
+        self._bin_poses: dict[str, Pose] = {}
         self._boxes: dict[str, int] = {}
         self._static_boxes: dict[str, int] = {}
         self._static_base_obstacles: list[Geom2D] = []
@@ -648,8 +652,9 @@ class PyBulletSim:
         )
         self._bounding_boxes[name] = (length, width, height)
         self._bins[name] = body
-        # The walls again as bodies of their own, for bin_wall_clearance only: they
-        # are never in a collision set, so planning is unchanged.
+        # The walls again as bodies of their own, for bin_wall_clearance only. They are
+        # parked far below the floor and moved into place only for that query, so no
+        # other query (a collision set, a ray test) ever sees them.
         walls = p.createCollisionShapeArray(
             shapeTypes=[p.GEOM_BOX] * 4,
             halfExtents=half_extents[1:],
@@ -659,10 +664,10 @@ class PyBulletSim:
         self._bin_walls[name] = p.createMultiBody(
             baseMass=0,
             baseCollisionShapeIndex=walls,
-            basePosition=pose.position,
-            baseOrientation=pose.orientation,
+            basePosition=_PARKED_POSITION,
             physicsClientId=self._physics_client_id,
         )
+        self._bin_poses[name] = pose
         return body
 
     @property
@@ -676,15 +681,31 @@ class PyBulletSim:
         Only the walls count: the bottom panel is where an in-bin grasp's fingertips
         are meant to reach.
         """
-        clearance = max_distance
-        for point in p.getClosestPoints(
-            self._robot.robot_id,
-            self._bin_walls[name],
-            distance=max_distance,
+        walls = self._bin_walls[name]
+        pose = self._bin_poses[name]
+        p.resetBasePositionAndOrientation(
+            walls,
+            pose.position,
+            pose.orientation,
             physicsClientId=self._physics_client_id,
-        ):
-            clearance = min(clearance, float(point[8]))
-        return clearance
+        )
+        try:
+            clearance = max_distance
+            for point in p.getClosestPoints(
+                self._robot.robot_id,
+                walls,
+                distance=max_distance,
+                physicsClientId=self._physics_client_id,
+            ):
+                clearance = min(clearance, float(point[8]))
+            return clearance
+        finally:
+            p.resetBasePositionAndOrientation(
+                walls,
+                _PARKED_POSITION,
+                (0, 0, 0, 1),
+                physicsClientId=self._physics_client_id,
+            )
 
     @property
     def bounding_boxes(self) -> dict[str, tuple[float, float, float]]:
