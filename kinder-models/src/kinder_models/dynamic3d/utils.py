@@ -172,10 +172,16 @@ def get_overhead_kinematic2ds(
     """Get a mapping from object name to Geom2D from an overhead perspective."""
     geoms: dict[str, Geom2D] = {}
     for obj in state:
-        # Compiled collision boxes supersede legacy fixture size approximations.
-        if obj.is_instance(MujocoFixtureObjectType) and any(
-            name.startswith(f"collider:{obj.name}:")
-            for name in state.get_object_names()
+        # Compiled collision boxes supersede legacy fixture size approximations,
+        # unless the planner registered this fixture's exact box (`add_box`).
+        registered = bounding_boxes is not None and obj.name in bounding_boxes
+        if (
+            not registered
+            and obj.is_instance(MujocoFixtureObjectType)
+            and any(
+                name.startswith(f"collider:{obj.name}:")
+                for name in state.get_object_names()
+            )
         ):
             continue
         if obj.is_instance(MujocoTidyBotRobotObjectType):
