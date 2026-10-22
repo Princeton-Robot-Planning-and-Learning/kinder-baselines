@@ -1544,7 +1544,7 @@ def test_pick_cube_tries_the_real_robots_near_wall_grasps_in_its_order():
     outermost (0, +-5 .. +-25 deg, + before -), tilts about the closing axis (0, +-10,
     +-15, +-20), faces, and 85 mm before 70 mm. 70 mm is skipped when the cube's span
     across the closing axis plus 5 mm exceeds it (only at +-25 deg for a 5 cm cube):
-    280 candidates."""
+    280 candidates, before the oblique extension."""
     env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
     try:
         obs, _ = env.reset(seed=125)
@@ -1555,11 +1555,11 @@ def test_pick_cube_tries_the_real_robots_near_wall_grasps_in_its_order():
         controller = create_lifted_controllers(env.action_space, state)[
             "pick_cube"
         ].ground((robot, cube, barrier))
-        candidates = controller.grasp_candidates(state)
+        # The first 280; the oblique extension follows them (tested row for row below).
+        candidates = controller.grasp_candidates(state)[:280]
         faces = upright_grasp_rotations(
             tuple(state.get(cube, k) for k in ("qx", "qy", "qz", "qw"))
         )[:2]
-        assert len(candidates) == 280
         assert len({(c.yaw_quat, c.tilt, c.opening) for c in candidates}) == 280
         for c, face in zip(candidates[:2], faces, strict=True):
             assert (c.yaw_offset, c.tilt, c.opening) == (0.0, 0.0, 0.085)
@@ -2305,6 +2305,46 @@ def test_pick_cube_retrieves_from_bin_after_toss(tmp_path):
         env.close()
         if sim is not None:
             sim.close()
+
+
+def test_pick_cube_grasp_candidates_match_the_real_robots_list_row_for_row():
+    """The real TidyBot's in-bin pick list with its oblique extension, as
+    [yaw offset deg, tilt deg, face deg, opening mm, gripper command] rows: bd85a79's
+    280 in its order, then yaw offsets to +-45 deg, tilts to +-30 deg and 80/75 mm
+    openings, appended so every grasp that worked before keeps its place. Sim and real
+    try the same grasps in the same order, so this list is the fixture, not a copy."""
+    rows = json.loads(
+        (Path(__file__).parent / "near_wall_grasp_candidates.json").read_text()
+    )
+    env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
+    try:
+        obs, _ = env.reset(seed=125)
+        state = env.observation_space.devectorize(obs)
+        robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+        cube = state.get_object_from_name("cube_0")
+        barrier = state.get_object_from_name("cuboid_barrier")
+        controller = create_lifted_controllers(env.action_space, state)[
+            "pick_cube"
+        ].ground((robot, cube, barrier))
+        faces = upright_grasp_rotations(
+            tuple(state.get(cube, k) for k in ("qx", "qy", "qz", "qw"))
+        )
+        face_deg = {faces[0]: 0, faces[1]: 90}
+        sim = [
+            [
+                round(float(np.rad2deg(c.yaw_offset))),
+                round(float(np.rad2deg(c.tilt))),
+                face_deg[c.face_quat],
+                round(c.opening * 1000),
+                round(c.gripper_command, 5),
+            ]
+            for c in controller.grasp_candidates(state)
+        ]
+        real = [[y, t, f, mm, round(cmd, 5)] for y, t, f, mm, cmd in rows]
+        assert len(sim) == len(real) == 1612
+        assert sim == real
+    finally:
+        env.close()
 
 
 def test_bin_wall_clearance_counts_walls_and_ignores_the_floor():

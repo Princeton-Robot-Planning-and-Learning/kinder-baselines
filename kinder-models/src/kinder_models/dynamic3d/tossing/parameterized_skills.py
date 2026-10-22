@@ -103,6 +103,16 @@ PICK_CUBE_GRASP_FACES = 2
 PICK_CUBE_FULL_OPENING = 0.085
 PICK_CUBE_NARROW_OPENING = 0.070
 PICK_CUBE_NARROW_OPENING_CLEARANCE = 0.005
+# The real robot's oblique extension, tried after every grasp above: yaw offsets to
+# +-45 deg and tilts to +-30 deg in 5 deg steps, and 80/75 mm openings between the two
+# above. An opening is skipped under the same span rule.
+PICK_CUBE_OBLIQUE_YAW_OFFSETS_DEGREES = (0,) + tuple(
+    sign * step for step in range(5, 50, 5) for sign in (1, -1)
+)
+PICK_CUBE_OBLIQUE_TILTS_DEGREES = (0.0,) + tuple(
+    float(sign * step) for step in range(5, 35, 5) for sign in (1, -1)
+)
+PICK_CUBE_OBLIQUE_OPENINGS = (0.085, 0.080, 0.075, 0.070)
 # No robot link may come within this of a bin's walls at the hover or the grasp. The
 # real robot checks the same margin at those two poses and at a waypoint above the rim,
 # which the simulated pick has no separate pose for: its hover is above the rim.
@@ -1397,38 +1407,60 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
 
     def grasp_candidates(self, x: ObjectCentricState) -> list[PickCubeGraspCandidate]:
         """Every grasp `reset` may try, in the order it tries them: the real TidyBot's
-        near-wall order. The two grasps used before near-wall picks first (face-aligned,
-        untilted, fully open, on each face); then yaw offset, tilt, face and opening,
-        outermost to innermost. The first that plans is used."""
+        in-bin order. The two grasps used before near-wall picks first (face-aligned,
+        untilted, fully open, on each face); then the near-wall set; then its oblique
+        extension, less any grasp already tried. Each set nests yaw offset, tilt, face
+        and opening, outermost to innermost. The first that plans is used."""
         cube = self.objects[1]
         cube_quat = tuple(x.get(cube, key) for key in ("qx", "qy", "qz", "qw"))
         width = max(x.get(cube, "bb_x"), x.get(cube, "bb_y"))
         faces = upright_grasp_rotations(cube_quat)[:PICK_CUBE_GRASP_FACES]
-        first = [
-            PickCubeGraspCandidate(face, 0.0, PICK_CUBE_FULL_OPENING) for face in faces
+
+        def nested(
+            offsets: tuple[int, ...],
+            tilts: tuple[float, ...],
+            openings: tuple[float, ...],
+        ) -> list[tuple[int, float, Quaternion, float]]:
+            out = []
+            for offset in offsets:
+                phi = float(np.deg2rad(offset))
+                span = width * (abs(np.cos(phi)) + abs(np.sin(phi)))
+                fits = [
+                    o
+                    for o in openings
+                    if o >= PICK_CUBE_FULL_OPENING
+                    or span + PICK_CUBE_NARROW_OPENING_CLEARANCE <= o
+                ]
+                for tilt in tilts:
+                    for face in faces:
+                        for opening in fits:
+                            out.append((offset, tilt, face, opening))
+            return out
+
+        keys = [(0, 0.0, face, PICK_CUBE_FULL_OPENING) for face in faces]
+        for group in (
+            nested(
+                PICK_CUBE_GRASP_YAW_OFFSETS_DEGREES,
+                PICK_CUBE_GRASP_TILTS_DEGREES,
+                (PICK_CUBE_FULL_OPENING, PICK_CUBE_NARROW_OPENING),
+            ),
+            nested(
+                PICK_CUBE_OBLIQUE_YAW_OFFSETS_DEGREES,
+                PICK_CUBE_OBLIQUE_TILTS_DEGREES,
+                PICK_CUBE_OBLIQUE_OPENINGS,
+            ),
+        ):
+            tried = set(keys)
+            keys += [key for key in group if key not in tried]
+        return [
+            PickCubeGraspCandidate(
+                face,
+                float(np.deg2rad(tilt)),
+                opening,
+                yaw_offset=float(np.deg2rad(offset)),
+            )
+            for offset, tilt, face, opening in keys
         ]
-        rest = []
-        for offset in PICK_CUBE_GRASP_YAW_OFFSETS_DEGREES:
-            phi = float(np.deg2rad(offset))
-            span = width * (abs(np.cos(phi)) + abs(np.sin(phi)))
-            openings = [PICK_CUBE_FULL_OPENING]
-            if span + PICK_CUBE_NARROW_OPENING_CLEARANCE <= PICK_CUBE_NARROW_OPENING:
-                openings.append(PICK_CUBE_NARROW_OPENING)
-            for tilt in PICK_CUBE_GRASP_TILTS_DEGREES:
-                for face in faces:
-                    for opening in openings:
-                        if (
-                            offset == 0
-                            and tilt == 0.0
-                            and opening == PICK_CUBE_FULL_OPENING
-                        ):
-                            continue  # already first
-                        rest.append(
-                            PickCubeGraspCandidate(
-                                face, float(np.deg2rad(tilt)), opening, yaw_offset=phi
-                            )
-                        )
-        return first + rest
 
     def step(self) -> Array:
         if self.current_phase == self.PickCubeControllerPhase.OPEN_GRIPPER:
