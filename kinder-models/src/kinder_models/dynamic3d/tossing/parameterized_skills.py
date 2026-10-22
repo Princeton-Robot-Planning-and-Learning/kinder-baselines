@@ -1490,7 +1490,7 @@ class MoveToTossLocationAndTossController(
 
     # Coupled speed/release candidates for the farther simulated receiver. Faster
     # swings need earlier release; sampling these independently wastes refinements.
-    # Release times align with 10 Hz actions; no sub-step schedules are emitted.
+    # These candidates sit on 10 Hz steps; the composed toss accepts any other release.
     # Every instance uses the same candidates, selected with the planner's RNG.
     THROW_PROFILES = (
         (190.0, 700.0),
@@ -1592,8 +1592,9 @@ class MoveToTossLocationAndTossController(
         self._last_state = x
         self._release_speed = float(current_params[2])
         self._gripper_release_ms = int(round(float(current_params[3])))
-        if self._gripper_release_ms % int(round(_CONTROL_TIMESTEP * 1000)) != 0:
-            raise ValueError("gripper_release_ms must align with a control step")
+        # Deliberately continuous, unlike main's 100 ms grid (#165): toss_swing opens the
+        # gripper mid-step, and callers that learn over the release time sample it
+        # continuously. The grid was a simulator choice, not a hardware limit.
         self._phase = self.MoveToTossLocationAndTossControllerPhase.BASE_MOTION
         self._windup_step_idx = 0
         self._previous_windup_arm_conf = None

@@ -24,6 +24,20 @@ def test_far_receiver_requires_extended_effort(extended: bool, seed: int) -> Non
     assert row["status"] == ("success" if extended else "toss_miss"), row
 
 
+@pytest.mark.parametrize("release_ms", [460.0, 500.0, 550.0])
+def test_a_release_between_control_steps_is_thrown(release_ms: float) -> None:
+    """The release millisecond is continuous: one between two 100 ms control steps
+    opens the gripper mid-step rather than being refused. Callers that learn over the
+    release time (hitl-pmp's practice planner samples it from [500, 850] ms) depend on
+    it; the 100 ms grid it replaces was a simulator choice, not a hardware limit."""
+    row = run_trial(
+        seed=10125, distance=2.5, speed=390.0, release_ms=release_ms, max_effort=3.0
+    )
+    assert row["pickup_holding"], row
+    assert row["toss_steps"] > 0, row
+    assert "align with a control step" not in str(row.get("error")), row
+
+
 def test_coverage_records_planning_failure_without_claiming_a_throw() -> None:
     """An obstructed target is logged as a planning failure with zero toss ticks."""
     row = run_trial(
