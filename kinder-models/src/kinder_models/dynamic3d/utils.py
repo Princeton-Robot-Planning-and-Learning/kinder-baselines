@@ -539,6 +539,7 @@ class PyBulletSim:
 
         # Create all the cubes.
         self._bins: dict[str, int] = {}
+        self._bin_walls: dict[str, int] = {}
         self._boxes: dict[str, int] = {}
         self._static_boxes: dict[str, int] = {}
         self._static_base_obstacles: list[Geom2D] = []
@@ -647,7 +648,43 @@ class PyBulletSim:
         )
         self._bounding_boxes[name] = (length, width, height)
         self._bins[name] = body
+        # The walls again as bodies of their own, for bin_wall_clearance only: they
+        # are never in a collision set, so planning is unchanged.
+        walls = p.createCollisionShapeArray(
+            shapeTypes=[p.GEOM_BOX] * 4,
+            halfExtents=half_extents[1:],
+            collisionFramePositions=positions[1:],
+            physicsClientId=self._physics_client_id,
+        )
+        self._bin_walls[name] = p.createMultiBody(
+            baseMass=0,
+            baseCollisionShapeIndex=walls,
+            basePosition=pose.position,
+            baseOrientation=pose.orientation,
+            physicsClientId=self._physics_client_id,
+        )
         return body
+
+    @property
+    def bin_names(self) -> tuple[str, ...]:
+        """The bins registered with add_bin."""
+        return tuple(self._bins)
+
+    def bin_wall_clearance(self, name: str, max_distance: float) -> float:
+        """The robot's distance to the bin's walls, capped at `max_distance`.
+
+        Only the walls count: the bottom panel is where an in-bin grasp's fingertips
+        are meant to reach.
+        """
+        clearance = max_distance
+        for point in p.getClosestPoints(
+            self._robot.robot_id,
+            self._bin_walls[name],
+            distance=max_distance,
+            physicsClientId=self._physics_client_id,
+        ):
+            clearance = min(clearance, float(point[8]))
+        return clearance
 
     @property
     def bounding_boxes(self) -> dict[str, tuple[float, float, float]]:

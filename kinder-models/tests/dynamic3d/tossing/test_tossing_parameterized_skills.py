@@ -1538,12 +1538,13 @@ def test_pick_cube_gripper_command_opens_mujoco_pads_to_the_requested_gap(openin
     assert abs(np.linalg.norm(between) - thickness - opening) < 1.5e-3
 
 
-def test_pick_cube_tries_the_untilted_grasp_first_and_tilts_in_increasing_steps():
-    """40 candidates: top-down at the nearest yaw first; then 15 and 30 degrees about the
-    closing axis, each both ways. Every grasp tries 85 mm and then the partial opening.
-    Tilted: under 6 mm of pose noise the wider hand's planned picks fail less. Untilted:
-    a partly opened first pick holds the cube differently, and the bin-retrieval toss
-    then lands it under 1 cm from a wall, where no grasp plans."""
+def test_pick_cube_tries_the_real_robots_near_wall_grasps_in_its_order():
+    """The real TidyBot's near-wall pick (prpl-tidybot bd85a79), mirrored: the two old
+    grasps first (face-aligned, untilted, 85 mm, faces 0 then 90); then yaw offsets
+    outermost (0, +-5 .. +-25 deg, + before -), tilts about the closing axis (0, +-10,
+    +-15, +-20), faces, and 85 mm before 70 mm. 70 mm is skipped when the cube's span
+    across the closing axis plus 5 mm exceeds it (only at +-25 deg for a 5 cm cube):
+    280 candidates."""
     env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
     try:
         obs, _ = env.reset(seed=125)
@@ -1555,30 +1556,24 @@ def test_pick_cube_tries_the_untilted_grasp_first_and_tilts_in_increasing_steps(
             "pick_cube"
         ].ground((robot, cube, barrier))
         candidates = controller.grasp_candidates(state)
-        partial = state.get(cube, "bb_x") + 0.02
-        yaws = upright_grasp_rotations(
+        faces = upright_grasp_rotations(
             tuple(state.get(cube, k) for k in ("qx", "qy", "qz", "qw"))
-        )
-        assert len(candidates) == 40
-        first, second = candidates[:2]
-        assert first.tilt == 0.0 and first.yaw_quat == yaws[0]
-        assert first.grasp_quat == yaws[0]
-        assert first.opening == 0.085
-        assert second.tilt == 0.0 and second.yaw_quat == yaws[0]
-        assert second.opening == pytest.approx(partial)
-        tilts = [np.rad2deg(c.tilt) for c in candidates]
-        assert [abs(t) for t in tilts] == sorted(abs(t) for t in tilts)
-        assert {round(t) for t in tilts} == {0, 15, -15, 30, -30}
-        by_tilt = {}
+        )[:2]
+        assert len(candidates) == 280
+        assert len({(c.yaw_quat, c.tilt, c.opening) for c in candidates}) == 280
+        for c, face in zip(candidates[:2], faces, strict=True):
+            assert (c.yaw_offset, c.tilt, c.opening) == (0.0, 0.0, 0.085)
+            assert c.yaw_quat == face and c.grasp_quat == face
+        offsets = [round(np.rad2deg(c.yaw_offset)) for c in candidates[2:]]
+        order = [0, 5, -5, 10, -10, 15, -15, 20, -20, 25, -25]
+        assert [o for i, o in enumerate(offsets) if i == 0 or offsets[i - 1] != o] == order
+        assert {round(np.rad2deg(c.tilt)) for c in candidates} == {
+            0, 10, -10, 15, -15, 20, -20,
+        }
         for c in candidates:
-            by_tilt.setdefault(round(np.rad2deg(c.tilt)), set()).add(
-                round(c.opening, 4)
-            )
-        for tilt in (0, 15, -15, 30, -30):
-            assert by_tilt[tilt] == {round(partial, 4), 0.085}
-        for c, d in zip(candidates[:-1], candidates[1:], strict=True):
-            if c.tilt == d.tilt and c.yaw_quat == d.yaw_quat:
-                assert c.opening > d.opening, "85 mm must come before 70 mm"
+            assert c.opening in (0.085, 0.070)
+            if c.opening == 0.070:
+                assert abs(round(np.rad2deg(c.yaw_offset))) < 25
     finally:
         env.close()
 
@@ -2310,3 +2305,48 @@ def test_pick_cube_retrieves_from_bin_after_toss(tmp_path):
         env.close()
         if sim is not None:
             sim.close()
+
+
+def test_bin_wall_clearance_counts_walls_and_ignores_the_floor():
+    """The real near-wall pick keeps every link 1 cm from a bin's inner walls at its
+    planned poses, and says nothing about the floor the fingertips reach down to."""
+    env = kinder.make("kinder/Tossing3D-o1-v0", num_objects=1)
+    obs, _ = env.reset(seed=125)
+    state = env.observation_space.devectorize(obs)
+    sim = PyBulletSim(state)
+    try:
+        ex, ey, ez = sim.robot.get_end_effector_pose().position
+        t = 0.02
+        # A 0.3 m bin whose +x inner wall face sits 5 mm beyond the end effector.
+        sim.add_bin(
+            name="near_wall",
+            pose=Pose((ex + 0.005 - (0.15 - t), ey, ez - 0.05)),
+            length=0.3,
+            width=0.3,
+            height=0.2,
+            wall_thickness=t,
+        )
+        # A 4 m bin whose floor sits 5 mm under the end effector, walls 2 m away (clear
+        # of the whole arm, which reaches back half a metre to its base).
+        sim.add_bin(
+            name="floor_below",
+            pose=Pose((ex, ey, ez - 0.005 - t)),
+            length=4.0,
+            width=4.0,
+            height=0.1,
+            wall_thickness=t,
+        )
+        sim.add_bin(
+            name="far",
+            pose=Pose((ex + 5.0, ey, 0.0)),
+            length=0.3,
+            width=0.3,
+            height=0.2,
+            wall_thickness=t,
+        )
+        assert sim.bin_wall_clearance("near_wall", max_distance=0.01) < 0.01
+        assert sim.bin_wall_clearance("floor_below", max_distance=0.01) >= 0.01
+        assert sim.bin_wall_clearance("far", max_distance=0.01) >= 0.01
+    finally:
+        sim.close()
+        env.close()

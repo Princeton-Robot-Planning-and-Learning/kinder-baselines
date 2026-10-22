@@ -88,22 +88,25 @@ PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT = Pose(
     (-0.005, 0.0, 0.03), (0.707, 0.707, 0.0, 0.0)
 )
 
-# Tilts about the gripper's closing axis tried for every cube grasp, untilted first.
-# Tilting about the closing axis keeps both pads parallel to the faces they close on,
-# and leans the wrist, camera and knuckles away from a wall the cube is pressed against.
-# Measured on the Tossing3D pick benchmark against 0/+-10/+-20/+-30: 13/475 fewer picks,
-# but bin pushes 10/475 against 24/475 (the +-20 grasps dragged the held cube along
-# the wall) and a faster dry run.
-PICK_CUBE_GRASP_TILTS_DEGREES = (0.0, 15.0, -15.0, 30.0, -30.0)
-# The partial opening tried at every tilt, as a margin over the cube's width.
-PICK_CUBE_OPENING_MARGINS = (0.02,)
-# The Robotiq 2F-85's full stroke, tried before the partial opening at every tilt. An
-# untilted grasp needs it too: a partly opened first pick holds the cube differently,
-# and the bin-retrieval toss then lands it under 1 cm from a wall, where no grasp plans.
-# Opening untilted grasps fully first left the Tossing3D pick benchmark unchanged
-# (234/475 either way, no case changed its outcome).
+# The real TidyBot's near-wall pick (prpl-tidybot bd85a79), mirrored so a sim pick and a
+# real one try the same grasps in the same order. Yaw offsets turn the gripper about its
+# approach from the face-aligned yaw; tilts turn it about the fingers' closing axis, which
+# keeps both pads square to the faces they close on and leans the wrist away from a wall.
+PICK_CUBE_GRASP_YAW_OFFSETS_DEGREES = (0, 5, -5, 10, -10, 15, -15, 20, -20, 25, -25)
+PICK_CUBE_GRASP_TILTS_DEGREES = (0.0, 10.0, -10.0, 15.0, -15.0, 20.0, -20.0)
+# Faces: the first two cube-symmetric yaws, closing turn 0 then 90 (the 2F-85 is
+# symmetric, so the other two are the same grasps).
+PICK_CUBE_GRASP_FACES = 2
+# The Robotiq 2F-85's full stroke, then the narrower opening that keeps the fingers off
+# a nearby wall. The narrow one is skipped when the cube's span across the closing axis
+# plus PICK_CUBE_NARROW_OPENING_CLEARANCE exceeds it.
 PICK_CUBE_FULL_OPENING = 0.085
-PICK_CUBE_FULL_OPENING_MIN_TILT_DEGREES = 0.0
+PICK_CUBE_NARROW_OPENING = 0.070
+PICK_CUBE_NARROW_OPENING_CLEARANCE = 0.005
+# No robot link may come within this of a bin's walls at the hover or the grasp. The
+# real robot checks the same margin at those two poses and at a waypoint above the rim,
+# which the simulated pick has no separate pose for: its hover is above the rim.
+PICK_CUBE_WALL_MARGIN = 0.01
 
 # The 2F-85's inner pad gap (m) against its finger command, measured in each model with
 # no object between the pads. The planner's PyBullet fingers close faster than MuJoCo's
@@ -149,7 +152,28 @@ class PickCubeGraspCandidate:
     """One grasp the pick may try: a cube-symmetric yaw, a tilt about the gripper's
     closing axis, and how far the gripper is opened for the approach."""
 
-    def __init__(self, yaw_quat: Quaternion, tilt: float, opening: float) -> None:
+    def __init__(
+        self,
+        face_quat: Quaternion,
+        tilt: float,
+        opening: float,
+        yaw_offset: float = 0.0,
+    ) -> None:
+        self.face_quat = face_quat
+        self.yaw_offset = yaw_offset
+        # A turn about the vertical composed onto a pure-yaw face; written out so that a
+        # zero offset returns `face_quat` bit for bit.
+        if yaw_offset == 0.0:
+            yaw_quat = face_quat
+        else:
+            fx, fy, fz, fw = face_quat
+            so, co = float(np.sin(yaw_offset / 2)), float(np.cos(yaw_offset / 2))
+            yaw_quat = (
+                co * fx - so * fy,
+                co * fy + so * fx,
+                co * fz + so * fw,
+                co * fw - so * fz,
+            )
         self.yaw_quat = yaw_quat
         self.tilt = tilt
         self.opening = opening
@@ -170,7 +194,8 @@ class PickCubeGraspCandidate:
 
     def __repr__(self) -> str:
         return (
-            f"PickCubeGraspCandidate(tilt={np.rad2deg(self.tilt):+.0f}deg, "
+            f"PickCubeGraspCandidate(yaw={np.rad2deg(self.yaw_offset):+.0f}deg, "
+            f"tilt={np.rad2deg(self.tilt):+.0f}deg, "
             f"opening={self.opening * 1000:.0f}mm)"
         )
 
@@ -1088,15 +1113,17 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         # BASE_MOTION planning
         robot = self.objects[0]
 
-        if candidate.yaw_quat not in base_plans:
-            base_plans[candidate.yaw_quat] = self._plan_base_motion(
+        # The base stands for the face; a yaw offset only turns the wrist, as on the
+        # real robot.
+        if candidate.face_quat not in base_plans:
+            base_plans[candidate.face_quat] = self._plan_base_motion(
                 x,
                 cube_to_pick_up,
                 extend_xy_magnitude,
                 extend_rot_magnitude,
-                candidate.yaw_quat,
+                candidate.face_quat,
             )
-        cached_base_plan = base_plans[candidate.yaw_quat]
+        cached_base_plan = base_plans[candidate.face_quat]
         if cached_base_plan is None:
             return False
         # Execution pops waypoints off the plan it is given.
@@ -1144,6 +1171,10 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             )
         except InverseKinematicsError:
             return False
+        if self._crowds_a_bin_wall(
+            self._with_fingers(target_hover_joints, candidate.finger_state)
+        ):
+            return False
         hover_plan = run_motion_planning(
             self._pybullet_sim.robot,
             self._with_fingers(
@@ -1169,6 +1200,24 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             candidate,
             held_object_collision_threshold,
         )
+
+    def _crowds_a_bin_wall(self, joints: JointPositions) -> bool:
+        """Whether, at `joints`, any robot link comes within PICK_CUBE_WALL_MARGIN of a
+        registered bin's walls (the bottom panel does not count)."""
+        sim = self._pybullet_sim
+        assert sim is not None
+        if not sim.bin_names:
+            return False
+        before = sim.robot.get_joint_positions()
+        sim.robot.set_joints(joints)
+        try:
+            return any(
+                sim.bin_wall_clearance(name, max_distance=PICK_CUBE_WALL_MARGIN)
+                < PICK_CUBE_WALL_MARGIN
+                for name in sim.bin_names
+            )
+        finally:
+            sim.robot.set_joints(before)
 
     def _plan_grasp_and_lift(
         self,
@@ -1211,6 +1260,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 candidate.finger_state,
             )
         except InverseKinematicsError:
+            return False
+        if self._crowds_a_bin_wall(target_around_joints):
             return False
         sim = self._pybullet_sim
         # pylint: disable-next=protected-access
@@ -1345,33 +1396,39 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         raise ValueError("No collision-free cube grasp")
 
     def grasp_candidates(self, x: ObjectCentricState) -> list[PickCubeGraspCandidate]:
-        """Every grasp `reset` may try, in the order it tries them.
-
-        Untilted before tilted, and less tilt before more, so a cube with room around
-        it keeps the top-down grasp; within a tilt, the four cube-symmetric yaws
-        nearest first; within a yaw, 85 mm and then the partial opening: on the
-        Tossing3D pick benchmark the order, measured on tilted grasps, picks as many
-        states as partial-first at low pose noise, and under 6 mm of noise picks more
-        (200/475 vs 187/475) with fewer planned-but-failed picks (15/215 vs 28/215).
-        """
+        """Every grasp `reset` may try, in the order it tries them: the real TidyBot's
+        near-wall order. The two grasps used before near-wall picks first (face-aligned,
+        untilted, fully open, on each face); then yaw offset, tilt, face and opening,
+        outermost to innermost. The first that plans is used."""
         cube = self.objects[1]
         cube_quat = tuple(x.get(cube, key) for key in ("qx", "qy", "qz", "qw"))
         width = max(x.get(cube, "bb_x"), x.get(cube, "bb_y"))
-        partial = sorted(
-            {min(width + m, PICK_CUBE_FULL_OPENING) for m in PICK_CUBE_OPENING_MARGINS}
-        )
-
-        def openings(tilt: float) -> list[float]:
-            if abs(tilt) < PICK_CUBE_FULL_OPENING_MIN_TILT_DEGREES:
-                return partial
-            return sorted(set(partial) | {PICK_CUBE_FULL_OPENING}, reverse=True)
-
-        return [
-            PickCubeGraspCandidate(yaw_quat, float(np.deg2rad(tilt)), opening)
-            for tilt in PICK_CUBE_GRASP_TILTS_DEGREES
-            for yaw_quat in upright_grasp_rotations(cube_quat)
-            for opening in openings(tilt)
+        faces = upright_grasp_rotations(cube_quat)[:PICK_CUBE_GRASP_FACES]
+        first = [
+            PickCubeGraspCandidate(face, 0.0, PICK_CUBE_FULL_OPENING) for face in faces
         ]
+        rest = []
+        for offset in PICK_CUBE_GRASP_YAW_OFFSETS_DEGREES:
+            phi = float(np.deg2rad(offset))
+            span = width * (abs(np.cos(phi)) + abs(np.sin(phi)))
+            openings = [PICK_CUBE_FULL_OPENING]
+            if span + PICK_CUBE_NARROW_OPENING_CLEARANCE <= PICK_CUBE_NARROW_OPENING:
+                openings.append(PICK_CUBE_NARROW_OPENING)
+            for tilt in PICK_CUBE_GRASP_TILTS_DEGREES:
+                for face in faces:
+                    for opening in openings:
+                        if (
+                            offset == 0
+                            and tilt == 0.0
+                            and opening == PICK_CUBE_FULL_OPENING
+                        ):
+                            continue  # already first
+                        rest.append(
+                            PickCubeGraspCandidate(
+                                face, float(np.deg2rad(tilt)), opening, yaw_offset=phi
+                            )
+                        )
+        return first + rest
 
     def step(self) -> Array:
         if self.current_phase == self.PickCubeControllerPhase.OPEN_GRIPPER:
