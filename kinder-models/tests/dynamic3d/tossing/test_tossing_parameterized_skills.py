@@ -1432,7 +1432,8 @@ def test_a_release_ms_past_the_swing_never_opens_the_gripper():
 
 
 def test_public_toss_rejects_substep_release_schedules():
-    """The public controller emits vectors from the declared 10 Hz action space."""
+    """The standalone toss emits one action per 10 Hz step, so it refuses a release
+    between steps rather than rounding it; the composed toss accepts one."""
     env = kinder.make("kinder/Tossing3D-o1-v0", scene_bg=False)
     obs, _ = env.reset(seed=125)
     state = env.observation_space.devectorize(obs)
@@ -1750,6 +1751,9 @@ def test_move_to_toss_location_and_toss_samples_four_parameters():
     obs, _ = env.reset(seed=125)
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
+    # A receiver inside the range the throw profiles were tuned for; outside it the
+    # uniform sampler answers instead (see THROW_PROFILE_RECEIVER_X_BOUNDS).
+    state.set(state.get_object_from_name("bin_0"), "x", 2.9)
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
     barrier = state.get_object_from_name("cuboid_barrier")
@@ -2122,7 +2126,10 @@ def test_pick_cube_retrieves_from_bin_after_toss(tmp_path):
                 "toss",
                 "move_to_toss_location_and_toss",
                 (robot, cube, barrier),
-                np.array([1.35, 0, np.deg2rad(130), 800]),
+                # Recalibrated under #168's bounded actions: 760 ms lands within 2 cm
+                # of the bin centre. 780-820 ms land within ~3 cm of a wall, which this
+                # pick refuses (the near-wall case, a separate fix).
+                np.array([1.35, 0, np.deg2rad(130), 760]),
             ),
             ("retrieval", "pick_cube", (robot, cube, barrier), None),
         ):
