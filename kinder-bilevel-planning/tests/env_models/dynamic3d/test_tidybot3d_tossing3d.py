@@ -32,8 +32,10 @@ def test_tidybot3d_tossing3d_bilevel_planning():
         env_models,
         seed=seed,
         max_abstract_plans=1,
-        samples_per_step=5,
-        planning_timeout=300.0,
+        # Receivers moved farther from the barrier (KINDER #191): 5 tosses rarely score.
+        samples_per_step=40,
+        # Farther receivers (KINDER #191), before #172's sim-only effort extension.
+        planning_timeout=600.0,
         max_skill_horizon=400,
     )
 

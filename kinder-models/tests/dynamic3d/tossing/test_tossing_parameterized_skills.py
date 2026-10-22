@@ -10,6 +10,7 @@ import pybullet as p
 import pytest
 from bilevel_planning.structs import GroundParameterizedController
 from conftest import MAKE_VIDEOS
+from gymnasium.envs.registration import EnvSpec
 from gymnasium.wrappers import RecordVideo
 from kinder.envs.dynamic3d.envs import TidyBot3DConfig, TidyBot3DEnv
 from kinder.envs.dynamic3d.object_types import (
@@ -26,6 +27,7 @@ from spatialmath import SE2
 
 from kinder_models.dynamic3d.shelf import parameterized_skills as shelf_skills
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
+    GRIPPER_ACTION_INDEX,
     MoveToTossLocationAndTossController,
     PickCubeController,
     create_lifted_controllers,
@@ -48,6 +50,7 @@ from kinder_models.dynamic3d.tossing.toss_swing import (
 from kinder_models.dynamic3d.utils import (
     _CONTROL_TIMESTEP,
     GRASP_CLOSE_THRESHOLD,
+    MINIMUM_HOLDING_HEIGHT,
     MOVE_TO_TARGET_DISTANCE_BOUNDS,
     PyBulletSim,
     _trapezoidal_motion_profile,
@@ -1615,6 +1618,95 @@ def test_pick_cube_never_unwinds_a_joint_by_a_whole_turn():
     env.close()
 
 
+@pytest.mark.parametrize(
+    ("robot_values", "cube_values", "bin_xyz"),
+    [
+        (
+            (-0.0279723, 0.0288277, -0.0777655, 0.0, -0.3490659, 3.1415927,
+             -2.5481806, 0.0, -0.8726646, 1.5707963, 0.0),
+            (0.5677592, -0.2490022, 0.0200937, 0.9788500, 0.0, 0.0, 0.2045794),
+            (-2.0916207, -1.9016471, -0.0003950),
+        ),
+    ],
+)
+def test_pick_cube_terminates_from_observed_practice_failure_states(
+    robot_values, cube_values, bin_xyz
+):
+    """Regression states captured immediately before two 400-tick failures."""
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0",
+        render_mode="rgb_array",
+        num_objects=1,
+        allow_state_access=True,
+    )
+    obs, _ = env.reset(seed=125)
+    state = env.observation_space.devectorize(obs)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    bin_obj = state.get_object_from_name("bin_0")
+    robot_names = (
+        "pos_base_x", "pos_base_y", "pos_base_rot", "pos_arm_joint1",
+        "pos_arm_joint2", "pos_arm_joint3", "pos_arm_joint4", "pos_arm_joint5",
+        "pos_arm_joint6", "pos_arm_joint7", "pos_gripper",
+    )
+    for name, value in zip(robot_names, robot_values, strict=True):
+        state.set(robot, name, value)
+    cube_features = ("x", "y", "z", "qx", "qy", "qz", "qw")
+    for name, value in zip(cube_features, cube_values, strict=True):
+        state.set(cube, name, value)
+    for name, value in zip(("x", "y", "z"), bin_xyz, strict=True):
+        state.set(bin_obj, name, value)
+    env.unwrapped.set_state(env.observation_space.vectorize(state))
+    state = env.observation_space.devectorize(env.unwrapped.get_state())
+    scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    sim = _create_bin_aware_sim(state, scene)
+    controller = create_lifted_controllers(
+        env.action_space, state, pybullet_sim=sim
+    )["pick_cube"].ground((robot, cube, barrier))
+    controller.reset(state, None)
+    for _ in range(400):
+        obs, _, _, _, _ = env.step(controller.step())
+        state = env.observation_space.devectorize(obs)
+        controller.observe(state)
+        if controller.terminated():
+            break
+    assert controller.terminated()
+    assert state.get(cube, "z") > 0.1
+    env.close()
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_pick_cube_succeeds_across_reset_seed_sweep(seed):
+    """Exercise varied base, cube, bin, and cube-orientation reset samples."""
+    env = kinder.make(
+        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1
+    )
+    obs, _ = env.reset(seed=seed)
+    state = env.observation_space.devectorize(obs)
+    robot = _get_robot_from_state(state)
+    cube = state.get_object_from_name("cube_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    sim = _create_bin_aware_sim(state, scene)
+    try:
+        controller = create_lifted_controllers(
+            env.action_space, state, pybullet_sim=sim
+        )["pick_cube"].ground((robot, cube, barrier))
+        controller.reset(state, None)
+        for _ in range(400):
+            obs, _, _, _, _ = env.step(controller.step())
+            state = env.observation_space.devectorize(obs)
+            controller.observe(state)
+            if controller.terminated():
+                break
+        assert controller.terminated()
+        assert state.get(cube, "z") > 0.1
+    finally:
+        sim.close()
+        env.close()
+
+
 def test_move_to_toss_location_and_toss_samples_four_parameters():
     """Launch stays behind the barrier while throw parameters vary."""
     env = kinder.make("kinder/Tossing3D-o1-v0", num_objects=1)
@@ -1657,6 +1749,42 @@ def test_move_to_toss_location_and_toss_samples_four_parameters():
         env.close()
 
 
+@pytest.mark.parametrize("use_arm_velocities", [False, True])
+def test_pick_cube_sizes_its_actions_to_the_declared_action_space(use_arm_velocities):
+    """The pick is shared with environments that declare the 11-D TidyBot action (the
+    shelf scenes) and Tossing3D, which declares 18-D: it must emit the declared shape,
+    with zero velocity targets and the gripper at KINDER's index 10."""
+    action_space = TidyBot3DRobotActionSpace(use_arm_velocities)
+    env, state, robot, _ = _ground_pick_cube_on_seed_125()
+    cube = state.get_object_from_name("cube_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    sim = _create_bin_aware_sim(state, scene)
+    pick = create_lifted_controllers(action_space, state, pybullet_sim=sim)[
+        "pick_cube"
+    ].ground((robot, cube, barrier))
+    pick.reset(state, None)
+    action = pick.step()
+    assert action.shape == action_space.shape
+    assert np.all(action[GRIPPER_ACTION_INDEX + 1 :] == 0)
+    env.close()
+
+
+def test_pick_cube_built_directly_emits_the_11d_action():
+    """Built without an action space, as the shelf skills build it, the pick emits
+    KINDER's base 11-D action."""
+    env, state, robot, _ = _ground_pick_cube_on_seed_125()
+    cube = state.get_object_from_name("cube_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    pick = PickCubeController(
+        [robot, cube, barrier], pybullet_sim=_create_bin_aware_sim(state, scene)
+    )
+    pick.reset(state, None)
+    assert pick.step().shape == (11,)
+    env.close()
+
+
 def test_open_gripper_commands_open_until_the_gripper_reads_open():
     """The controller predates this branch and had no test of its own."""
     num_cubes = 1
@@ -1675,8 +1803,8 @@ def test_open_gripper_commands_open_until_the_gripper_reads_open():
     controller.reset(shut)
     assert not controller.terminated()
     action = controller.step()
-    assert action.shape == (18,)
-    assert action[10] == 0
+    assert action.shape == env.action_space.shape
+    assert action[GRIPPER_ACTION_INDEX] == 0
 
     opened = state.copy()
     opened.set(robot, "pos_gripper", 0.0)
@@ -1706,7 +1834,7 @@ def test_no_op_controller_terminates_immediately_and_holds_the_gripper_command()
     controller.reset(open_gripper)
     assert controller.terminated()
     action = controller.step()
-    assert action.shape == (18,)
+    assert action.shape == env.action_space.shape
     assert np.all(action == 0)
 
     closed_gripper = state.copy()
@@ -1714,8 +1842,8 @@ def test_no_op_controller_terminates_immediately_and_holds_the_gripper_command()
     controller.reset(closed_gripper)
     assert controller.terminated()
     action = controller.step()
-    assert np.delete(action, 10).tolist() == [0.0] * (action.shape[0] - 1)
-    assert action[10] == GRASP_CLOSE_THRESHOLD
+    assert np.all(np.delete(action, GRIPPER_ACTION_INDEX) == 0)
+    assert action[GRIPPER_ACTION_INDEX] == GRASP_CLOSE_THRESHOLD
     env.close()
 
 
@@ -1782,17 +1910,21 @@ def test_move_to_toss_location_and_toss_plans_every_phase_in_reset():
     """As pick_shelf does: a planning failure surfaces from reset rather than from the
     middle of a throw, where a refiner would see a crash instead of a rejected
     sample."""
-    num_cubes = 1
-    env = kinder.make(
-        "kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=num_cubes
-    )
-    obs, _ = env.reset(seed=125)
-    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
-    state = env.observation_space.devectorize(obs)
-    controllers = create_lifted_controllers(env.action_space)
-    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    # Toss from a state the robot really reaches: holding the cube after a pick. The
+    # planner carries the cube at its observed grasp, so planning from the reset state
+    # (cube still on the floor) would swing it through the now-fixed barrier.
+    env, state, robot, pick = _ground_pick_cube_on_seed_125()
+    for _ in range(1000):
+        obs, _, _, _, _ = env.step(pick.step())
+        state = env.observation_space.devectorize(obs)
+        pick.observe(state)
+        if pick.terminated():
+            break
     cube = state.get_object_from_name("cube_0")
     barrier = state.get_object_from_name("cuboid_barrier")
+    assert pick.terminated()
+    assert state.get(cube, "z") > MINIMUM_HOLDING_HEIGHT
+    controllers = create_lifted_controllers(env.action_space)
     controller = controllers["move_to_toss_location_and_toss"].ground(
         (robot, cube, barrier)
     )
@@ -1913,11 +2045,19 @@ def test_pick_cube_retrieves_from_bin_after_toss(tmp_path):
     )
     task_path = tmp_path / "bin-retrieval.json"
     task_path.write_text(json.dumps(config), encoding="utf-8")
-    env = TidyBot3DEnv(
-        num_objects=1,
-        config=TidyBot3DConfig(use_arm_velocities=True),
+    # The registered Tossing3D family derives its task JSON from num_objects; a custom
+    # layout uses the robot environment beneath it, with the family's 18-D actions.
+    env = kinder.make(
+        EnvSpec(
+            id="kinder/Tossing3D-o1-v0",
+            entry_point="kinder.envs.dynamic3d.envs:TidyBot3DEnv",
+            kwargs={
+                "task_config_path": str(task_path),
+                "scene_render_camera": "task_view",
+                "config": TidyBot3DConfig(use_arm_velocities=True),
+            },
+        ),
         render_mode="rgb_array",
-        task_config_path=str(task_path),
     )
     sim = None
     try:
