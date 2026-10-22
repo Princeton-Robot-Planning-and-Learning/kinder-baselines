@@ -18,12 +18,21 @@ from prpl_utils.motion_planning import BiRRT
 from prpl_utils.utils import get_signed_angle_distance, wrap_angle
 from pybullet_helpers.geometry import Pose, Quaternion, multiply_poses, set_pose
 from pybullet_helpers.gui import create_gui_connection
+from pybullet_helpers.ikfast.utils import (
+    IKFastHyperparameters,
+    ikfast_closest_inverse_kinematics,
+)
 from pybullet_helpers.inverse_kinematics import (
+    InverseKinematicsError,
+    _validate_joints_state,
+    add_fingers_to_joint_positions,
+    inverse_kinematics,
     set_robot_joints_with_held_object,
 )
 from pybullet_helpers.joint import JointPositions
 from pybullet_helpers.motion_planning import create_joint_distance_fn
 from pybullet_helpers.robots import SingleArmPyBulletRobot, create_pybullet_robot
+from pybullet_helpers.robots.single_arm import FingeredSingleArmPyBulletRobot
 from pybullet_helpers.utils import create_pybullet_block, create_pybullet_shelf
 from relational_structs import (
     Object,
@@ -36,6 +45,12 @@ from tomsgeoms2d.utils import geom2ds_intersect
 
 # Control period in seconds (10 Hz).
 _CONTROL_TIMESTEP = 0.1
+
+# IKFast free-joint samples per inverse-kinematics call, in place of pybullet_helpers'
+# 0.05 s wall-clock budget, so a loaded machine finds the same solutions as an idle one.
+# An idle workstation completes about 1580 samples in 0.05 s on an unreachable pose; a
+# reachable one stops earlier, at 100 candidates.
+IKFAST_MAX_ATTEMPTS = 1500
 
 # Robot geometry.
 ROBOT_ARM_POSE_TO_BASE = Pose((0.12, 0.0, 0.4))
@@ -833,3 +848,36 @@ def upright_grasp_rotations(rotation: Quaternion) -> tuple[Quaternion, ...]:
         (0.0, 0.0, float(np.sin(angle / 2)), float(np.cos(angle / 2)))
         for angle in (yaw, yaw + np.pi / 2, yaw - np.pi / 2, yaw + np.pi)
     )
+
+
+def inverse_kinematics_fixed_effort(
+    robot: SingleArmPyBulletRobot,
+    end_effector_pose: Pose,
+    set_joints: bool = True,
+) -> JointPositions:
+    """`pybullet_helpers.inverse_kinematics` (validated), with IKFast bounded by a sample
+    count instead of wall time, so the answer does not depend on how loaded the machine
+    is."""
+    if robot.default_inverse_kinematics_method != "ikfast":
+        return inverse_kinematics(robot, end_effector_pose, set_joints=set_joints)
+    solutions = ikfast_closest_inverse_kinematics(
+        robot,
+        world_from_target=end_effector_pose,
+        hyperparameters=IKFastHyperparameters(
+            max_time=np.inf, max_attempts=IKFAST_MAX_ATTEMPTS
+        ),
+    )
+    if not solutions:
+        raise InverseKinematicsError(
+            f"No IK solution found for target pose {end_effector_pose} using IKFast"
+        )
+    joint_positions = list(solutions[0])
+    if isinstance(robot, FingeredSingleArmPyBulletRobot):
+        joint_positions = add_fingers_to_joint_positions(robot, joint_positions)
+    try:
+        _validate_joints_state(robot, joint_positions, end_effector_pose, 1e-3)
+    except ValueError as e:
+        raise InverseKinematicsError(e) from e
+    if set_joints:
+        robot.set_joints(joint_positions)
+    return joint_positions
