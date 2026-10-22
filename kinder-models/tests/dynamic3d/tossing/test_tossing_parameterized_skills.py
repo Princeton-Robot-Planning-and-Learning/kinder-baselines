@@ -2,11 +2,14 @@
 
 import gc
 import json
+import time
+import types
 from pathlib import Path
 
 import kinder
 import numpy as np
 import pybullet as p
+import pybullet_helpers.ikfast.utils as ikfast_utils
 import pytest
 from bilevel_planning.structs import GroundParameterizedController
 from conftest import MAKE_VIDEOS
@@ -1497,6 +1500,40 @@ def test_pick_cube_resets_and_steps():
     assert not controller.terminated()
     action = controller.step()
     assert np.asarray(action).shape == env.action_space.shape
+    env.close()
+
+
+def test_pick_cube_plans_the_same_however_slow_the_machine(monkeypatch):
+    """IKFast must stop after a fixed number of samples, never after a wall-clock budget.
+
+    pybullet_helpers' IKFast samples the free joint until 0.05 s have passed. A loaded
+    machine (a CI runner, a busy cluster node) that stalls through that window gets no
+    solution, so a pick an idle machine plans is refused. Running IKFast's clock 1000x
+    fast stands in for such a machine.
+    """
+    real_clock = time.perf_counter
+    start = real_clock()
+    monkeypatch.setattr(
+        ikfast_utils,
+        "time",
+        types.SimpleNamespace(
+            perf_counter=lambda: start + (real_clock() - start) * 1000.0
+        ),
+    )
+    env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
+    obs, _ = env.reset(seed=125)
+    assert isinstance(env.observation_space, ObjectCentricBoxSpace)
+    state = env.observation_space.devectorize(obs)
+    robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+    cube = state.get_object_from_name("cube_0")
+    barrier = state.get_object_from_name("cuboid_barrier")
+    scene = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    sim = _create_bin_aware_sim(state, scene)
+    controllers = create_lifted_controllers(env.action_space, state, pybullet_sim=sim)
+    controller = controllers["pick_cube"].ground((robot, cube, barrier))
+    params = controller.sample_parameters(state, np.random.default_rng(0))
+    controller.reset(state, params)
+    assert not controller.terminated()
     env.close()
 
 
