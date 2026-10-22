@@ -22,10 +22,7 @@ from kinder.envs.dynamic3d.robots.tidybot_robot_env import (
 )
 from prpl_utils.utils import get_signed_angle_distance
 from pybullet_helpers.geometry import Pose, Quaternion, multiply_poses
-from pybullet_helpers.inverse_kinematics import (
-    JointPositions,
-    inverse_kinematics,
-)
+from pybullet_helpers.inverse_kinematics import JointPositions
 from pybullet_helpers.motion_planning import (
     check_collisions_with_held_object,
     remap_joint_position_plan_to_constant_distance,
@@ -66,6 +63,7 @@ from kinder_models.dynamic3d.utils import (
     _compute_per_joint_profile,
     get_overhead_object_se2_pose,
     get_target_robot_pose_from_parameters,
+    inverse_kinematics_fixed_effort,
     run_base_motion_planning,
     upright_grasp_rotations,
     wrap_arm_joint_difference,
@@ -605,7 +603,7 @@ class MoveArmToEndEffectorController(
             rotation,
         )
 
-        target_joints = inverse_kinematics(
+        target_joints = inverse_kinematics_fixed_effort(
             self._pybullet_sim.robot,
             target_end_effector_pose,
             set_joints=False,
@@ -1001,7 +999,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         target_hover_end_effector_pose = multiply_poses(
             target_hover_end_effector_pose, PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT
         )  # Offset by the intended grasp location
-        target_hover_joints = inverse_kinematics(
+        target_hover_joints = inverse_kinematics_fixed_effort(
             self._pybullet_sim.robot, target_hover_end_effector_pose, set_joints=False
         )
         hover_plan = run_motion_planning(
@@ -1054,7 +1052,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         target_around_cube_end_effector_pose = multiply_poses(
             target_around_cube_end_effector_pose, PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT
         )  # Offset by the intended grasp location
-        target_around_joints = inverse_kinematics(
+        target_around_joints = inverse_kinematics_fixed_effort(
             self._pybullet_sim.robot,
             target_around_cube_end_effector_pose,
             set_joints=False,
