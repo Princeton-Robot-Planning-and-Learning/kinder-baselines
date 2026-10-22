@@ -1492,6 +1492,11 @@ class MoveToTossLocationAndTossController(
     # swings need earlier release; sampling these independently wastes refinements.
     # These candidates sit on 10 Hz steps; the composed toss accepts any other release.
     # Every instance uses the same candidates, selected with the planner's RNG.
+    # The receiver x range THROW_PROFILES were tuned on (kindergarden main's
+    # bin_init_region). A receiver outside it gets the uniform sampler: on a bin at
+    # x = 2.10, all 24 profile tosses measured were thrown and 0/24 scored, overshooting
+    # by 0.4-1.2 m.
+    THROW_PROFILE_RECEIVER_X_BOUNDS = (2.6, 3.42)
     THROW_PROFILES = (
         (190.0, 700.0),
         (220.0, 600.0),
@@ -1562,9 +1567,24 @@ class MoveToTossLocationAndTossController(
         barrier_width = self._pybullet_sim.bounding_boxes[barrier.name][0]
         robot_width = get_bounding_box(x, robot)[0]
         launch_x = x.get(barrier, "x") - (barrier_width + robot_width) / 2
-        launch_x -= rng.uniform(*self.LAUNCH_CLEARANCE_BOUNDS)
         receiver = x.get_object_from_name("bin_0")
-        distance = x.get(receiver, "x") - launch_x
+        receiver_x = x.get(receiver, "x")
+        lo, hi = self.THROW_PROFILE_RECEIVER_X_BOUNDS
+        if not lo <= receiver_x <= hi:
+            # Uniform speed and release; the distance still keeps the base on the
+            # launch side of the barrier, as the profiles' launch poses do.
+            nearest = receiver_x - (launch_x - self.LAUNCH_CLEARANCE_BOUNDS[0])
+            low, high = self.TARGET_DISTANCE_BOUNDS
+            return np.array(
+                [
+                    rng.uniform(max(low, nearest), max(high, nearest)),
+                    rng.uniform(*self.TARGET_ROTATION_BOUNDS),
+                    rng.uniform(*self.SPEED_BOUNDS),
+                    rng.uniform(*self.RELEASE_MS_BOUNDS),
+                ]
+            )
+        launch_x -= rng.uniform(*self.LAUNCH_CLEARANCE_BOUNDS)
+        distance = receiver_x - launch_x
         speed_degrees, release_ms = self.THROW_PROFILES[
             rng.integers(len(self.THROW_PROFILES))
         ]

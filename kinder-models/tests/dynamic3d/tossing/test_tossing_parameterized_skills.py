@@ -1751,6 +1751,9 @@ def test_move_to_toss_location_and_toss_samples_four_parameters():
     obs, _ = env.reset(seed=125)
     assert isinstance(env.observation_space, ObjectCentricBoxSpace)
     state = env.observation_space.devectorize(obs)
+    # A receiver inside the range the throw profiles were tuned for; outside it the
+    # uniform sampler answers instead (see THROW_PROFILE_RECEIVER_X_BOUNDS).
+    state.set(state.get_object_from_name("bin_0"), "x", 2.9)
     robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
     cube = state.get_object_from_name("cube_0")
     barrier = state.get_object_from_name("cuboid_barrier")
