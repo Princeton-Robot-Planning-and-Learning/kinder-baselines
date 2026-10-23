@@ -106,8 +106,18 @@ PICK_CUBE_GRASP_TILTS_DEGREES = (0.0, 10.0, -10.0, 15.0, -15.0, 20.0, -20.0)
 PICK_CUBE_GRASP_FACES = 2
 # The other two faces grip the same way, but the base stands on the opposite side of the
 # cube, so they reach a cube whose near sides are blocked by the bin, a wall or the
-# barrier. They are tried after every grasp on the first two, in the same order, so a
-# pick that plans on the first two plans exactly as before.
+# barrier. They are a rescue, tried only once every grasp on the first two has failed,
+# so a pick that plans on the first two plans exactly as before.
+#
+# The rescue mirrors the real robot's (prpl-tidybot josh/pick-four-sides, 5cc79ea): the
+# cube's face normals h_k = cube yaw + k * 90 deg, here the two not tried already, in
+# ascending |h_k - robot base yaw|, ties to the lower k; each must pass the base motion
+# (the room's walls are sim's floor bounds), then the grasp search; the refusal lists
+# every side tried.
+# Deliberately NOT mirrored: before the rescue the real robot stands on the straight
+# line robot -> cube (swung in 15 deg steps), where sim stands on the two face normals
+# of faces 0 and 90; and at each stand the real grasp search tries both face pairs
+# relative to the stand, where sim's stand and grasp face are one and the same.
 #
 # History: the real list kept 0/90 because the real robot's camera-side check found the
 # 180/270 faces rescued 0/14 real cases while doubling refusal time; bd85a79's own
@@ -1117,6 +1127,27 @@ class NoOpController(GroundParameterizedController[ObjectCentricState, Array]):
         return 0.0
 
 
+class PickCubeRescueSide:
+    """One far face normal the pick may stand on once its first grasps have failed."""
+
+    def __init__(
+        self,
+        *,
+        k: int,
+        face_quat: Quaternion,
+        heading: float,
+        cube_x: float,
+        cube_y: float,
+        candidates: list[PickCubeGraspCandidate],
+    ) -> None:
+        self.k = k
+        self.face_quat = face_quat
+        self.heading = heading
+        self.cube_x = cube_x
+        self.cube_y = cube_y
+        self.candidates = candidates
+
+
 class PickCubeController(GroundParameterizedController[ObjectCentricState, Array]):
     """Plan and execute cube pickup from the floor or a registered bin."""
 
@@ -1550,20 +1581,95 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         self.grasp_candidate = None
         self._plan_retract(x)
         base_plans: dict[Quaternion, list[SE2] | None] = {}
-        for candidate in self.grasp_candidates(x):
-            self.candidates_tried += 1
-            if self._plan_motions(
-                x,
-                extend_xy_magnitude,
-                extend_rot_magnitude,
-                candidate=candidate,
-                held_object_collision_threshold=collision_threshold,
-                base_plans=base_plans,
-            ):
-                self.grasp_candidate = candidate
-                self._held_collision_threshold = collision_threshold
+
+        def first_that_plans(candidates: list[PickCubeGraspCandidate]) -> bool:
+            for candidate in candidates:
+                self.candidates_tried += 1
+                if self._plan_motions(
+                    x,
+                    extend_xy_magnitude,
+                    extend_rot_magnitude,
+                    candidate=candidate,
+                    held_object_collision_threshold=collision_threshold,
+                    base_plans=base_plans,
+                ):
+                    self.grasp_candidate = candidate
+                    self._held_collision_threshold = collision_threshold
+                    return True
+            return False
+
+        if first_that_plans(self.grasp_candidates(x)):
+            return
+        tried = []
+        for side in self.rescue_sides(x):
+            heading = f"{np.rad2deg(side.heading):.0f} deg"
+            # The real robot checks the stand against its floor bounds first. Sim has no
+            # separate check: its floor is the room, whose walls the base planner
+            # already refuses (WORLD_X/Y_BOUNDS are only the planner's sampling box).
+            if side.face_quat not in base_plans:
+                base_plans[side.face_quat] = self._plan_base_motion(
+                    x,
+                    self.objects[1],
+                    extend_xy_magnitude,
+                    extend_rot_magnitude,
+                    side.face_quat,
+                )
+            if base_plans[side.face_quat] is None:
+                tried.append(f"{heading}: base motion refused")
+                continue
+            if first_that_plans(side.candidates):
                 return
-        raise ValueError("No collision-free cube grasp")
+            tried.append(f"{heading}: no collision-free grasp")
+        reason = "No collision-free cube grasp"
+        if tried:
+            reason += "; other sides tried: " + "; ".join(tried)
+        raise ValueError(reason)
+
+    def rescue_sides(self, x: ObjectCentricState) -> list["PickCubeRescueSide"]:
+        """The cube's face normals the first grasps did not stand on, in the order the
+        rescue tries them: ascending |h_k - robot base yaw|, ties to the lower k, where
+        h_k = cube yaw + k * 90 deg; each with its grasps, in the first list's order."""
+        if PICK_CUBE_STANDOFF_SIDES <= PICK_CUBE_GRASP_FACES:
+            return []
+        cube = self.objects[1]
+        cube_quat = tuple(x.get(cube, key) for key in ("qx", "qy", "qz", "qw"))
+        # upright_grasp_rotations orders them yaw, +90, -90, +180: h_0, h_1, h_3, h_2.
+        all_faces = upright_grasp_rotations(cube_quat)
+        normals = {0: all_faces[0], 1: all_faces[1], 2: all_faces[3], 3: all_faces[2]}
+        # Each far normal's grasps are its opposite near face's, in the same order.
+        near_of = {2: all_faces[0], 3: all_faces[1]}
+        base_yaw = x.get(self.objects[0], "pos_base_rot")
+        base_yaw = float(np.arctan2(np.sin(base_yaw), np.cos(base_yaw)))
+        first = self.grasp_candidates(x)
+        sides = []
+        for k in (2, 3):
+            face = normals[k]
+            heading = 2.0 * float(np.arctan2(face[2], face[3]))
+            heading = float(np.arctan2(np.sin(heading), np.cos(heading)))
+            candidates = [
+                PickCubeGraspCandidate(face, c.tilt, c.opening, yaw_offset=c.yaw_offset)
+                for c in first
+                if c.face_quat == near_of[k]
+            ]
+            sides.append(
+                PickCubeRescueSide(
+                    k=k,
+                    face_quat=face,
+                    heading=heading,
+                    cube_x=x.get(cube, "x"),
+                    cube_y=x.get(cube, "y"),
+                    candidates=candidates,
+                )
+            )
+        # Rounded to 1e-5 rad so that two normals equally far from the heading tie, as
+        # the rule intends, rather than splitting on the state's float32 noise.
+        sides.sort(
+            key=lambda side: (
+                round(abs(get_signed_angle_distance(side.heading, base_yaw)), 5),
+                side.k,
+            )
+        )
+        return sides
 
     def current_joints(self, x: ObjectCentricState) -> JointPositions:
         """The robot's arm in `x`, with the fingers fully open."""
@@ -1631,8 +1737,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         cube = self.objects[1]
         cube_quat = tuple(x.get(cube, key) for key in ("qx", "qy", "qz", "qw"))
         width = max(x.get(cube, "bb_x"), x.get(cube, "bb_y"))
-        all_faces = upright_grasp_rotations(cube_quat)
-        faces = all_faces[:PICK_CUBE_GRASP_FACES]
+        faces = upright_grasp_rotations(cube_quat)[:PICK_CUBE_GRASP_FACES]
 
         def nested(
             offsets: tuple[int, ...],
@@ -1670,16 +1775,6 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         ):
             tried = set(keys)
             keys += [key for key in group if key not in tried]
-        # The far sides: every grasp above again, on the face opposite its own
-        # (upright_grasp_rotations orders them yaw, +90, -90, +180).
-        far = {all_faces[0]: all_faces[3], all_faces[1]: all_faces[2]}
-        if PICK_CUBE_STANDOFF_SIDES <= PICK_CUBE_GRASP_FACES:
-            far = {}
-        keys += [
-            (offset, tilt, far[face], opening)
-            for offset, tilt, face, opening in keys
-            if face in far
-        ]
         return [
             PickCubeGraspCandidate(
                 face,
