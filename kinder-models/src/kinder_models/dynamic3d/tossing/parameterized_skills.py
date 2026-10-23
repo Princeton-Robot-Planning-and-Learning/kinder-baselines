@@ -93,32 +93,60 @@ PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT = Pose(
     (-0.005, 0.0, 0.03), (0.707, 0.707, 0.0, 0.0)
 )
 
-# The real TidyBot's near-wall pick (prpl-tidybot bd85a79), mirrored so a sim pick and a
-# real one try the same grasps in the same order. Yaw offsets turn the gripper about its
-# approach from the face-aligned yaw; tilts turn it about the fingers' closing axis,
-# which keeps both pads square to the faces they close on and leans the wrist away from
-# a wall.
-PICK_CUBE_GRASP_YAW_OFFSETS_DEGREES = (0, 5, -5, 10, -10, 15, -15, 20, -20, 25, -25)
-PICK_CUBE_GRASP_TILTS_DEGREES = (0.0, 10.0, -10.0, 15.0, -15.0, 20.0, -20.0)
+# Grid 36, the grasps a pick tries, in the order it tries them; sim and real are to try
+# the same list. Yaw offsets turn the gripper about its approach from the face-aligned
+# yaw; tilts turn it about the fingers' closing axis, which keeps both pads square to
+# the faces they close on and leans the wrist away from a wall.
+#
+# Decided 2026-10-23 (Josh): grid 36 for sim AND real, chosen over the 1,612 list for
+# speed. Evidence, from the real robot's planner: no real test case lost; in-bin states
+# planned 3,328/4,014 with grid 36 against 3,630/4,014 with the 1,612 list; the worst
+# refusal took about 4 s against about 40 s. Sim follows from here; the real robot is
+# to follow in prpl-tidybot.
+#
+# History: this was the real TidyBot's near-wall pick (prpl-tidybot bd85a79), yaw
+# offsets 0, +-5 .. +-25 deg and tilts 0, +-10, +-15, +-20 deg (280 grasps), then its
+# oblique extension, yaw offsets to +-45 deg, tilts to +-30 deg in 5 deg steps and
+# 80/75 mm openings (1,612 grasps in all). Grid 36 is a subsequence of that list, in
+# the same order.
+PICK_CUBE_GRASP_YAW_OFFSETS_DEGREES = (0, 20, -20)
+PICK_CUBE_GRASP_TILTS_DEGREES = (0.0, 20.0, -20.0)
 # Faces: the first two cube-symmetric yaws, closing turn 0 then 90 (the 2F-85 is
-# symmetric, so the other two are the same grasps).
+# symmetric, so the other two are the same grasps). That is the real robot's list as of
+# prpl-tidybot bd85a79, and stays this list's prefix.
 PICK_CUBE_GRASP_FACES = 2
+# The other two faces grip the same way, but the base stands on the opposite side of the
+# cube, so they reach a cube whose near sides are blocked by the bin, a wall or the
+# barrier. They are a rescue, tried only once every grasp on the first two has failed,
+# so a pick that plans on the first two plans exactly as before.
+#
+# The rescue mirrors the real robot's (prpl-tidybot josh/pick-four-sides, 5cc79ea): the
+# cube's face normals h_k = cube yaw + k * 90 deg, here the two not tried already, in
+# ascending |h_k - robot base yaw|, ties to the lower k; each must pass the base motion
+# (the room's walls are sim's floor bounds), then the grasp search; the refusal lists
+# every side tried.
+# Deliberately NOT mirrored: before the rescue the real robot stands on the straight
+# line robot -> cube (swung in 15 deg steps), where sim stands on the two face normals
+# of faces 0 and 90; and at each stand the real grasp search tries both face pairs
+# relative to the stand, where sim's stand and grasp face are one and the same.
+#
+# History: the real list kept 0/90 because the real robot's camera-side check found the
+# 180/270 faces rescued 0/14 real cases while doubling refusal time; bd85a79's own
+# real-to-sim benchmark (14 real in-bin rests) reported wall contact 0/14 and refusals
+# rescued 4/8 with the near-wall list. Decided 2026-10-23 (Josh): both sim and real use
+# all four sides. Sim does from here; the real robot is to follow in prpl-tidybot.
+PICK_CUBE_STANDOFF_SIDES = 4
+# Check every far-stand grasp's endpoints (IK, the bin-wall margin and collisions)
+# before searching any, then search only the survivors, in list order (see reset()).
+# Exact: on and off gave the same verdict and the same winning grasp on every state
+# measured (hitl-pmp t3-final-20261023 seeds 2 and 4, 217/217 and 244/244; resets 2/2).
+PICK_CUBE_RESCUE_FILTER_FIRST = True
 # The Robotiq 2F-85's full stroke, then the narrower opening that keeps the fingers off
 # a nearby wall. The narrow one is skipped when the cube's span across the closing axis
 # plus PICK_CUBE_NARROW_OPENING_CLEARANCE exceeds it.
 PICK_CUBE_FULL_OPENING = 0.085
 PICK_CUBE_NARROW_OPENING = 0.070
 PICK_CUBE_NARROW_OPENING_CLEARANCE = 0.005
-# The real robot's oblique extension, tried after every grasp above: yaw offsets to
-# +-45 deg and tilts to +-30 deg in 5 deg steps, and 80/75 mm openings between the two
-# above. An opening is skipped under the same span rule.
-PICK_CUBE_OBLIQUE_YAW_OFFSETS_DEGREES = (0,) + tuple(
-    sign * step for step in range(5, 50, 5) for sign in (1, -1)
-)
-PICK_CUBE_OBLIQUE_TILTS_DEGREES = (0.0,) + tuple(
-    float(sign * step) for step in range(5, 35, 5) for sign in (1, -1)
-)
-PICK_CUBE_OBLIQUE_OPENINGS = (0.085, 0.080, 0.075, 0.070)
 # No robot link may come within this of a bin's walls at the hover or the grasp. The
 # real robot checks the same margin at those two poses and at a waypoint above the rim,
 # which the simulated pick has no separate pose for: its hover is above the rim.
@@ -286,6 +314,7 @@ def plan_checked_arm_motion(
     base_link_to_held_obj: Pose | None = None,
     distance_threshold: float = 1e-6,
     additional_state_constraint_fn: Callable[[JointPositions], bool] | None = None,
+    endpoints_only: bool = False,
 ) -> tuple[list[JointPositions], list[JointPositions]] | None:
     """An arm motion from `start` to `goal`, as (BiRRT's path, the path executed), whose
     executed form is collision-free between its waypoints, not only at them.
@@ -293,6 +322,10 @@ def plan_checked_arm_motion(
     The executed form is BiRRT's path remapped to constant spacing. It is checked with
     the planner's own collision function (`first_dense_joint_path_collision`); if it
     fails, the motion is planned once more with nodes about 1 cm apart.
+
+    With `endpoints_only`, nothing is searched: `start` and `goal` are checked with that
+    same collision function, which is what BiRRT refuses on before it searches, so a
+    None here is a None from the full call too. A pass returns the bare [start, goal].
     """
 
     def collides(q: JointPositions) -> bool:
@@ -310,6 +343,11 @@ def plan_checked_arm_motion(
             additional_state_constraint_fn is not None
             and not additional_state_constraint_fn(q)
         )
+
+    if endpoints_only:
+        if collides(list(start)) or collides(list(goal)):
+            return None
+        return [list(start), list(goal)], [list(start), list(goal)]
 
     for hyperparameters in (None, DENSE_REPLAN_HYPERPARAMETERS):
         plan = run_motion_planning(
@@ -1105,6 +1143,27 @@ class NoOpController(GroundParameterizedController[ObjectCentricState, Array]):
         return 0.0
 
 
+class PickCubeRescueSide:
+    """One far face normal the pick may stand on once its first grasps have failed."""
+
+    def __init__(
+        self,
+        *,
+        k: int,
+        face_quat: Quaternion,
+        heading: float,
+        cube_x: float,
+        cube_y: float,
+        candidates: list[PickCubeGraspCandidate],
+    ) -> None:
+        self.k = k
+        self.face_quat = face_quat
+        self.heading = heading
+        self.cube_x = cube_x
+        self.cube_y = cube_y
+        self.candidates = candidates
+
+
 class PickCubeController(GroundParameterizedController[ObjectCentricState, Array]):
     """Plan and execute cube pickup from the floor or a registered bin."""
 
@@ -1259,6 +1318,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         candidate: PickCubeGraspCandidate,
         held_object_collision_threshold: float,
         base_plans: dict[Quaternion, list[SE2] | None],
+        endpoints_only: bool = False,
     ) -> bool:
         """Populate all trajectories for one grasp, returning False if infeasible.
 
@@ -1348,19 +1408,22 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             # Includes the cube to grasp, because we have not grasped it yet.
             collision_bodies=self._pybullet_sim.get_collision_bodies(),
             physics_client_id=self._pybullet_sim.physics_client_id,
+            endpoints_only=endpoints_only,
         )
         if hover is None:
             return False
         hover_plan, executed_hover = hover
-        self.plans[self.PickCubeControllerPhase.BASE_MOTION] = base_motion_plan
-        self.plans[self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE] = (
-            executed_hover
-        )
+        if not endpoints_only:
+            self.plans[self.PickCubeControllerPhase.BASE_MOTION] = base_motion_plan
+            self.plans[self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE] = (
+                executed_hover
+            )
         return self._plan_grasp_and_lift(
             state_after_base_motion,
             hover_plan[-1],
             candidate,
             held_object_collision_threshold,
+            endpoints_only=endpoints_only,
         )
 
     def _crowds_a_bin_wall(self, joints: JointPositions) -> bool:
@@ -1387,6 +1450,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         start_joints: JointPositions,
         candidate: PickCubeGraspCandidate,
         held_object_collision_threshold: float,
+        endpoints_only: bool = False,
     ) -> bool:
         """Plan descent and lift from the observed cube pose and arm configuration.
 
@@ -1456,6 +1520,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             collision_bodies=self._pybullet_sim.get_collision_bodies(),
             additional_state_constraint_fn=has_grasp_clearance,
             physics_client_id=self._pybullet_sim.physics_client_id,
+            endpoints_only=endpoints_only,
         )
         if around is None:
             return False
@@ -1491,9 +1556,12 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,
             distance_threshold=held_object_collision_threshold,
             physics_client_id=self._pybullet_sim.physics_client_id,
+            endpoints_only=endpoints_only,
         )
         if lift is None:
             return False
+        if endpoints_only:
+            return True
         planned_arm_motions = {
             self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE: executed_around,
             self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME: lift[1],
@@ -1538,20 +1606,112 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         self.grasp_candidate = None
         self._plan_retract(x)
         base_plans: dict[Quaternion, list[SE2] | None] = {}
-        for candidate in self.grasp_candidates(x):
-            self.candidates_tried += 1
-            if self._plan_motions(
-                x,
-                extend_xy_magnitude,
-                extend_rot_magnitude,
-                candidate=candidate,
-                held_object_collision_threshold=collision_threshold,
-                base_plans=base_plans,
-            ):
-                self.grasp_candidate = candidate
-                self._held_collision_threshold = collision_threshold
+
+        def first_that_plans(candidates: list[PickCubeGraspCandidate]) -> bool:
+            for candidate in candidates:
+                self.candidates_tried += 1
+                if self._plan_motions(
+                    x,
+                    extend_xy_magnitude,
+                    extend_rot_magnitude,
+                    candidate=candidate,
+                    held_object_collision_threshold=collision_threshold,
+                    base_plans=base_plans,
+                ):
+                    self.grasp_candidate = candidate
+                    self._held_collision_threshold = collision_threshold
+                    return True
+            return False
+
+        if first_that_plans(self.grasp_candidates(x)):
+            return
+        tried = []
+        for side in self.rescue_sides(x):
+            heading = f"{np.rad2deg(side.heading):.0f} deg"
+            # The real robot checks the stand against its floor bounds first. Sim has no
+            # separate check: its floor is the room, whose walls the base planner
+            # already refuses (WORLD_X/Y_BOUNDS are only the planner's sampling box).
+            if side.face_quat not in base_plans:
+                base_plans[side.face_quat] = self._plan_base_motion(
+                    x,
+                    self.objects[1],
+                    extend_xy_magnitude,
+                    extend_rot_magnitude,
+                    side.face_quat,
+                )
+            if base_plans[side.face_quat] is None:
+                tried.append(f"{heading}: base motion refused")
+                continue
+            # Endpoints first, for every grasp, then a search only for those that pass,
+            # still in list order: a grasp that fails the endpoints would fail the full
+            # plan too, so the first to plan is the same grasp, found far faster.
+            survivors = [
+                candidate
+                for candidate in side.candidates
+                if not PICK_CUBE_RESCUE_FILTER_FIRST
+                or self._plan_motions(
+                    x,
+                    extend_xy_magnitude,
+                    extend_rot_magnitude,
+                    candidate=candidate,
+                    held_object_collision_threshold=collision_threshold,
+                    base_plans=base_plans,
+                    endpoints_only=True,
+                )
+            ]
+            if first_that_plans(survivors):
                 return
-        raise ValueError("No collision-free cube grasp")
+            tried.append(f"{heading}: no collision-free grasp")
+        reason = "No collision-free cube grasp"
+        if tried:
+            reason += "; other sides tried: " + "; ".join(tried)
+        raise ValueError(reason)
+
+    def rescue_sides(self, x: ObjectCentricState) -> list["PickCubeRescueSide"]:
+        """The cube's face normals the first grasps did not stand on, in the order the
+        rescue tries them: ascending |h_k - robot base yaw|, ties to the lower k, where
+        h_k = cube yaw + k * 90 deg; each with its grasps, in the first list's order."""
+        if PICK_CUBE_STANDOFF_SIDES <= PICK_CUBE_GRASP_FACES:
+            return []
+        cube = self.objects[1]
+        cube_quat = tuple(x.get(cube, key) for key in ("qx", "qy", "qz", "qw"))
+        # upright_grasp_rotations orders them yaw, +90, -90, +180: h_0, h_1, h_3, h_2.
+        all_faces = upright_grasp_rotations(cube_quat)
+        normals = {0: all_faces[0], 1: all_faces[1], 2: all_faces[3], 3: all_faces[2]}
+        # Each far normal's grasps are its opposite near face's, in the same order.
+        near_of = {2: all_faces[0], 3: all_faces[1]}
+        base_yaw = x.get(self.objects[0], "pos_base_rot")
+        base_yaw = float(np.arctan2(np.sin(base_yaw), np.cos(base_yaw)))
+        first = self.grasp_candidates(x)
+        sides = []
+        for k in (2, 3):
+            face = normals[k]
+            heading = 2.0 * float(np.arctan2(face[2], face[3]))
+            heading = float(np.arctan2(np.sin(heading), np.cos(heading)))
+            candidates = [
+                PickCubeGraspCandidate(face, c.tilt, c.opening, yaw_offset=c.yaw_offset)
+                for c in first
+                if c.face_quat == near_of[k]
+            ]
+            sides.append(
+                PickCubeRescueSide(
+                    k=k,
+                    face_quat=face,
+                    heading=heading,
+                    cube_x=x.get(cube, "x"),
+                    cube_y=x.get(cube, "y"),
+                    candidates=candidates,
+                )
+            )
+        # Rounded to 1e-5 rad so that two normals equally far from the heading tie, as
+        # the rule intends, rather than splitting on the state's float32 noise.
+        sides.sort(
+            key=lambda side: (
+                round(abs(get_signed_angle_distance(side.heading, base_yaw)), 5),
+                side.k,
+            )
+        )
+        return sides
 
     def current_joints(self, x: ObjectCentricState) -> JointPositions:
         """The robot's arm in `x`, with the fingers fully open."""
@@ -1608,55 +1768,30 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         self.plans[self.PickCubeControllerPhase.RETRACT] = retract[1]
 
     def grasp_candidates(self, x: ObjectCentricState) -> list[PickCubeGraspCandidate]:
-        """Every grasp `reset` may try, in the order it tries them: the real TidyBot's
-        in-bin order.
+        """Every grasp `reset` may try first, in the order it tries them: grid 36.
 
         The two grasps used before near-wall picks first (face-aligned, untilted, fully
-        open, on each face); then the near-wall set; then its oblique extension, less
-        any grasp already tried. Each set nests yaw offset, tilt, face and opening,
-        outermost to innermost. The first that plans is used.
+        open, on each face); then the grid, less those two, nesting yaw offset, tilt,
+        face and opening, outermost to innermost. The first that plans is used.
         """
         cube = self.objects[1]
         cube_quat = tuple(x.get(cube, key) for key in ("qx", "qy", "qz", "qw"))
         width = max(x.get(cube, "bb_x"), x.get(cube, "bb_y"))
         faces = upright_grasp_rotations(cube_quat)[:PICK_CUBE_GRASP_FACES]
 
-        def nested(
-            offsets: tuple[int, ...],
-            tilts: tuple[float, ...],
-            openings: tuple[float, ...],
-        ) -> list[tuple[int, float, Quaternion, float]]:
-            out = []
-            for offset in offsets:
-                phi = float(np.deg2rad(offset))
-                span = width * (abs(np.cos(phi)) + abs(np.sin(phi)))
-                fits = [
-                    o
-                    for o in openings
-                    if o >= PICK_CUBE_FULL_OPENING
-                    or span + PICK_CUBE_NARROW_OPENING_CLEARANCE <= o
-                ]
-                for tilt in tilts:
-                    for face in faces:
-                        for opening in fits:
-                            out.append((offset, tilt, face, opening))
-            return out
-
         keys = [(0, 0.0, face, PICK_CUBE_FULL_OPENING) for face in faces]
-        for group in (
-            nested(
-                PICK_CUBE_GRASP_YAW_OFFSETS_DEGREES,
-                PICK_CUBE_GRASP_TILTS_DEGREES,
-                (PICK_CUBE_FULL_OPENING, PICK_CUBE_NARROW_OPENING),
-            ),
-            nested(
-                PICK_CUBE_OBLIQUE_YAW_OFFSETS_DEGREES,
-                PICK_CUBE_OBLIQUE_TILTS_DEGREES,
-                PICK_CUBE_OBLIQUE_OPENINGS,
-            ),
-        ):
-            tried = set(keys)
-            keys += [key for key in group if key not in tried]
+        for offset in PICK_CUBE_GRASP_YAW_OFFSETS_DEGREES:
+            phi = float(np.deg2rad(offset))
+            span = width * (abs(np.cos(phi)) + abs(np.sin(phi)))
+            openings = [PICK_CUBE_FULL_OPENING]
+            if span + PICK_CUBE_NARROW_OPENING_CLEARANCE <= PICK_CUBE_NARROW_OPENING:
+                openings.append(PICK_CUBE_NARROW_OPENING)
+            for tilt in PICK_CUBE_GRASP_TILTS_DEGREES:
+                for face in faces:
+                    for opening in openings:
+                        key = (offset, tilt, face, opening)
+                        if key not in keys:
+                            keys.append(key)
         return [
             PickCubeGraspCandidate(
                 face,

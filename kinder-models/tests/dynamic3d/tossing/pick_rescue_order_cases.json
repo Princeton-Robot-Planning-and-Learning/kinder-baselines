@@ -1,0 +1,12 @@
+{
+ "rule": "prpl-tidybot josh/pick-four-sides 5cc79ea: face normals h_k = cube yaw + k * 90 deg, k = 0..3, tried in ascending |wrap(h_k - robot base yaw)|, ties to the lower k, skipping normals already tried. Sim's first grasps stand on h_0 and h_1, so its rescue tries h_2 and h_3.",
+ "cases": [
+  {"base_yaw_minus_cube_yaw_deg": 180.0, "order": [2, 3]},
+  {"base_yaw_minus_cube_yaw_deg": -90.0, "order": [3, 2]},
+  {"base_yaw_minus_cube_yaw_deg": 0.0, "order": [3, 2]},
+  {"base_yaw_minus_cube_yaw_deg": 90.0, "order": [2, 3]},
+  {"base_yaw_minus_cube_yaw_deg": 225.0, "order": [2, 3]},
+  {"base_yaw_minus_cube_yaw_deg": 200.0, "order": [2, 3]},
+  {"base_yaw_minus_cube_yaw_deg": 250.0, "order": [3, 2]}
+ ]
+}

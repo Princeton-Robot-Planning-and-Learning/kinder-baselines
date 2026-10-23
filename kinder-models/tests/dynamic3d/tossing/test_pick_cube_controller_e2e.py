@@ -216,16 +216,15 @@ _OBSERVED_FAILURES = (
 )
 
 
-@pytest.mark.parametrize(("bin_offset", "held"), [(0.0, False), (-0.15, True)])
-def test_pick_cube_recorded_bin_adjacent_missed_grasp(bin_offset, held):
-    """The recorded cube beside the bin, and with the bin moved clear.
+@pytest.mark.parametrize("bin_offset", [0.0, -0.15])
+def test_pick_cube_recorded_bin_adjacent_missed_grasp(bin_offset):
+    """The recorded cube beside the bin, and with the bin moved clear: both held.
 
-    With the bin moved clear the pick holds the cube. Beside the bin, every
-    straight-down grasp brings the wrist into the bin. The real robot's grasp list
-    (faces 0 and 90 only) plans a tilted grasp here that executes but does not hold the
-    cube through the stability hold: a documented execution failure, one of the
-    planned-but-failed picks the Tossing3D pick benchmark counts. Only a 180/270 face
-    held it, and the real robot's list deliberately keeps 0/90.
+    Beside the bin, every straight-down grasp brings the wrist into the bin. The 1,612
+    list planned a tilted grasp from faces 0/90 here that executed but did not hold the
+    cube through the stability hold (a planned-but-failed pick). Grid 36 has no grasp
+    from faces 0/90 that plans, so the rescue stands on a far side, and that holds it,
+    as only a 180/270 face did before.
     """
     recorded = json.loads(
         Path(__file__).with_name("missed_grasp_state.json").read_text(encoding="utf-8")
@@ -239,11 +238,7 @@ def test_pick_cube_recorded_bin_adjacent_missed_grasp(bin_offset, held):
             _set_values(state, obj, state.type_features[obj.type], values)
         bin_obj = state.get_object_from_name("bin_0")
         state.set(bin_obj, "x", state.get(bin_obj, "x") + bin_offset)
-        if held:
-            _run_pick(env, state)
-        else:
-            with pytest.raises(AssertionError, match="after the stability hold"):
-                _run_pick(env, state)
+        _run_pick(env, state)
     finally:
         env.close()
 

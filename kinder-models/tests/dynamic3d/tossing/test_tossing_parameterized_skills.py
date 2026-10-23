@@ -1538,13 +1538,12 @@ def test_pick_cube_gripper_command_opens_mujoco_pads_to_the_requested_gap(openin
     assert abs(np.linalg.norm(between) - thickness - opening) < 1.5e-3
 
 
-def test_pick_cube_tries_the_real_robots_near_wall_grasps_in_its_order():
-    """The real TidyBot's near-wall pick (prpl-tidybot bd85a79), mirrored: the two old
-    grasps first (face-aligned, untilted, 85 mm, faces 0 then 90); then yaw offsets
-    outermost (0, +-5 .. +-25 deg, + before -), tilts about the closing axis (0, +-10,
-    +-15, +-20), faces, and 85 mm before 70 mm. 70 mm is skipped when the cube's span
-    across the closing axis plus 5 mm exceeds it (only at +-25 deg for a 5 cm cube):
-    280 candidates, before the oblique extension."""
+def test_pick_cube_tries_grid_36_in_its_order():
+    """Grid 36: the two old grasps first (face-aligned, untilted, 85 mm, faces 0 then
+    90); then yaw offsets outermost (0, +20, -20 deg), tilts about the closing axis
+    (0, +20, -20 deg), faces, and 85 mm before 70 mm. 70 mm is skipped when the cube's
+    span across the closing axis plus 5 mm exceeds it (never at 20 deg for a 5 cm
+    cube): 36 candidates, nothing after them."""
     env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
     try:
         obs, _ = env.reset(seed=125)
@@ -1555,26 +1554,20 @@ def test_pick_cube_tries_the_real_robots_near_wall_grasps_in_its_order():
         controller = create_lifted_controllers(env.action_space, state)[
             "pick_cube"
         ].ground((robot, cube, barrier))
-        # The first 280; the oblique extension follows them (tested row for row below).
-        candidates = controller.grasp_candidates(state)[:280]
+        candidates = controller.grasp_candidates(state)
         faces = upright_grasp_rotations(
             tuple(state.get(cube, k) for k in ("qx", "qy", "qz", "qw"))
         )[:2]
-        assert len({(c.yaw_quat, c.tilt, c.opening) for c in candidates}) == 280
+        assert len(candidates) == 36
+        assert len({(c.yaw_quat, c.tilt, c.opening) for c in candidates}) == 36
         for c, face in zip(candidates[:2], faces, strict=True):
             assert (c.yaw_offset, c.tilt, c.opening) == (0.0, 0.0, 0.085)
             assert c.yaw_quat == face and c.grasp_quat == face
         offsets = [round(np.rad2deg(c.yaw_offset)) for c in candidates[2:]]
-        order = [0, 5, -5, 10, -10, 15, -15, 20, -20, 25, -25]
         runs = [o for i, o in enumerate(offsets) if i == 0 or offsets[i - 1] != o]
-        assert runs == order
-        assert {round(np.rad2deg(c.tilt)) for c in candidates} == {
-            0, 10, -10, 15, -15, 20, -20,
-        }
-        for c in candidates:
-            assert c.opening in (0.085, 0.070)
-            if c.opening == 0.070:
-                assert abs(round(np.rad2deg(c.yaw_offset))) < 25
+        assert runs == [0, 20, -20]
+        assert {round(np.rad2deg(c.tilt)) for c in candidates} == {0, 20, -20}
+        assert {c.opening for c in candidates} == {0.085, 0.070}
     finally:
         env.close()
 
@@ -1772,11 +1765,12 @@ def test_pick_cube_never_unwinds_a_joint_by_a_whole_turn():
 # bin, and in the second state the cube, sat beyond the rear chamfer (x + y < -3.5),
 # where the room can no longer hold them, so the configuration is translated by
 # (+0.45, +0.45) m into the room. Relative robot/cube/bin geometry is unchanged. The
-# second state, a cube on its side 3.8 cm from the bin wall, has no grasp in the real
-# robot's list (faces 0 and 90 only): only a 180/270 face planned it, and the real
-# robot's camera-side check found those faces rescue 0/14 real cases while doubling
-# refusal time, so the list keeps 0/90. The pick refuses it cleanly, at zero steps,
-# which lets a planner choose a human reset instead.
+# second state, a cube on its side 3.8 cm from the bin wall, has no grasp on faces 0
+# and 90: only a 180/270 face plans it. The real robot's camera-side check once found
+# those faces rescue 0/14 real cases while doubling refusal time, so the lists kept
+# 0/90 and this state was refused. Since 2026-10-23 both sim and real are to try all
+# four sides (see PICK_CUBE_STANDOFF_SIDES); the simulated pick now picks this one from
+# the cube's far side.
 _ROOM_SHIFT = 0.45
 
 
@@ -1797,15 +1791,15 @@ _ROOM_SHIFT = 0.45
             (-1.8790059 + _ROOM_SHIFT, -1.9021316 + _ROOM_SHIFT, 0.0248922,
              0.0007560, 0.7071064, -0.0007560, 0.7071064),
             (-2.0916207 + _ROOM_SHIFT, -1.9016471 + _ROOM_SHIFT, -0.0001078),
-            True,
+            False,
         ),
     ],
 )
 def test_pick_cube_terminates_from_observed_practice_failure_states(
     robot_values, cube_values, bin_xyz, refused
 ):
-    """Regression states captured immediately before two 400-tick failures: the first
-    is picked; the second is refused at zero steps (see _ROOM_SHIFT's note)."""
+    """Regression states captured immediately before two 400-tick failures: both are
+    picked, the second from the cube's far side (see _ROOM_SHIFT's note)."""
     env = kinder.make(
         "kinder/Tossing3D-o1-v0",
         render_mode="rgb_array",
@@ -2321,11 +2315,12 @@ def test_pick_cube_retrieves_from_bin_after_toss(tmp_path):
 
 
 def test_pick_cube_grasp_candidates_match_the_real_robots_list_row_for_row():
-    """The real TidyBot's in-bin pick list with its oblique extension, as
-    [yaw offset deg, tilt deg, face deg, opening mm, gripper command] rows: bd85a79's
-    280 in its order, then yaw offsets to +-45 deg, tilts to +-30 deg and 80/75 mm
-    openings, appended so every grasp that worked before keeps its place. Sim and real
-    try the same grasps in the same order, so this list is the fixture, not a copy."""
+    """Grid 36, as [yaw offset deg, tilt deg, face deg, opening mm, gripper command]
+    rows. Chosen 2026-10-23 (Josh) for sim and real alike, so this list is the fixture,
+    not a copy: these are the rows prpl-tidybot's own bin_grasp_candidates produces for
+    grid 36, row for row. They are a subsequence, in order, of the 1,612 list this
+    fixture held before. The sim then tries the same grasps from the cube's two far
+    sides (test_pick_standoff_sides.py)."""
     rows = json.loads(
         (Path(__file__).parent / "near_wall_grasp_candidates.json").read_text()
     )
@@ -2354,7 +2349,7 @@ def test_pick_cube_grasp_candidates_match_the_real_robots_list_row_for_row():
             for c in controller.grasp_candidates(state)
         ]
         real = [[y, t, f, mm, round(cmd, 5)] for y, t, f, mm, cmd in rows]
-        assert len(sim) == len(real) == 1612
+        assert len(sim) == len(real) == 36
         assert sim == real
     finally:
         env.close()
