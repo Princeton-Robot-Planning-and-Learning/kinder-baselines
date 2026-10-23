@@ -2,7 +2,7 @@
 
 import enum
 import logging
-from typing import Any, ClassVar
+from typing import Any, Callable, ClassVar
 
 import numpy as np
 from bilevel_planning.structs import (
@@ -26,13 +26,18 @@ from pybullet_helpers.inverse_kinematics import (
     InverseKinematicsError,
     JointPositions,
 )
+from pybullet_helpers.joint import get_joint_infos, get_jointwise_difference
 from pybullet_helpers.link import get_link_state
 from pybullet_helpers.motion_planning import (
+    MotionPlanningHyperparameters,
     check_collisions_with_held_object,
     remap_joint_position_plan_to_constant_distance,
     run_motion_planning,
 )
-from pybullet_helpers.robots.single_arm import FingeredSingleArmPyBulletRobot
+from pybullet_helpers.robots.single_arm import (
+    FingeredSingleArmPyBulletRobot,
+    SingleArmPyBulletRobot,
+)
 from relational_structs import (
     Array,
     Object,
@@ -209,6 +214,129 @@ class PickCubeGraspCandidate:
             f"tilt={np.rad2deg(self.tilt):+.0f}deg, "
             f"opening={self.opening * 1000:.0f}mm)"
         )
+
+
+# Every arm plan a pick or toss executes is re-checked between its waypoints, at most
+# this far apart in end-effector travel (and in any one joint). BiRRT checks only its
+# own nodes, up to 0.1 rad apart: at the arm's reach one such step moved the end
+# effector 113 mm, and a held cube passed 39 mm into a bin wall between two clear
+# nodes (hitl-pmp t3-final-20261023, expectimax seed 2, seq 482).
+ARM_PLAN_MAX_END_EFFECTOR_STEP = 0.01
+ARM_PLAN_MAX_JOINT_STEP = 0.02
+# A plan that fails the dense check is planned once more with nodes this close (per
+# radian of the largest joint move), about 1 cm of end-effector travel apart at reach.
+DENSE_REPLAN_HYPERPARAMETERS = MotionPlanningHyperparameters(
+    birrt_extend_num_interp=100
+)
+# The executed form of every pick arm plan, as before this check.
+ARM_PLAN_REMAP_MAX_DISTANCE = 0.2
+
+
+def first_dense_joint_path_collision(
+    robot: SingleArmPyBulletRobot,
+    path: list[JointPositions],
+    collision_fn: Callable[[JointPositions], bool],
+    max_end_effector_step: float = ARM_PLAN_MAX_END_EFFECTOR_STEP,
+    max_joint_step: float = ARM_PLAN_MAX_JOINT_STEP,
+) -> tuple[int, float] | None:
+    """The first point of `path`, followed in straight joint-space segments, at which
+    `collision_fn` reports a collision, as (segment index, fraction along it); None if
+    there is none.
+
+    Each segment is subdivided until consecutive points are at most
+    `max_end_effector_step` apart in end-effector position and `max_joint_step` in
+    every joint, so a collision cannot hide between two checked points.
+    """
+    if not path:
+        return None
+    if collision_fn(list(path[0])):
+        return (0, 0.0)
+    infos = get_joint_infos(robot.robot_id, robot.arm_joints, robot.physics_client_id)
+
+    def end_effector(q: JointPositions) -> np.ndarray:
+        robot.set_joints(q)
+        return np.asarray(robot.get_end_effector_pose().position)
+
+    for index, (q1, q2) in enumerate(zip(path[:-1], path[1:])):
+        q1_arr = np.asarray(q1, dtype=float)
+        difference = np.asarray(get_jointwise_difference(infos, list(q2), list(q1)))
+        steps = max(1, int(np.ceil(np.max(np.abs(difference)) / max_joint_step)))
+        while True:
+            fractions = np.linspace(0.0, 1.0, steps + 1)
+            points = [list(q1_arr + t * difference) for t in fractions]
+            positions = np.array([end_effector(q) for q in points])
+            travel = np.linalg.norm(np.diff(positions, axis=0), axis=1)
+            if np.max(travel) <= max_end_effector_step or steps >= 4096:
+                break
+            steps *= 2
+        for t, point in zip(fractions[1:], points[1:]):
+            if collision_fn(point):
+                return (index, float(t))
+    return None
+
+
+def plan_checked_arm_motion(
+    robot: SingleArmPyBulletRobot,
+    start: JointPositions,
+    goal: JointPositions,
+    *,
+    collision_bodies: set[int],
+    physics_client_id: int,
+    held_object: int | None = None,
+    base_link_to_held_obj: Pose | None = None,
+    distance_threshold: float = 1e-6,
+    additional_state_constraint_fn: Callable[[JointPositions], bool] | None = None,
+) -> tuple[list[JointPositions], list[JointPositions]] | None:
+    """An arm motion from `start` to `goal`, as (BiRRT's path, the path executed), whose
+    executed form is collision-free between its waypoints, not only at them.
+
+    The executed form is BiRRT's path remapped to constant spacing. It is checked with
+    the planner's own collision function (`first_dense_joint_path_collision`); if it
+    fails, the motion is planned once more with nodes about 1 cm apart.
+    """
+
+    def collides(q: JointPositions) -> bool:
+        if check_collisions_with_held_object(
+            robot,
+            collision_bodies,
+            physics_client_id,
+            held_object,
+            base_link_to_held_obj,
+            q,
+            distance_threshold=distance_threshold,
+        ):
+            return True
+        return bool(
+            additional_state_constraint_fn is not None
+            and not additional_state_constraint_fn(q)
+        )
+
+    for hyperparameters in (None, DENSE_REPLAN_HYPERPARAMETERS):
+        plan = run_motion_planning(
+            robot,
+            start,
+            goal,
+            collision_bodies=collision_bodies,
+            seed=0,
+            physics_client_id=physics_client_id,
+            held_object=held_object,
+            base_link_to_held_obj=base_link_to_held_obj,
+            hyperparameters=hyperparameters,
+            additional_state_constraint_fn=additional_state_constraint_fn,
+            distance_threshold=distance_threshold,
+        )
+        if plan is None:
+            return None
+        executed = (
+            remap_joint_position_plan_to_constant_distance(
+                plan, robot, max_distance=ARM_PLAN_REMAP_MAX_DISTANCE
+            )
+            if len(plan) > 1
+            else list(plan)
+        )
+        if first_dense_joint_path_collision(robot, executed, collides) is None:
+            return plan, executed
+    return None
 
 
 # Per-joint motion between consecutive control steps below which the arm counts as
@@ -1002,6 +1130,10 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         """The ordered stages of a pick, stepped through in this order."""
 
         OPEN_GRIPPER = enum.auto()
+        # Back to home_joints from wherever the arm is, before the base moves. Nothing
+        # else returns an arm a timed-out pick left stretched, and a stretched arm
+        # carried through the base motion sweeps the gripper into whatever it passes.
+        RETRACT = enum.auto()
         BASE_MOTION = enum.auto()
         MOVE_ARM_TO_HOVER_OVER_CUBE = enum.auto()
         MOVE_ARM_DOWN_AROUND_CUBE = enum.auto()
@@ -1032,6 +1164,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         # Which waypoint of self.plans[phase] step() is currently driving toward. A fresh
         # controller is ground per refinement attempt, so this starts at 0 per attempt.
         self._plan_step_idx: dict[PickCubeController.PickCubeControllerPhase, int] = {
+            self.PickCubeControllerPhase.RETRACT: 0,
             self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE: 0,
             self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE: 0,
             self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME: 0,
@@ -1046,6 +1179,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             list[SE2] | list[JointPositions] | None,
         ] = {
             self.PickCubeControllerPhase.OPEN_GRIPPER: None,
+            self.PickCubeControllerPhase.RETRACT: None,
             self.PickCubeControllerPhase.BASE_MOTION: None,
             self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE: None,
             self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE: None,
@@ -1073,6 +1207,22 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         target_base_pose = get_target_robot_pose_from_parameters(
             candidate_cube_pose, self.TARGET_DISTANCE, self.TARGET_ROTATION
         )
+        sim = self._pybullet_sim
+        body_collision_fn: Callable[[SE2], bool] | None = None
+        if sim is not None:
+            # The arm rides through the base motion where the retract leaves it, with
+            # the fingers fully open (no grasp opens them wider).
+            sim.set_state(x)
+            carried = self._with_fingers(self.home_joints.tolist(), 0.0)
+            bodies = sim.get_collision_bodies()
+
+            def collides_carrying_the_retracted_arm(pose: SE2) -> bool:
+                return sim.robot_collides_at_base(
+                    pose, carried, collision_bodies=bodies
+                )
+
+            body_collision_fn = collides_carrying_the_retracted_arm
+
         return run_base_motion_planning(
             state=x,
             target_base_pose=target_base_pose,
@@ -1088,6 +1238,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             static_obstacles=(
                 self._pybullet_sim.static_base_obstacles if self._pybullet_sim else ()
             ),
+            body_collision_fn=body_collision_fn,
         )
 
     def _with_fingers(
@@ -1111,8 +1262,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
     ) -> bool:
         """Populate all trajectories for one grasp, returning False if infeasible.
 
-        `base_plans` caches the base path per yaw: it depends on nothing else, and
-        every planning call is seeded, so a cached path is the one replanning returns.
+        `base_plans` caches the base path per yaw: it depends on nothing else, and every
+        planning call is seeded, so a cached path is the one replanning returns.
         """
         assert self._pybullet_sim is not None
 
@@ -1148,6 +1299,10 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         state_after_base_motion.set(robot, "pos_base_x", target_base_pose.x)
         state_after_base_motion.set(robot, "pos_base_y", target_base_pose.y)
         state_after_base_motion.set(robot, "pos_base_rot", target_base_pose.theta())
+        # ...and with the arm where the retract leaves it, which is where it really is
+        # after the base motion: not the current arm, teleported with the base.
+        for joint, angle in enumerate(self.home_joints[:7], start=1):
+            state_after_base_motion.set(robot, f"pos_arm_joint{joint}", float(angle))
 
         # Set the simulation to the state after base motion so that it can be used
         # for grasp planning.
@@ -1186,24 +1341,20 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             self._with_fingers(target_hover_joints, candidate.finger_state)
         ):
             return False
-        hover_plan = run_motion_planning(
+        hover = plan_checked_arm_motion(
             self._pybullet_sim.robot,
-            self._with_fingers(
-                self._pybullet_sim.get_robot_joints(), candidate.finger_state
-            ),
+            self._with_fingers(self.home_joints.tolist(), candidate.finger_state),
             self._with_fingers(target_hover_joints, candidate.finger_state),
             # Includes the cube to grasp, because we have not grasped it yet.
             collision_bodies=self._pybullet_sim.get_collision_bodies(),
-            seed=0,
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
-        if hover_plan is None:
+        if hover is None:
             return False
+        hover_plan, executed_hover = hover
         self.plans[self.PickCubeControllerPhase.BASE_MOTION] = base_motion_plan
         self.plans[self.PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE] = (
-            remap_joint_position_plan_to_constant_distance(
-                hover_plan, self._pybullet_sim.robot, max_distance=0.2
-            )
+            executed_hover
         )
         return self._plan_grasp_and_lift(
             state_after_base_motion,
@@ -1290,7 +1441,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 distance_threshold=self.GRASP_OBSTACLE_CLEARANCE,
             )
 
-        around_plan = run_motion_planning(
+        around = plan_checked_arm_motion(
             self._pybullet_sim.robot,
             # Where the hover plan actually ENDS, not the inverse-kinematics solution it
             # was asked for. Joints 1/3/5/7 are continuous, so the planner routes them
@@ -1304,11 +1455,11 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             # The cube is still a collision body here.
             collision_bodies=self._pybullet_sim.get_collision_bodies(),
             additional_state_constraint_fn=has_grasp_clearance,
-            seed=0,
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
-        if around_plan is None:
+        if around is None:
             return False
+        around_plan, executed_around = around
         # CLOSE_GRIPPER_TO_GRASP_CUBE planning
         # Nothing, because the arm is opened/closed at inference time, not planning time
 
@@ -1328,7 +1479,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 Pose.from_rpy((0.0, 0.0, 0.0), (0.0, -candidate.tilt, 0.0)),
             )
         )
-        lift_plan = run_motion_planning(
+        lift = plan_checked_arm_motion(
             self._pybullet_sim.robot,
             # Again where the previous plan ends, not the IK target it aimed at.
             around_plan[-1],
@@ -1339,19 +1490,14 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             held_object=held_object,
             base_link_to_held_obj=self._pybullet_sim.base_link_to_held_obj,
             distance_threshold=held_object_collision_threshold,
-            seed=0,
             physics_client_id=self._pybullet_sim.physics_client_id,
         )
-        if lift_plan is None:
+        if lift is None:
             return False
         planned_arm_motions = {
-            self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE: around_plan,
-            self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME: lift_plan,
+            self.PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE: executed_around,
+            self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME: lift[1],
         }
-        for phase, plan in planned_arm_motions.items():
-            planned_arm_motions[phase] = remap_joint_position_plan_to_constant_distance(
-                plan, self._pybullet_sim.robot, max_distance=0.2
-            )
         self.plans.update(planned_arm_motions)
         for phase in planned_arm_motions:
             self._plan_step_idx[phase] = 0
@@ -1390,6 +1536,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         )
         self.candidates_tried = 0
         self.grasp_candidate = None
+        self._plan_retract(x)
         base_plans: dict[Quaternion, list[SE2] | None] = {}
         for candidate in self.grasp_candidates(x):
             self.candidates_tried += 1
@@ -1406,12 +1553,69 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 return
         raise ValueError("No collision-free cube grasp")
 
+    def current_joints(self, x: ObjectCentricState) -> JointPositions:
+        """The robot's arm in `x`, with the fingers fully open."""
+        robot = self.objects[0]
+        arm = [x.get(robot, f"pos_arm_joint{i}") for i in range(1, 8)]
+        return self._with_fingers(arm, 0.0)
+
+    def current_configuration_collision(self, x: ObjectCentricState) -> str | None:
+        """What the robot touches where it actually is in `x` (its base, arm and
+        fingers), or None if nothing.
+
+        Every plan used to start from a configuration that was never checked: the arm
+        at the end of the base motion, as if the base had teleported there.
+        """
+        sim = self._pybullet_sim
+        assert sim is not None
+        sim.set_state(x)
+        joints = self.current_joints(x)
+        if check_collisions_with_held_object(
+            sim.robot, set(), sim.physics_client_id, None, None, joints
+        ):
+            return "itself"
+        for name, body in sim.named_collision_bodies().items():
+            if check_collisions_with_held_object(
+                sim.robot, {body}, sim.physics_client_id, None, None, joints
+            ):
+                return name
+        return None
+
+    def _plan_retract(self, x: ObjectCentricState) -> None:
+        """Plan RETRACT: from the robot's real configuration in `x` to home_joints, with
+        the base where it is."""
+        sim = self._pybullet_sim
+        assert sim is not None
+        collision = self.current_configuration_collision(x)
+        if collision is not None:
+            # Deliberately no recovery: what a skill should do when it starts already
+            # in contact is undecided, so the pick refuses loudly rather than guess.
+            logger.warning(
+                "PickCube: the robot starts in contact with %s; refusing to retract",
+                collision,
+            )
+            raise ValueError(f"Robot starts in collision with {collision}")
+        sim.set_state(x)
+        retract = plan_checked_arm_motion(
+            sim.robot,
+            self.current_joints(x),
+            self._with_fingers(self.home_joints.tolist(), 0.0),
+            collision_bodies=sim.get_collision_bodies(),
+            physics_client_id=sim.physics_client_id,
+        )
+        if retract is None:
+            raise ValueError("No collision-free retract to home")
+        self.plans[self.PickCubeControllerPhase.RETRACT] = retract[1]
+
     def grasp_candidates(self, x: ObjectCentricState) -> list[PickCubeGraspCandidate]:
         """Every grasp `reset` may try, in the order it tries them: the real TidyBot's
-        in-bin order. The two grasps used before near-wall picks first (face-aligned,
-        untilted, fully open, on each face); then the near-wall set; then its oblique
-        extension, less any grasp already tried. Each set nests yaw offset, tilt, face
-        and opening, outermost to innermost. The first that plans is used."""
+        in-bin order.
+
+        The two grasps used before near-wall picks first (face-aligned, untilted, fully
+        open, on each face); then the near-wall set; then its oblique extension, less
+        any grasp already tried. Each set nests yaw offset, tilt, face and opening,
+        outermost to innermost. The first that plans is used.
+        """
         cube = self.objects[1]
         cube_quat = tuple(x.get(cube, key) for key in ("qx", "qy", "qz", "qw"))
         width = max(x.get(cube, "bb_x"), x.get(cube, "bb_y"))
@@ -1466,6 +1670,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
     def step(self) -> Array:
         if self.current_phase == self.PickCubeControllerPhase.OPEN_GRIPPER:
             return self._step_open_gripper()
+        if self.current_phase == self.PickCubeControllerPhase.RETRACT:
+            return self._step_retract()
         if self.current_phase == self.PickCubeControllerPhase.BASE_MOTION:
             return self._step_base_motion()
         if (
@@ -1501,11 +1707,23 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         a state the gripper is already in.
         """
         if self._robot_gripper_is_open():
-            self.current_phase = self.PickCubeControllerPhase.BASE_MOTION
-            return self._step_base_motion()
+            self.current_phase = self.PickCubeControllerPhase.RETRACT
+            return self._step_retract()
         action = np.zeros(self.ACTION_DIM, dtype=np.float32)
         action[GRIPPER_ACTION_INDEX] = self._gripper_open_command()
         return bound_declared_action(action)
+
+    def _step_retract(self) -> Array:
+        """Follow the retract plan home; a no-op when the arm is already there."""
+        retract = self.plans[self.PickCubeControllerPhase.RETRACT]
+        assert retract is not None
+        if self._robot_is_close_to_conf(retract[-1]):
+            self.current_phase = self.PickCubeControllerPhase.BASE_MOTION
+            return self._step_base_motion()
+        return self._step_trajectory_phase(
+            self.PickCubeControllerPhase.RETRACT,
+            self.PickCubeControllerPhase.BASE_MOTION,
+        )
 
     def _step_base_motion(self) -> Array:
         base_plan = self.plans[self.PickCubeControllerPhase.BASE_MOTION]
@@ -1648,8 +1866,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         """The command that keeps the gripper as it is: closed, or open to the chosen
         grasp's opening.
 
-        `pos_gripper` reads back the last command, so a partial opening reads as
-        itself; "closed" is anything clearly past it.
+        `pos_gripper` reads back the last command, so a partial opening reads as itself;
+        "closed" is anything clearly past it.
         """
         x = self._last_state
         assert x is not None
@@ -1752,6 +1970,10 @@ class MoveToTossLocationAndTossController(
     class MoveToTossLocationAndTossControllerPhase(enum.Enum):
         """Which leg of drive-then-throw step() is currently stepping."""
 
+        # Back to the retract configuration, holding the cube, before the base moves:
+        # the base motion carries the arm as it is. The gripper is not opened, unlike
+        # the pick's RETRACT -- this skill starts holding the cube it throws.
+        RETRACT = enum.auto()
         BASE_MOTION = enum.auto()
         WINDUP = enum.auto()
         SWING = enum.auto()
@@ -1815,7 +2037,11 @@ class MoveToTossLocationAndTossController(
         # The two sampled tossing dials.
         self._release_speed: float = TOSS_MAX_VELOCITY
         self._gripper_release_ms: int = TOSS_DEFAULT_GRIPPER_RELEASE_MILLISECONDS
-        self._phase = self.MoveToTossLocationAndTossControllerPhase.BASE_MOTION
+        self._phase = self.MoveToTossLocationAndTossControllerPhase.RETRACT
+
+        # Retract: from the observed arm to the retract configuration, cube attached.
+        self._retract_plan: list[JointPositions] | None = None
+        self._retract_step_idx: int = 0
 
         # Base motion: the drive to the toss pose.
         self._current_base_motion_plan: list[SE2] | None = None
@@ -1895,7 +2121,8 @@ class MoveToTossLocationAndTossController(
         # Deliberately continuous, unlike main's 100 ms grid (#165): toss_swing opens the
         # gripper mid-step, and callers that learn over the release time sample it
         # continuously. The grid was a simulator choice, not a hardware limit.
-        self._phase = self.MoveToTossLocationAndTossControllerPhase.BASE_MOTION
+        self._phase = self.MoveToTossLocationAndTossControllerPhase.RETRACT
+        self._retract_step_idx = 0
         self._windup_step_idx = 0
         self._previous_windup_arm_conf = None
         self._release_arm_configuration = None
@@ -1903,6 +2130,7 @@ class MoveToTossLocationAndTossController(
         self._swing_step_idx = 0
         self._has_released = False
 
+        self._plan_retract(x)
         self._current_base_motion_plan = self._plan_base_motion(
             x,
             current_params,
@@ -1912,6 +2140,26 @@ class MoveToTossLocationAndTossController(
         )
         final_base_pose = self._current_base_motion_plan[-1]
         self._plan_arm_toss(x, final_base_pose)
+
+    def _plan_retract(self, x: ObjectCentricState) -> None:
+        """Plan RETRACT: from the observed arm in `x` to the retract configuration, with
+        the held cube attached and the base where it is."""
+        assert self._pybullet_sim is not None
+        sim = self._pybullet_sim
+        held_cube, held_object = self._configure_held_cube(x)
+        sim.set_state(x, held_object=held_cube)
+        retract = plan_checked_arm_motion(
+            sim.robot,
+            self._get_current_robot_arm_conf(),
+            list(self._return_home_arm_config),
+            collision_bodies=sim.get_collision_bodies(held_object=held_object),
+            physics_client_id=sim.physics_client_id,
+            held_object=held_object,
+            base_link_to_held_obj=sim.base_link_to_held_obj,
+        )
+        if retract is None:
+            raise TrajectorySamplingFailure("Retract motion planning failed")
+        self._retract_plan = retract[1]
 
     def _plan_base_motion(
         self,
@@ -1924,6 +2172,20 @@ class MoveToTossLocationAndTossController(
         # The robot's own cargo would otherwise reject every base plan.
         if disable_collision_objects is None:
             disable_collision_objects = [self.objects[1].name]
+        assert self._pybullet_sim is not None
+        sim = self._pybullet_sim
+        # The arm rides through the base motion at the retract configuration, with
+        # the held cube attached by the observed grasp.
+        held_cube, held_object = self._configure_held_cube(x)
+        sim.set_state(x, held_object=held_cube)
+        carried = list(self._return_home_arm_config)
+        bodies = sim.get_collision_bodies(held_object=held_object)
+
+        def body_collision_fn(pose: SE2) -> bool:
+            return sim.robot_collides_at_base(
+                pose, carried, held_object=held_object, collision_bodies=bodies
+            )
+
         target_object = x.get_object_from_name("bin_0")
         target_object_pose = get_overhead_object_se2_pose(x, target_object)
         target_base_pose = get_target_robot_pose_from_parameters(
@@ -1944,6 +2206,7 @@ class MoveToTossLocationAndTossController(
             static_obstacles=(
                 self._pybullet_sim.static_base_obstacles if self._pybullet_sim else ()
             ),
+            body_collision_fn=body_collision_fn,
         )
         if base_motion_plan is None:
             logger.debug(
@@ -1976,6 +2239,9 @@ class MoveToTossLocationAndTossController(
         plan_x.set(robot, "pos_base_x", final_base_pose.x)
         plan_x.set(robot, "pos_base_y", final_base_pose.y)
         plan_x.set(robot, "pos_base_rot", final_base_pose.theta())
+        # The arm arrives at the retract configuration, not as it is now.
+        for joint, angle in enumerate(self._return_home_arm_config[:7], start=1):
+            plan_x.set(robot, f"pos_arm_joint{joint}", float(angle))
         sim.set_state(plan_x, held_object=held_cube)
         windup_plan = run_motion_planning(
             self._pybullet_sim.robot,
@@ -1994,7 +2260,7 @@ class MoveToTossLocationAndTossController(
             logger.debug("MoveToTossLocationAndToss: windup motion planning FAILED")
             raise TrajectorySamplingFailure("Motion planning failed")
         logger.debug("MoveToTossLocationAndToss: windup motion planning ok")
-        windup_start = np.array(self._get_current_robot_arm_conf()[:7])
+        windup_start = np.array(self._return_home_arm_config[:7])
         self._windup_trajectory, self._windup_dir = _compute_per_joint_profile(
             windup_start,
             np.array(windup_plan[-1][:7]),
@@ -2101,6 +2367,8 @@ class MoveToTossLocationAndTossController(
 
     def step(self) -> Array:
         assert self._current_base_motion_plan is not None
+        if self._phase is self.MoveToTossLocationAndTossControllerPhase.RETRACT:
+            return self._action_retract()
         if self._phase is self.MoveToTossLocationAndTossControllerPhase.BASE_MOTION:
             return self._action_base_motion()
         if self._phase is self.MoveToTossLocationAndTossControllerPhase.WINDUP:
@@ -2115,6 +2383,29 @@ class MoveToTossLocationAndTossController(
                 self._get_current_robot_arm_conf()[:7]
             )
         self._last_state = x
+
+    def _action_retract(self) -> Array:
+        """Follow the retract plan's waypoints, as the pick's arm phases do; hand off to
+        the base motion once the arm is at the retract configuration."""
+        plan = self._retract_plan
+        assert plan is not None and len(plan) > 0
+        idx = self._retract_step_idx
+        while idx < len(plan) - 1 and self._arm_is_close_to(plan[idx]):
+            idx += 1
+        self._retract_step_idx = idx
+        if idx >= len(plan) - 1 and self._arm_is_close_to(plan[-1]):
+            self._phase = self.MoveToTossLocationAndTossControllerPhase.BASE_MOTION
+            return self._action_base_motion()
+        curr = np.array(self._get_current_robot_arm_conf()[:7])
+        action = np.zeros(self.ACTION_DIM, dtype=np.float32)
+        action[3:10] = 2.0 * wrap_arm_joint_difference(np.array(plan[idx][:7]) - curr)
+        action[GRIPPER_ACTION_INDEX] = self._get_current_robot_gripper_pose()
+        return bound_tossing_action(action)
+
+    def _arm_is_close_to(self, conf: JointPositions) -> bool:
+        curr = np.array(self._get_current_robot_arm_conf()[:7])
+        error = wrap_arm_joint_difference(np.array(conf[:7]) - curr)
+        return bool(np.max(np.abs(error)) < WAYPOINT_TOLERANCE)
 
     def _action_base_motion(self) -> Array:
         assert self._current_base_motion_plan is not None

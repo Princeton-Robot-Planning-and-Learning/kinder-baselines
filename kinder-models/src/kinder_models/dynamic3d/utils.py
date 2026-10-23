@@ -2,7 +2,7 @@
 
 import math
 import weakref
-from typing import Iterable
+from typing import Callable, Iterable
 
 import numpy as np
 import pybullet as p
@@ -27,6 +27,7 @@ from pybullet_helpers.inverse_kinematics import (
     InverseKinematicsError,
     _validate_joints_state,
     add_fingers_to_joint_positions,
+    check_collisions_with_held_object,
     inverse_kinematics,
     set_robot_joints_with_held_object,
 )
@@ -58,6 +59,12 @@ _PARKED_POSITION = (0.0, 0.0, -1000.0)
 
 # Robot geometry.
 ROBOT_ARM_POSE_TO_BASE = Pose((0.12, 0.0, 0.4))
+
+# How far apart run_base_motion_planning checks the robot's 3-D body along a base path
+# when given a body_collision_fn: 1 cm of translation, and 0.01 rad of rotation, which
+# moves a point 1 m from the base centre (about the arm's retracted reach) by 1 cm.
+BASE_BODY_CHECK_XY_STEP = 0.01
+BASE_BODY_CHECK_ROT_STEP = 0.01
 
 # Arm joint velocity and acceleration limits (rad/s, rad/s²).
 _ARM_MAX_VELOCITY = np.deg2rad(np.array([80.0, 80.0, 80.0, 80.0, 70.0, 70.0, 70.0]))
@@ -286,8 +293,22 @@ def run_base_motion_planning(
     disable_collision_objects: list[str] | None = None,
     bounding_boxes: dict[str, tuple[float, float, float]] | None = None,
     static_obstacles: Iterable[Geom2D] = (),
+    body_collision_fn: Callable[[SE2], bool] | None = None,
+    body_check_xy_step: float = BASE_BODY_CHECK_XY_STEP,
+    body_check_rot_step: float = BASE_BODY_CHECK_ROT_STEP,
 ) -> list[SE2] | None:
-    """Run motion planning for the robot base."""
+    """Run motion planning for the robot base.
+
+    The base is checked as a 2-D footprint against obstacle footprints. That alone never
+    sees the arm, the fingers or a held object, which ride above the footprint and reach
+    beyond it. `body_collision_fn`, when given, reports whether the robot's 3-D body
+    collides at a base pose, with its arm as the caller will carry it; it is checked at
+    every pose the 2-D check passes, and the path is then checked at most
+    `body_check_xy_step` / `body_check_rot_step` apart, so a rotation cannot carry the
+    gripper through a wall between two clear poses. The returned path keeps the usual
+    waypoint spacing (the dense points are collinear and are dropped), so execution is
+    paced as before.
+    """
     rng = np.random.default_rng(seed)
 
     # Construct geoms.
@@ -311,17 +332,23 @@ def run_base_motion_planning(
         theta = rng.uniform(-np.pi, np.pi)
         return SE2(x, y, theta)
 
+    if body_collision_fn is not None:
+        xy_step = min(extend_xy_magnitude, body_check_xy_step)
+        rot_step = min(extend_rot_magnitude, body_check_rot_step)
+    else:
+        xy_step, rot_step = extend_xy_magnitude, extend_rot_magnitude
+
     def extend_fn(pt1: SE2, pt2: SE2) -> Iterable[SE2]:
         """Interpolate between the two poses."""
         # Make sure that we obey the bounds on actions.
         dx = pt2.x - pt1.x
         dy = pt2.y - pt1.y
         dtheta = get_signed_angle_distance(pt2.theta(), pt1.theta())
-        x_num_steps = int(abs(dx) / extend_xy_magnitude) + 1
+        x_num_steps = int(abs(dx) / xy_step) + 1
         assert x_num_steps > 0
-        y_num_steps = int(abs(dy) / extend_xy_magnitude) + 1
+        y_num_steps = int(abs(dy) / xy_step) + 1
         assert y_num_steps > 0
-        theta_num_steps = int(abs(dtheta) / extend_rot_magnitude) + 1
+        theta_num_steps = int(abs(dtheta) / rot_step) + 1
         assert theta_num_steps > 0
         num_steps = max(x_num_steps, y_num_steps, theta_num_steps)
         x = pt1.x
@@ -352,7 +379,7 @@ def run_base_motion_planning(
         for obstacle_geom in obstacle_geoms:
             if geom2ds_intersect(robot_geom, obstacle_geom):
                 return True
-        return False
+        return body_collision_fn is not None and body_collision_fn(pt)
 
     def distance_fn(pt1: SE2, pt2: SE2) -> float:
         """Return a distance between the two points."""
@@ -374,7 +401,40 @@ def run_base_motion_planning(
 
     initial_pose = get_overhead_robot_se2_pose(state, robot)
     path = birrt.query(initial_pose, target_base_pose)
-    return path
+    if path is None or body_collision_fn is None:
+        return path
+    return _drop_collinear_base_waypoints(
+        path, extend_xy_magnitude, extend_rot_magnitude
+    )
+
+
+def _drop_collinear_base_waypoints(
+    path: list[SE2], max_xy: float, max_rot: float
+) -> list[SE2]:
+    """`path` without the waypoints that lie on the straight line between their
+    neighbours, keeping consecutive waypoints within `max_xy` / `max_rot` of each other.
+
+    The base controller drives in a straight line between waypoints, so a dropped point
+    is still passed through: the executed path is unchanged, and only its pacing is
+    restored to the coarse spacing the planner used before dense checking.
+    """
+
+    def delta(a: SE2, b: SE2) -> np.ndarray:
+        return np.array(
+            [b.x - a.x, b.y - a.y, get_signed_angle_distance(b.theta(), a.theta())]
+        )
+
+    limit = np.array([max_xy, max_xy, max_rot]) + 1e-9
+    kept = [path[0]]
+    for i in range(1, len(path) - 1):
+        span = delta(kept[-1], path[i + 1])
+        step = delta(kept[-1], path[i])
+        too_far = bool(np.any(np.abs(span) > limit))
+        bends = float(np.linalg.norm(np.cross(span, step))) > 1e-9
+        if too_far or bends:
+            kept.append(path[i])
+    kept.append(path[-1])
+    return kept
 
 
 # Based on https://github.com/jimmyyhwu/tidybot/blob/main/robot/kinova.py#L310
@@ -871,9 +931,56 @@ class PyBulletSim:
                 extend_joints_to_include_fingers(arm_conf[:7]),
             )
 
+    def set_robot_base(self, base_pose: SE2) -> None:
+        """Place the arm's base for the mobile base at `base_pose`, as set_state does,
+        without touching anything else."""
+        pose = Pose.from_rpy((base_pose.x, base_pose.y, 0.0), (0, 0, base_pose.theta()))
+        self._robot.set_base(multiply_poses(pose, self._base_to_arm_pose))
+
+    def robot_collides_at_base(
+        self,
+        base_pose: SE2,
+        joints: JointPositions,
+        held_object: int | None = None,
+        collision_bodies: set[int] | None = None,
+        distance_threshold: float = 1e-6,
+    ) -> bool:
+        """Whether the robot, with its base at `base_pose` and its arm and fingers at
+        `joints` (and `held_object`, if any, carried by base_link_to_held_obj), collides
+        with the planning scene.
+
+        The base itself is not modelled here: run_base_motion_planning checks its
+        footprint in 2-D. This is what rides above the footprint.
+        """
+        if collision_bodies is None:
+            collision_bodies = self.get_collision_bodies(held_object=held_object)
+        self.set_robot_base(base_pose)
+        return check_collisions_with_held_object(
+            self._robot,
+            collision_bodies,
+            self._physics_client_id,
+            held_object,
+            self.base_link_to_held_obj if held_object is not None else None,
+            list(joints),
+            distance_threshold=distance_threshold,
+        )
+
     def get_ee_pose(self) -> Pose:
         """Get the end effector pose."""
         return self._robot.get_end_effector_pose()
+
+    def named_collision_bodies(self) -> dict[str, int]:
+        """Every collision body by name, as get_collision_bodies returns them."""
+        named = {
+            **self._cubes,
+            **self._bins,
+            **self._boxes,
+            **self._static_boxes,
+            **self._static_colliders,
+        }
+        if self._cupboard1_shelf_id is not None:
+            named["cupboard_1"] = self._cupboard1_shelf_id
+        return named
 
     def get_collision_bodies(self, held_object: int | None = None) -> set[int]:
         """Get pybullet IDs for collision bodies."""
@@ -958,9 +1065,9 @@ def inverse_kinematics_fixed_effort(
     end_effector_pose: Pose,
     set_joints: bool = True,
 ) -> JointPositions:
-    """`pybullet_helpers.inverse_kinematics` (validated), with IKFast bounded by a sample
-    count instead of wall time, so the answer does not depend on how loaded the machine
-    is."""
+    """`pybullet_helpers.inverse_kinematics` (validated), with IKFast bounded by a
+    sample count instead of wall time, so the answer does not depend on how loaded the
+    machine is."""
     if robot.default_inverse_kinematics_method != "ikfast":
         return inverse_kinematics(robot, end_effector_pose, set_joints=set_joints)
     solutions = ikfast_closest_inverse_kinematics(
