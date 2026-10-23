@@ -101,8 +101,13 @@ PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT = Pose(
 PICK_CUBE_GRASP_YAW_OFFSETS_DEGREES = (0, 5, -5, 10, -10, 15, -15, 20, -20, 25, -25)
 PICK_CUBE_GRASP_TILTS_DEGREES = (0.0, 10.0, -10.0, 15.0, -15.0, 20.0, -20.0)
 # Faces: the first two cube-symmetric yaws, closing turn 0 then 90 (the 2F-85 is
-# symmetric, so the other two are the same grasps).
+# symmetric, so the other two are the same grasps). That is the real robot's list.
 PICK_CUBE_GRASP_FACES = 2
+# The other two faces grip the same way, but the base stands on the opposite side of the
+# cube, so they reach a cube whose near sides are blocked by the bin, a wall or the
+# barrier. They are tried after every grasp on the first two, in the same order, so a
+# pick that plans on the first two plans exactly as before.
+PICK_CUBE_STANDOFF_SIDES = 4
 # The Robotiq 2F-85's full stroke, then the narrower opening that keeps the fingers off
 # a nearby wall. The narrow one is skipped when the cube's span across the closing axis
 # plus PICK_CUBE_NARROW_OPENING_CLEARANCE exceeds it.
@@ -1619,7 +1624,8 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         cube = self.objects[1]
         cube_quat = tuple(x.get(cube, key) for key in ("qx", "qy", "qz", "qw"))
         width = max(x.get(cube, "bb_x"), x.get(cube, "bb_y"))
-        faces = upright_grasp_rotations(cube_quat)[:PICK_CUBE_GRASP_FACES]
+        all_faces = upright_grasp_rotations(cube_quat)
+        faces = all_faces[:PICK_CUBE_GRASP_FACES]
 
         def nested(
             offsets: tuple[int, ...],
@@ -1657,6 +1663,16 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         ):
             tried = set(keys)
             keys += [key for key in group if key not in tried]
+        # The far sides: every grasp above again, on the face opposite its own
+        # (upright_grasp_rotations orders them yaw, +90, -90, +180).
+        far = {all_faces[0]: all_faces[3], all_faces[1]: all_faces[2]}
+        if PICK_CUBE_STANDOFF_SIDES <= PICK_CUBE_GRASP_FACES:
+            far = {}
+        keys += [
+            (offset, tilt, far[face], opening)
+            for offset, tilt, face, opening in keys
+            if face in far
+        ]
         return [
             PickCubeGraspCandidate(
                 face,

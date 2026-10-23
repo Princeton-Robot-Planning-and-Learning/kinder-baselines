@@ -2325,7 +2325,9 @@ def test_pick_cube_grasp_candidates_match_the_real_robots_list_row_for_row():
     [yaw offset deg, tilt deg, face deg, opening mm, gripper command] rows: bd85a79's
     280 in its order, then yaw offsets to +-45 deg, tilts to +-30 deg and 80/75 mm
     openings, appended so every grasp that worked before keeps its place. Sim and real
-    try the same grasps in the same order, so this list is the fixture, not a copy."""
+    try the same grasps in the same order, so this list is the fixture, not a copy.
+    The sim then tries the same list from the cube's two far sides
+    (test_pick_standoff_sides.py); the real robot's list stops here."""
     rows = json.loads(
         (Path(__file__).parent / "near_wall_grasp_candidates.json").read_text()
     )
@@ -2351,7 +2353,7 @@ def test_pick_cube_grasp_candidates_match_the_real_robots_list_row_for_row():
                 round(c.opening * 1000),
                 round(c.gripper_command, 5),
             ]
-            for c in controller.grasp_candidates(state)
+            for c in controller.grasp_candidates(state)[: len(rows)]
         ]
         real = [[y, t, f, mm, round(cmd, 5)] for y, t, f, mm, cmd in rows]
         assert len(sim) == len(real) == 1612
