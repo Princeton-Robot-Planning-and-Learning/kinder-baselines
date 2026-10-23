@@ -7,6 +7,7 @@ import types
 from pathlib import Path
 
 import kinder
+import mujoco
 import numpy as np
 import pybullet as p
 import pybullet_helpers.ikfast.utils as ikfast_utils
@@ -23,6 +24,7 @@ from kinder.envs.dynamic3d.object_types import (
 )
 from kinder.envs.dynamic3d.robots.tidybot_robot_env import TidyBot3DRobotActionSpace
 from pybullet_helpers.geometry import Pose
+from pybullet_helpers.robots import create_pybullet_robot
 from relational_structs import GroundAtom, Object, ObjectCentricState
 from relational_structs.spaces import ObjectCentricBoxSpace
 from relational_structs.utils import create_state_from_dict
@@ -34,7 +36,9 @@ from kinder_models.dynamic3d.tossing.parameterized_skills import (
     MoveToTossLocationAndTossController,
     PickCubeController,
     create_lifted_controllers,
+    finger_state_for_opening,
     get_target_robot_pose_from_parameters,
+    gripper_command_for_opening,
 )
 from kinder_models.dynamic3d.tossing.state_abstractions import (
     Holding,
@@ -57,6 +61,7 @@ from kinder_models.dynamic3d.utils import (
     MOVE_TO_TARGET_DISTANCE_BOUNDS,
     PyBulletSim,
     _trapezoidal_motion_profile,
+    upright_grasp_rotations,
 )
 
 kinder.register_all_environments()
@@ -1467,6 +1472,113 @@ def test_pick_cube_takes_no_continuous_parameters():
     env.close()
 
 
+def _pad_gap(physics_client_id, robot_id, names):
+    points = p.getClosestPoints(
+        robot_id,
+        robot_id,
+        0.2,
+        names["left_inner_finger_pad"],
+        names["right_inner_finger_pad"],
+        physicsClientId=physics_client_id,
+    )
+    return min(point[8] for point in points)
+
+
+@pytest.mark.parametrize("opening", [0.055, 0.07, 0.08, 0.085])
+def test_pick_cube_planning_fingers_open_to_the_requested_gap(opening):
+    """The pick plans with the PyBullet fingers at the opening it will command."""
+    client = p.connect(p.DIRECT)
+    try:
+        robot = create_pybullet_robot("kinova-gen3", client, fixed_base=True)
+        names = {
+            p.getJointInfo(robot.robot_id, j, physicsClientId=client)[12].decode(): j
+            for j in range(p.getNumJoints(robot.robot_id, physicsClientId=client))
+        }
+        home = list(robot.default_home_joint_positions[:7])
+        robot.set_joints(
+            home + robot.finger_state_to_joints(finger_state_for_opening(opening))
+        )
+        assert abs(_pad_gap(client, robot.robot_id, names) - opening) < 1.5e-3
+    finally:
+        p.disconnect(client)
+
+
+@pytest.mark.parametrize("opening", [0.055, 0.07, 0.08, 0.085])
+def test_pick_cube_gripper_command_opens_mujoco_pads_to_the_requested_gap(opening):
+    """MuJoCo's 2F-85, commanded for an opening, settles with its pads that far apart."""
+    # pylint: disable=no-member
+    model = mujoco.MjModel.from_xml_path(
+        str(
+            Path(kinder.__file__).parent
+            / "envs/dynamic3d/models/kinova_gen3/gen3_2f85.xml"
+        )
+    )
+    data = mujoco.MjData(model)
+    mujoco.mj_resetDataKeyframe(model, data, 0)
+    model.opt.gravity[:] = 0
+    actuator = mujoco.mj_name2id(
+        model, mujoco.mjtObj.mjOBJ_ACTUATOR, "fingers_actuator"
+    )
+    data.ctrl[actuator] = 255 * gripper_command_for_opening(opening)
+    for _ in range(3000):
+        mujoco.mj_step(model, data)
+    pads = {}
+    for side in ("left", "right"):
+        geoms = [
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"{side}_pad{i}")
+            for i in (1, 2)
+        ]
+        pads[side] = (data.geom_xpos[geoms].mean(axis=0), geoms[0])
+    between = pads["left"][0] - pads["right"][0]
+    axis = between / np.linalg.norm(between)
+    geom = pads["left"][1]
+    thickness = 2 * abs(
+        model.geom_size[geom] @ np.abs(data.geom_xmat[geom].reshape(3, 3).T @ axis)
+    )
+    assert abs(np.linalg.norm(between) - thickness - opening) < 1.5e-3
+
+
+def test_pick_cube_tries_the_real_robots_near_wall_grasps_in_its_order():
+    """The real TidyBot's near-wall pick (prpl-tidybot bd85a79), mirrored: the two old
+    grasps first (face-aligned, untilted, 85 mm, faces 0 then 90); then yaw offsets
+    outermost (0, +-5 .. +-25 deg, + before -), tilts about the closing axis (0, +-10,
+    +-15, +-20), faces, and 85 mm before 70 mm. 70 mm is skipped when the cube's span
+    across the closing axis plus 5 mm exceeds it (only at +-25 deg for a 5 cm cube):
+    280 candidates, before the oblique extension."""
+    env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
+    try:
+        obs, _ = env.reset(seed=125)
+        state = env.observation_space.devectorize(obs)
+        robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+        cube = state.get_object_from_name("cube_0")
+        barrier = state.get_object_from_name("cuboid_barrier")
+        controller = create_lifted_controllers(env.action_space, state)[
+            "pick_cube"
+        ].ground((robot, cube, barrier))
+        # The first 280; the oblique extension follows them (tested row for row below).
+        candidates = controller.grasp_candidates(state)[:280]
+        faces = upright_grasp_rotations(
+            tuple(state.get(cube, k) for k in ("qx", "qy", "qz", "qw"))
+        )[:2]
+        assert len({(c.yaw_quat, c.tilt, c.opening) for c in candidates}) == 280
+        for c, face in zip(candidates[:2], faces, strict=True):
+            assert (c.yaw_offset, c.tilt, c.opening) == (0.0, 0.0, 0.085)
+            assert c.yaw_quat == face and c.grasp_quat == face
+        offsets = [round(np.rad2deg(c.yaw_offset)) for c in candidates[2:]]
+        order = [0, 5, -5, 10, -10, 15, -15, 20, -20, 25, -25]
+        runs = [o for i, o in enumerate(offsets) if i == 0 or offsets[i - 1] != o]
+        assert runs == order
+        assert {round(np.rad2deg(c.tilt)) for c in candidates} == {
+            0, 10, -10, 15, -15, 20, -20,
+        }
+        for c in candidates:
+            assert c.opening in (0.085, 0.070)
+            if c.opening == 0.070:
+                assert abs(round(np.rad2deg(c.yaw_offset))) < 25
+    finally:
+        env.close()
+
+
 def test_pick_cube_stands_head_on_within_the_shelf_picks_reach():
     """No rotation offset from the cube's own facing, at a distance the shelf pick used
     to sample -- not a range, since the pick zone has nothing to route around."""
@@ -1656,21 +1768,44 @@ def test_pick_cube_never_unwinds_a_joint_by_a_whole_turn():
     env.close()
 
 
+# Both states were recorded before KINDER's Tossing3D room walls collided (#198). The
+# bin, and in the second state the cube, sat beyond the rear chamfer (x + y < -3.5),
+# where the room can no longer hold them, so the configuration is translated by
+# (+0.45, +0.45) m into the room. Relative robot/cube/bin geometry is unchanged. The
+# second state, a cube on its side 3.8 cm from the bin wall, has no grasp in the real
+# robot's list (faces 0 and 90 only): only a 180/270 face planned it, and the real
+# robot's camera-side check found those faces rescue 0/14 real cases while doubling
+# refusal time, so the list keeps 0/90. The pick refuses it cleanly, at zero steps,
+# which lets a planner choose a human reset instead.
+_ROOM_SHIFT = 0.45
+
+
 @pytest.mark.parametrize(
-    ("robot_values", "cube_values", "bin_xyz"),
+    ("robot_values", "cube_values", "bin_xyz", "refused"),
     [
         (
             (-0.0279723, 0.0288277, -0.0777655, 0.0, -0.3490659, 3.1415927,
              -2.5481806, 0.0, -0.8726646, 1.5707963, 0.0),
             (0.5677592, -0.2490022, 0.0200937, 0.9788500, 0.0, 0.0, 0.2045794),
-            (-2.0916207, -1.9016471, -0.0003950),
+            (-2.0916207 + _ROOM_SHIFT, -1.9016471 + _ROOM_SHIFT, -0.0003950),
+            False,
+        ),
+        (
+            (-0.6984256 + _ROOM_SHIFT, -1.8892152 + _ROOM_SHIFT, 3.1501957,
+             0.0016308, -0.3307114, 3.1403164, -2.5350375, -0.0017452,
+             -0.8825281, 1.5725152, 0.0),
+            (-1.8790059 + _ROOM_SHIFT, -1.9021316 + _ROOM_SHIFT, 0.0248922,
+             0.0007560, 0.7071064, -0.0007560, 0.7071064),
+            (-2.0916207 + _ROOM_SHIFT, -1.9016471 + _ROOM_SHIFT, -0.0001078),
+            True,
         ),
     ],
 )
 def test_pick_cube_terminates_from_observed_practice_failure_states(
-    robot_values, cube_values, bin_xyz
+    robot_values, cube_values, bin_xyz, refused
 ):
-    """Regression states captured immediately before two 400-tick failures."""
+    """Regression states captured immediately before two 400-tick failures: the first
+    is picked; the second is refused at zero steps (see _ROOM_SHIFT's note)."""
     env = kinder.make(
         "kinder/Tossing3D-o1-v0",
         render_mode="rgb_array",
@@ -1702,6 +1837,11 @@ def test_pick_cube_terminates_from_observed_practice_failure_states(
     controller = create_lifted_controllers(
         env.action_space, state, pybullet_sim=sim
     )["pick_cube"].ground((robot, cube, barrier))
+    if refused:
+        with pytest.raises(ValueError, match="No collision-free cube grasp"):
+            controller.reset(state, None)
+        env.close()
+        return
     controller.reset(state, None)
     for _ in range(400):
         obs, _, _, _, _ = env.step(controller.step())
@@ -2058,7 +2198,7 @@ def test_pick_retries_false_planning_canary(monkeypatch):
     attempts = []
 
     def _plan(*_args, **kwargs):
-        attempts.append(kwargs["grasp_quat"])
+        attempts.append(kwargs["candidate"])
         return next(outcomes)
 
     monkeypatch.setattr(PickCubeController, "_plan_motions", _plan)
@@ -2071,6 +2211,7 @@ def test_pick_retries_false_planning_canary(monkeypatch):
     )
     controller.reset(state, None)
     assert len(attempts) == 4
+    assert controller.grasp_candidate is attempts[-1]
 
 
 def test_pick_cube_retrieves_from_bin_after_toss(tmp_path):
@@ -2177,3 +2318,88 @@ def test_pick_cube_retrieves_from_bin_after_toss(tmp_path):
         env.close()
         if sim is not None:
             sim.close()
+
+
+def test_pick_cube_grasp_candidates_match_the_real_robots_list_row_for_row():
+    """The real TidyBot's in-bin pick list with its oblique extension, as
+    [yaw offset deg, tilt deg, face deg, opening mm, gripper command] rows: bd85a79's
+    280 in its order, then yaw offsets to +-45 deg, tilts to +-30 deg and 80/75 mm
+    openings, appended so every grasp that worked before keeps its place. Sim and real
+    try the same grasps in the same order, so this list is the fixture, not a copy."""
+    rows = json.loads(
+        (Path(__file__).parent / "near_wall_grasp_candidates.json").read_text()
+    )
+    env = kinder.make("kinder/Tossing3D-o1-v0", render_mode="rgb_array", num_objects=1)
+    try:
+        obs, _ = env.reset(seed=125)
+        state = env.observation_space.devectorize(obs)
+        robot = state.get_objects(MujocoTidyBotRobotObjectType)[0]
+        cube = state.get_object_from_name("cube_0")
+        barrier = state.get_object_from_name("cuboid_barrier")
+        controller = create_lifted_controllers(env.action_space, state)[
+            "pick_cube"
+        ].ground((robot, cube, barrier))
+        faces = upright_grasp_rotations(
+            tuple(state.get(cube, k) for k in ("qx", "qy", "qz", "qw"))
+        )
+        face_deg = {faces[0]: 0, faces[1]: 90}
+        sim = [
+            [
+                round(float(np.rad2deg(c.yaw_offset))),
+                round(float(np.rad2deg(c.tilt))),
+                face_deg[c.face_quat],
+                round(c.opening * 1000),
+                round(c.gripper_command, 5),
+            ]
+            for c in controller.grasp_candidates(state)
+        ]
+        real = [[y, t, f, mm, round(cmd, 5)] for y, t, f, mm, cmd in rows]
+        assert len(sim) == len(real) == 1612
+        assert sim == real
+    finally:
+        env.close()
+
+
+def test_bin_wall_clearance_counts_walls_and_ignores_the_floor():
+    """The real near-wall pick keeps every link 1 cm from a bin's inner walls at its
+    planned poses, and says nothing about the floor the fingertips reach down to."""
+    env = kinder.make("kinder/Tossing3D-o1-v0", num_objects=1)
+    obs, _ = env.reset(seed=125)
+    state = env.observation_space.devectorize(obs)
+    sim = PyBulletSim(state)
+    try:
+        ex, ey, ez = sim.robot.get_end_effector_pose().position
+        t = 0.02
+        # A 0.3 m bin whose +x inner wall face sits 5 mm beyond the end effector.
+        sim.add_bin(
+            name="near_wall",
+            pose=Pose((ex + 0.005 - (0.15 - t), ey, ez - 0.05)),
+            length=0.3,
+            width=0.3,
+            height=0.2,
+            wall_thickness=t,
+        )
+        # A 4 m bin whose floor sits 5 mm under the end effector, walls 2 m away (clear
+        # of the whole arm, which reaches back half a metre to its base).
+        sim.add_bin(
+            name="floor_below",
+            pose=Pose((ex, ey, ez - 0.005 - t)),
+            length=4.0,
+            width=4.0,
+            height=0.1,
+            wall_thickness=t,
+        )
+        sim.add_bin(
+            name="far",
+            pose=Pose((ex + 5.0, ey, 0.0)),
+            length=0.3,
+            width=0.3,
+            height=0.2,
+            wall_thickness=t,
+        )
+        assert sim.bin_wall_clearance("near_wall", max_distance=0.01) < 0.01
+        assert sim.bin_wall_clearance("floor_below", max_distance=0.01) >= 0.01
+        assert sim.bin_wall_clearance("far", max_distance=0.01) >= 0.01
+    finally:
+        sim.close()
+        env.close()
