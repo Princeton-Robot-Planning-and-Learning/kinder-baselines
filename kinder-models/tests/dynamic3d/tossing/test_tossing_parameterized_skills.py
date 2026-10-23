@@ -1773,10 +1773,10 @@ def test_pick_cube_never_unwinds_a_joint_by_a_whole_turn():
 # where the room can no longer hold them, so the configuration is translated by
 # (+0.45, +0.45) m into the room. Relative robot/cube/bin geometry is unchanged. The
 # second state, a cube on its side 3.8 cm from the bin wall, has no grasp in the real
-# robot's list (faces 0 and 90 only): only a 180/270 face planned it, and the real
-# robot's camera-side check found those faces rescue 0/14 real cases while doubling
-# refusal time, so the list keeps 0/90. The pick refuses it cleanly, at zero steps,
-# which lets a planner choose a human reset instead.
+# robot's list (faces 0 and 90 only): only a 180/270 face plans it. The real robot's
+# camera-side check found those faces rescue 0/14 real cases while doubling refusal
+# time, so the real list keeps 0/90; the simulated pick tries 180/270 after it, from
+# the cube's far side, and picks this one.
 _ROOM_SHIFT = 0.45
 
 
@@ -1797,15 +1797,15 @@ _ROOM_SHIFT = 0.45
             (-1.8790059 + _ROOM_SHIFT, -1.9021316 + _ROOM_SHIFT, 0.0248922,
              0.0007560, 0.7071064, -0.0007560, 0.7071064),
             (-2.0916207 + _ROOM_SHIFT, -1.9016471 + _ROOM_SHIFT, -0.0001078),
-            True,
+            False,
         ),
     ],
 )
 def test_pick_cube_terminates_from_observed_practice_failure_states(
     robot_values, cube_values, bin_xyz, refused
 ):
-    """Regression states captured immediately before two 400-tick failures: the first
-    is picked; the second is refused at zero steps (see _ROOM_SHIFT's note)."""
+    """Regression states captured immediately before two 400-tick failures: both are
+    picked, the second from the cube's far side (see _ROOM_SHIFT's note)."""
     env = kinder.make(
         "kinder/Tossing3D-o1-v0",
         render_mode="rgb_array",
