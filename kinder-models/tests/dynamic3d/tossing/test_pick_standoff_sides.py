@@ -33,6 +33,7 @@ from kinder.envs.dynamic3d.object_types import MujocoTidyBotRobotObjectType
 from pybullet_helpers.geometry import Pose
 from relational_structs import ObjectCentricState
 
+from kinder_models.dynamic3d.tossing import parameterized_skills
 from kinder_models.dynamic3d.tossing.parameterized_skills import (
     create_lifted_controllers,
 )
@@ -120,7 +121,7 @@ def test_the_first_grasps_stand_only_on_faces_0_and_90(env):
     try:
         faces = _faces(state)
         candidates = controller.grasp_candidates(state)
-        assert len(candidates) == 1612
+        assert len(candidates) == 36
         assert {c.face_quat for c in candidates} == {faces[0], faces[1]}
     finally:
         sim.close()
@@ -162,7 +163,7 @@ def test_each_rescue_side_tries_the_first_grasps_of_its_opposite_face(env):
         opposite = {2: faces[0], 3: faces[1]}
         for side in controller.rescue_sides(state):
             near = [c for c in first if c.face_quat == opposite[side.k]]
-            assert len(side.candidates) == len(near) == 806
+            assert len(side.candidates) == len(near) == 18
             assert all(c.face_quat == side.face_quat for c in side.candidates)
             assert [(c.yaw_offset, c.tilt, c.opening) for c in side.candidates] == [
                 (c.yaw_offset, c.tilt, c.opening) for c in near
@@ -183,6 +184,35 @@ def test_a_cube_reachable_only_from_its_far_sides_plans(env, key):
         assert controller.grasp_candidate.face_quat in (faces[2], faces[3])
     finally:
         sim.close()
+
+
+def test_the_rescue_checks_every_grasps_endpoints_before_searching_any():
+    """On by default: the far stands' grasps are filtered on their endpoints first."""
+    assert parameterized_skills.PICK_CUBE_RESCUE_FILTER_FIRST is True
+
+
+@pytest.mark.parametrize("key", ["expectimax_s2_seq64", "expectimax_s5_seq16"])
+def test_filtering_first_picks_the_grasp_searching_each_in_turn_would(
+    env, key, monkeypatch
+):
+    """A grasp whose endpoints collide fails the full search too, so filtering first
+    changes which grasps are searched, never which one wins."""
+    winners, searched = [], []
+    for filter_first in (False, True):
+        monkeypatch.setattr(
+            parameterized_skills, "PICK_CUBE_RESCUE_FILTER_FIRST", filter_first
+        )
+        state = _restore(env, key)
+        controller, sim = _pick(env, state)
+        try:
+            controller.reset(state, None)
+        finally:
+            sim.close()
+        c = controller.grasp_candidate
+        winners.append((c.face_quat, c.yaw_offset, c.tilt, c.opening))
+        searched.append(controller.candidates_tried)
+    assert winners[0] == winners[1]
+    assert searched[1] <= searched[0]
 
 
 def test_a_refusal_lists_every_side_tried(env):
