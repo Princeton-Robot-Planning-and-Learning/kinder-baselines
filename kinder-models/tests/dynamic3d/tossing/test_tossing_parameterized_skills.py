@@ -1566,7 +1566,8 @@ def test_pick_cube_tries_the_real_robots_near_wall_grasps_in_its_order():
             assert c.yaw_quat == face and c.grasp_quat == face
         offsets = [round(np.rad2deg(c.yaw_offset)) for c in candidates[2:]]
         order = [0, 5, -5, 10, -10, 15, -15, 20, -20, 25, -25]
-        assert [o for i, o in enumerate(offsets) if i == 0 or offsets[i - 1] != o] == order
+        runs = [o for i, o in enumerate(offsets) if i == 0 or offsets[i - 1] != o]
+        assert runs == order
         assert {round(np.rad2deg(c.tilt)) for c in candidates} == {
             0, 10, -10, 15, -15, 20, -20,
         }

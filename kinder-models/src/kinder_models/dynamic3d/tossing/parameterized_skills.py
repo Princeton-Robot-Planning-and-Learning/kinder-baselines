@@ -90,8 +90,9 @@ PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT = Pose(
 
 # The real TidyBot's near-wall pick (prpl-tidybot bd85a79), mirrored so a sim pick and a
 # real one try the same grasps in the same order. Yaw offsets turn the gripper about its
-# approach from the face-aligned yaw; tilts turn it about the fingers' closing axis, which
-# keeps both pads square to the faces they close on and leans the wrist away from a wall.
+# approach from the face-aligned yaw; tilts turn it about the fingers' closing axis,
+# which keeps both pads square to the faces they close on and leans the wrist away from
+# a wall.
 PICK_CUBE_GRASP_YAW_OFFSETS_DEGREES = (0, 5, -5, 10, -10, 15, -15, 20, -20, 25, -25)
 PICK_CUBE_GRASP_TILTS_DEGREES = (0.0, 10.0, -10.0, 15.0, -15.0, 20.0, -20.0)
 # Faces: the first two cube-symmetric yaws, closing turn 0 then 90 (the 2F-85 is
