@@ -377,6 +377,15 @@ def plan_checked_arm_motion(
     return None
 
 
+# After the throw, MoveToTossLocationAndToss holds still until the thrown cube is slower
+# than this (m/s), for at most TOSS_SETTLE_MAX_STEPS control steps, so the skill does not
+# end on a cube still bouncing or rolling. In hitl-pmp's t3-final-20261023 expectimax
+# runs 64/3053 tosses ended with the cube moving; held still, 19/25 of those that led to
+# a human reset settled somewhere pickable within 11 steps.
+TOSS_SETTLE_SPEED = 0.05
+TOSS_SETTLE_MAX_STEPS = 15
+
+
 # Per-joint motion between consecutive control steps below which the arm counts as
 # stopped. A stand-in for joint velocity, which the state does not expose for the arm.
 # Measured floor: the proportional controller's tail creeps at ~2.6e-3 rad/step and never
@@ -2201,6 +2210,8 @@ class MoveToTossLocationAndTossController(
         self._return_home_arm_config = np.deg2rad(
             [0, -20, 180, -146, 0, -50, 90, 0, 0, 0, 0, 0, 0]
         )
+        # Control steps spent home, waiting for the thrown cube to come to rest.
+        self._settle_steps = 0
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
         assert self._pybullet_sim is not None
@@ -2258,6 +2269,7 @@ class MoveToTossLocationAndTossController(
         # continuously. The grid was a simulator choice, not a hardware limit.
         self._phase = self.MoveToTossLocationAndTossControllerPhase.RETRACT
         self._retract_step_idx = 0
+        self._settle_steps = 0
         self._windup_step_idx = 0
         self._previous_windup_arm_conf = None
         self._release_arm_configuration = None
@@ -2491,6 +2503,16 @@ class MoveToTossLocationAndTossController(
         self._phase = self.MoveToTossLocationAndTossControllerPhase.SWING
 
     def terminated(self) -> bool:
+        """Done once the arm is home and the thrown cube has come to rest, or has had
+        TOSS_SETTLE_MAX_STEPS steps to."""
+        if not self._arm_is_home_after_the_throw():
+            return False
+        return (
+            self._settle_steps >= TOSS_SETTLE_MAX_STEPS
+            or self._thrown_cube_speed() < TOSS_SETTLE_SPEED
+        )
+
+    def _arm_is_home_after_the_throw(self) -> bool:
         if self._phase is not self.MoveToTossLocationAndTossControllerPhase.RETURN_HOME:
             return False
         assert self._pybullet_sim is not None
@@ -2499,6 +2521,13 @@ class MoveToTossLocationAndTossController(
             curr, list(self._return_home_arm_config)
         )
         return bool(dist < WAYPOINT_TOLERANCE)
+
+    def _thrown_cube_speed(self) -> float:
+        assert self._last_state is not None
+        cube = self.objects[1]
+        return float(
+            np.linalg.norm([self._last_state.get(cube, k) for k in ("vx", "vy", "vz")])
+        )
 
     def step(self) -> Array:
         assert self._current_base_motion_plan is not None
@@ -2627,6 +2656,12 @@ class MoveToTossLocationAndTossController(
         return bound_tossing_action(action)
 
     def _action_return_home(self) -> Array:
+        """Drive the arm home, then hold it there while the thrown cube settles."""
+        if self._arm_is_home_after_the_throw():
+            self._settle_steps += 1
+        return self._action_hold_home()
+
+    def _action_hold_home(self) -> Array:
         # wrap_arm_joint_difference, not a raw subtraction: the retract target holds
         # joint index 2 at 180 degrees (as does TOSS_WINDUP/RELEASE_ARM_CONFIGURATION
         # throughout windup/swing/release, so the arm is expected to be right at that
