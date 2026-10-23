@@ -101,12 +101,19 @@ PICK_CUBE_GRASP_TRANSFORM_TO_OBJECT = Pose(
 PICK_CUBE_GRASP_YAW_OFFSETS_DEGREES = (0, 5, -5, 10, -10, 15, -15, 20, -20, 25, -25)
 PICK_CUBE_GRASP_TILTS_DEGREES = (0.0, 10.0, -10.0, 15.0, -15.0, 20.0, -20.0)
 # Faces: the first two cube-symmetric yaws, closing turn 0 then 90 (the 2F-85 is
-# symmetric, so the other two are the same grasps). That is the real robot's list.
+# symmetric, so the other two are the same grasps). That is the real robot's list as of
+# prpl-tidybot bd85a79, and stays this list's prefix.
 PICK_CUBE_GRASP_FACES = 2
 # The other two faces grip the same way, but the base stands on the opposite side of the
 # cube, so they reach a cube whose near sides are blocked by the bin, a wall or the
 # barrier. They are tried after every grasp on the first two, in the same order, so a
 # pick that plans on the first two plans exactly as before.
+#
+# History: the real list kept 0/90 because the real robot's camera-side check found the
+# 180/270 faces rescued 0/14 real cases while doubling refusal time; bd85a79's own
+# real-to-sim benchmark (14 real in-bin rests) reported wall contact 0/14 and refusals
+# rescued 4/8 with the near-wall list. Decided 2026-10-23 (Josh): both sim and real use
+# all four sides. Sim does from here; the real robot is to follow in prpl-tidybot.
 PICK_CUBE_STANDOFF_SIDES = 4
 # The Robotiq 2F-85's full stroke, then the narrower opening that keeps the fingers off
 # a nearby wall. The narrow one is skipped when the cube's span across the closing axis

@@ -1772,11 +1772,12 @@ def test_pick_cube_never_unwinds_a_joint_by_a_whole_turn():
 # bin, and in the second state the cube, sat beyond the rear chamfer (x + y < -3.5),
 # where the room can no longer hold them, so the configuration is translated by
 # (+0.45, +0.45) m into the room. Relative robot/cube/bin geometry is unchanged. The
-# second state, a cube on its side 3.8 cm from the bin wall, has no grasp in the real
-# robot's list (faces 0 and 90 only): only a 180/270 face plans it. The real robot's
-# camera-side check found those faces rescue 0/14 real cases while doubling refusal
-# time, so the real list keeps 0/90; the simulated pick tries 180/270 after it, from
-# the cube's far side, and picks this one.
+# second state, a cube on its side 3.8 cm from the bin wall, has no grasp on faces 0
+# and 90: only a 180/270 face plans it. The real robot's camera-side check once found
+# those faces rescue 0/14 real cases while doubling refusal time, so the lists kept
+# 0/90 and this state was refused. Since 2026-10-23 both sim and real are to try all
+# four sides (see PICK_CUBE_STANDOFF_SIDES); the simulated pick now picks this one from
+# the cube's far side.
 _ROOM_SHIFT = 0.45
 
 
