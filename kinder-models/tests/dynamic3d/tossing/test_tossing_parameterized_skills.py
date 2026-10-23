@@ -1771,18 +1771,23 @@ def test_pick_cube_never_unwinds_a_joint_by_a_whole_turn():
 # bin, and in the second state the cube, sat beyond the rear chamfer (x + y < -3.5),
 # where the room can no longer hold them, so the configuration is translated by
 # (+0.45, +0.45) m into the room. Relative robot/cube/bin geometry is unchanged. The
-# second state, a cube on its side 3.8 cm from the bin wall, needs the tilted grasps.
+# second state, a cube on its side 3.8 cm from the bin wall, has no grasp in the real
+# robot's list (faces 0 and 90 only): only a 180/270 face planned it, and the real
+# robot's camera-side check found those faces rescue 0/14 real cases while doubling
+# refusal time, so the list keeps 0/90. The pick refuses it cleanly, at zero steps,
+# which lets a planner choose a human reset instead.
 _ROOM_SHIFT = 0.45
 
 
 @pytest.mark.parametrize(
-    ("robot_values", "cube_values", "bin_xyz"),
+    ("robot_values", "cube_values", "bin_xyz", "refused"),
     [
         (
             (-0.0279723, 0.0288277, -0.0777655, 0.0, -0.3490659, 3.1415927,
              -2.5481806, 0.0, -0.8726646, 1.5707963, 0.0),
             (0.5677592, -0.2490022, 0.0200937, 0.9788500, 0.0, 0.0, 0.2045794),
             (-2.0916207 + _ROOM_SHIFT, -1.9016471 + _ROOM_SHIFT, -0.0003950),
+            False,
         ),
         (
             (-0.6984256 + _ROOM_SHIFT, -1.8892152 + _ROOM_SHIFT, 3.1501957,
@@ -1791,13 +1796,15 @@ _ROOM_SHIFT = 0.45
             (-1.8790059 + _ROOM_SHIFT, -1.9021316 + _ROOM_SHIFT, 0.0248922,
              0.0007560, 0.7071064, -0.0007560, 0.7071064),
             (-2.0916207 + _ROOM_SHIFT, -1.9016471 + _ROOM_SHIFT, -0.0001078),
+            True,
         ),
     ],
 )
 def test_pick_cube_terminates_from_observed_practice_failure_states(
-    robot_values, cube_values, bin_xyz
+    robot_values, cube_values, bin_xyz, refused
 ):
-    """Regression states captured immediately before two 400-tick failures."""
+    """Regression states captured immediately before two 400-tick failures: the first
+    is picked; the second is refused at zero steps (see _ROOM_SHIFT's note)."""
     env = kinder.make(
         "kinder/Tossing3D-o1-v0",
         render_mode="rgb_array",
@@ -1829,6 +1836,11 @@ def test_pick_cube_terminates_from_observed_practice_failure_states(
     controller = create_lifted_controllers(
         env.action_space, state, pybullet_sim=sim
     )["pick_cube"].ground((robot, cube, barrier))
+    if refused:
+        with pytest.raises(ValueError, match="No collision-free cube grasp"):
+            controller.reset(state, None)
+        env.close()
+        return
     controller.reset(state, None)
     for _ in range(400):
         obs, _, _, _, _ = env.step(controller.step())
