@@ -5,6 +5,7 @@ import logging
 from typing import Any, Callable, ClassVar
 
 import numpy as np
+import pybullet as p
 from bilevel_planning.structs import (
     GroundParameterizedController,
     LiftedParameterizedController,
@@ -25,6 +26,7 @@ from pybullet_helpers.geometry import Pose, Quaternion, multiply_poses
 from pybullet_helpers.inverse_kinematics import (
     InverseKinematicsError,
     JointPositions,
+    check_self_collisions,
 )
 from pybullet_helpers.joint import get_joint_infos, get_jointwise_difference
 from pybullet_helpers.link import get_link_state
@@ -152,6 +154,28 @@ PICK_CUBE_NARROW_OPENING_CLEARANCE = 0.005
 # which the simulated pick has no separate pose for: its hover is above the rim.
 PICK_CUBE_WALL_MARGIN = 0.01
 
+# What a pick does once it is touching something it did not mean to. In
+# hitl-pmp t3-relaunch-20261023 a descent beside the barrier touched it at tick 79 and
+# pushed against it until the 400-step limit; every later pick then refused to start in
+# contact, and resets that moved only the cube ended the run. Three separate switches,
+# so each can be measured alone:
+# - abort at the first observed tick on which the robot touches anything but the cube it
+#   is reaching for, and retrace the executed path back out (unexpected_contact);
+PICK_CUBE_ABORT_ON_CONTACT = True
+# - when the caller's step budget runs out, retrace the same way (on_step_limit);
+PICK_CUBE_RETRACT_ON_TIMEOUT = True
+# - a pick that starts in contact escapes along a path whose clearance never decreases,
+#   then retracts as usual, instead of refusing (_plan_escape).
+PICK_CUBE_ESCAPE_RETRACT = True
+# The retrace keeps one waypoint per this much motion of any arm joint (rad) or of the
+# base (m, rad), and one at every change of the gripper command.
+PICK_CUBE_RETRACE_SPACING = 0.02
+# A retrace waypoint the robot has come no closer to for this many steps counts as
+# reached (see _step_retrace).
+PICK_CUBE_RETRACE_SETTLE_STEPS = 10
+# An escape ends this far from everything, so the ordinary retract can plan from it.
+PICK_CUBE_ESCAPE_CLEARANCE = 0.01
+
 # The 2F-85's inner pad gap (m) against its finger command, measured in each model with
 # no object between the pads. The planner's PyBullet fingers close faster than MuJoCo's
 # for the same driver angle, so each model is commanded by the gap, not by the angle.
@@ -172,6 +196,12 @@ PYBULLET_GRIPPER_GAPS = (
     0.0466,
 )
 PYBULLET_FINGER_STATES = (0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4)
+
+
+def _wrapped_angle(angle: float) -> float:
+    """`angle` in [-pi, pi]; a recorded base yaw need not be, which
+    get_signed_angle_distance asserts."""
+    return float(np.arctan2(np.sin(angle), np.cos(angle)))
 
 
 def gripper_command_for_opening(opening: float) -> float:
@@ -1207,6 +1237,31 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         MOVE_ARM_DOWN_AROUND_CUBE = enum.auto()
         CLOSE_GRIPPER_TO_GRASP_CUBE = enum.auto()
         LIFT_CUBE_TO_HOME = enum.auto()
+        # Not part of a normal pick: entered by abort(), back along the executed path.
+        ABORT_RETRACE = enum.auto()
+
+    # Phases in which the base stands still and the arm reaches from home_joints; an
+    # abort in one of them retraces only back to where they began.
+    ARM_PHASES: ClassVar[frozenset["PickCubeController.PickCubeControllerPhase"]] = (
+        frozenset(
+            {
+                PickCubeControllerPhase.MOVE_ARM_TO_HOVER_OVER_CUBE,
+                PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE,
+                PickCubeControllerPhase.CLOSE_GRIPPER_TO_GRASP_CUBE,
+                PickCubeControllerPhase.LIFT_CUBE_TO_HOME,
+            }
+        )
+    )
+    # From the descent on the hand is meant to touch the cube it grasps.
+    TARGET_CONTACT_PHASES: ClassVar[
+        frozenset["PickCubeController.PickCubeControllerPhase"]
+    ] = frozenset(
+        {
+            PickCubeControllerPhase.MOVE_ARM_DOWN_AROUND_CUBE,
+            PickCubeControllerPhase.CLOSE_GRIPPER_TO_GRASP_CUBE,
+            PickCubeControllerPhase.LIFT_CUBE_TO_HOME,
+        }
+    )
 
     def __init__(
         self, *args: Any, pybullet_sim: PyBulletSim | None = None, **kwargs: Any
@@ -1229,6 +1284,25 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         self._planned_cube_position: np.ndarray | None = None
         # Previous tick's arm conf, for the settling check in _robot_arm_has_settled.
         self._prev_arm_conf: np.ndarray | None = None
+        # Why the pick was aborted (abort()), or None; an aborted pick terminates once
+        # its retrace is done, without holding anything.
+        self.failure: str | None = None
+        # How many of the RETRACT plan's first waypoints are the escape from a start in
+        # contact (0 when the pick started clear).
+        self.escape_waypoints = 0
+        self._escape_contacts: set[str] = set()
+        self._retrace_floor = 0
+        # The executed path as (base x, y, yaw, 7 arm joints, gripper command) per
+        # waypoint, kept since reset(); where the arm phases began in it; and, once
+        # aborted, the waypoints back along it and which one is being driven to.
+        self._executed: list[np.ndarray] = []
+        self._arm_phases_start: int | None = None
+        self._retrace: list[np.ndarray] = []
+        self._retrace_idx = 0
+        self._retrace_best = np.inf
+        self._retrace_still = 0
+        self._retrace_planned_home = False
+        self._retraced = False
         # Which waypoint of self.plans[phase] step() is currently driving toward. A fresh
         # controller is ground per refinement attempt, so this starts at 0 per attempt.
         self._plan_step_idx: dict[PickCubeController.PickCubeControllerPhase, int] = {
@@ -1613,6 +1687,18 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         )
         self.candidates_tried = 0
         self.grasp_candidate = None
+        self.failure = None
+        self.escape_waypoints = 0
+        self._escape_contacts = set()
+        self._retrace_floor = 0
+        self._executed = [self._path_point(x)]
+        self._arm_phases_start = None
+        self._retrace = []
+        self._retrace_idx = 0
+        self._retrace_best = np.inf
+        self._retrace_still = 0
+        self._retrace_planned_home = False
+        self._retraced = False
         self._plan_retract(x)
         base_plans: dict[Quaternion, list[SE2] | None] = {}
 
@@ -1756,25 +1842,118 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         sim = self._pybullet_sim
         assert sim is not None
         collision = self.current_configuration_collision(x)
+        escape: list[JointPositions] = []
         if collision is not None:
-            # Deliberately no recovery: what a skill should do when it starts already
-            # in contact is undecided, so the pick refuses loudly rather than guess.
-            logger.warning(
-                "PickCube: the robot starts in contact with %s; refusing to retract",
+            if PICK_CUBE_ESCAPE_RETRACT:
+                escape = self._plan_escape(x) or []
+            if not escape:
+                logger.warning(
+                    "PickCube: the robot starts in contact with %s and no motion "
+                    "escapes it; refusing to retract",
+                    collision,
+                )
+                raise ValueError(f"Robot starts in collision with {collision}")
+            self._escape_contacts = self._contacts_at_start(x)
+            logger.info(
+                "PickCube: the robot starts in contact with %s; escaping in %d "
+                "waypoints",
                 collision,
+                len(escape),
             )
-            raise ValueError(f"Robot starts in collision with {collision}")
         sim.set_state(x)
         retract = plan_checked_arm_motion(
             sim.robot,
-            self.current_joints(x),
+            escape[-1] if escape else self.current_joints(x),
             self._with_fingers(self.home_joints.tolist(), 0.0),
             collision_bodies=sim.get_collision_bodies(),
             physics_client_id=sim.physics_client_id,
         )
         if retract is None:
             raise ValueError("No collision-free retract to home")
-        self.plans[self.PickCubeControllerPhase.RETRACT] = retract[1]
+        self.escape_waypoints = len(escape)
+        self.plans[self.PickCubeControllerPhase.RETRACT] = escape + retract[1]
+
+    def _contacts_at_start(self, x: ObjectCentricState) -> set[str]:
+        """Every body the robot touches in `x` ("itself" for its own), fingers open."""
+        sim = self._pybullet_sim
+        assert sim is not None
+        sim.set_state(x)
+        joints = self.current_joints(x)
+        touching = {
+            name
+            for name, body in sim.named_collision_bodies().items()
+            if check_collisions_with_held_object(
+                sim.robot, {body}, sim.physics_client_id, None, None, joints
+            )
+        }
+        if check_collisions_with_held_object(
+            sim.robot, set(), sim.physics_client_id, None, None, joints
+        ):
+            touching.add("itself")
+        return touching
+
+    def signed_clearance(self, joints: JointPositions) -> float:
+        """The robot's smallest signed distance, at `joints`, to every collision body in
+        the planning scene as last set: negative is penetration depth. Capped at
+        PICK_CUBE_ESCAPE_CLEARANCE; a self-collision counts as -inf."""
+        sim = self._pybullet_sim
+        assert sim is not None
+        sim.robot.set_joints(list(joints))
+        p.performCollisionDetection(physicsClientId=sim.physics_client_id)
+        if check_self_collisions(sim.robot, perform_collision_detection=False):
+            return -np.inf
+        clearance = PICK_CUBE_ESCAPE_CLEARANCE
+        for body in sim.get_collision_bodies():
+            for point in p.getClosestPoints(
+                bodyA=sim.robot.robot_id,
+                bodyB=body,
+                distance=PICK_CUBE_ESCAPE_CLEARANCE,
+                physicsClientId=sim.physics_client_id,
+            ):
+                clearance = min(clearance, float(point[8]))
+        return clearance
+
+    def _plan_escape(self, x: ObjectCentricState) -> list[JointPositions] | None:
+        """A joint-space path out of contact from the robot's configuration in `x`,
+        along which signed_clearance never decreases, ending at least
+        PICK_CUBE_ESCAPE_CLEARANCE from everything; None if no candidate does.
+
+        Candidates, in order: straight toward home_joints; then one joint at a time
+        toward home (shoulder, elbow, wrist pitch first). Each is walked in steps of
+        ARM_PLAN_MAX_JOINT_STEP and every step is a waypoint, so the executed motion
+        follows the checked one.
+        """
+        sim = self._pybullet_sim
+        assert sim is not None
+        sim.set_state(x)
+        start = np.asarray(self.current_joints(x), dtype=float)
+        fingers = list(start[7:])
+        to_home = wrap_arm_joint_difference(self.home_joints[:7] - start[:7])
+        directions = [to_home]
+        for joint in (1, 3, 5, 0, 2, 4, 6):
+            if abs(to_home[joint]) > ARM_PLAN_MAX_JOINT_STEP:
+                single = np.zeros(7)
+                single[joint] = to_home[joint]
+                directions.append(single)
+        try:
+            for direction in directions:
+                steps = int(
+                    np.ceil(np.max(np.abs(direction)) / ARM_PLAN_MAX_JOINT_STEP)
+                )
+                path: list[JointPositions] = [start.tolist()]
+                previous = self.signed_clearance(path[0])
+                for k in range(1, steps + 1):
+                    q = list(start[:7] + direction * (k / steps)) + fingers
+                    clearance = self.signed_clearance(q)
+                    if clearance < previous - 1e-9:
+                        break
+                    path.append(q)
+                    previous = clearance
+                    if clearance >= PICK_CUBE_ESCAPE_CLEARANCE:
+                        return path
+        finally:
+            sim.set_state(x)
+        return None
 
     def grasp_candidates(self, x: ObjectCentricState) -> list[PickCubeGraspCandidate]:
         """Every grasp `reset` may try first, in the order it tries them: grid 36.
@@ -1811,7 +1990,265 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
             for offset, tilt, face, opening in keys
         ]
 
+    def unexpected_contact(self, x: ObjectCentricState) -> str | None:
+        """What the robot touches in `x` that the current phase does not mean it to
+        touch, or None. As current_configuration_collision, but with the fingers where
+        the gripper command puts them.
+
+        Expected, and so ignored: the cube being picked, from the descent around it
+        until the lift ends (TARGET_CONTACT_PHASES); and, while an escape is under way,
+        what the robot started in contact with, until it is first observed clear.
+        Everything else is unexpected in every phase: the robot's own body, the barrier,
+        a bin, the room, and the cube before the hand reaches for it.
+        """
+        sim = self._pybullet_sim
+        assert sim is not None
+        sim.set_state(x)
+        robot = self.objects[0]
+        arm = [x.get(robot, f"pos_arm_joint{i}") for i in range(1, 8)]
+        command = float(np.clip(x.get(robot, "pos_gripper"), 0.0, 0.5))
+        opening = float(
+            np.interp(command, MUJOCO_GRIPPER_COMMANDS, MUJOCO_GRIPPER_GAPS)
+        )
+        joints = self._with_fingers(arm, finger_state_for_opening(opening))
+        allowed: set[str] = set()
+        if self.current_phase in self.TARGET_CONTACT_PHASES:
+            allowed.add(self.objects[1].name)
+        if self._escape_contacts:
+            allowed |= self._escape_contacts
+        touching = []
+        if check_collisions_with_held_object(
+            sim.robot, set(), sim.physics_client_id, None, None, joints
+        ):
+            touching.append("itself")
+        for name, body in sim.named_collision_bodies().items():
+            if check_collisions_with_held_object(
+                sim.robot, {body}, sim.physics_client_id, None, None, joints
+            ):
+                touching.append(name)
+        if self._escape_contacts and not set(touching) & self._escape_contacts:
+            # Clear of what it started in: the escape is over, and a retrace never
+            # goes back into it.
+            self._escape_contacts = set()
+            self._retrace_floor = len(self._executed) - 1
+        for name in touching:
+            if name not in allowed:
+                return name
+        return None
+
+    def on_step_limit(self) -> None:
+        """The caller's step budget ran out: retrace out (PICK_CUBE_RETRACT_ON_TIMEOUT),
+        or do nothing, as before, when that is off.
+
+        Not mid-lift with the hand closed and the cube raised past
+        MINIMUM_HOLDING_HEIGHT: the retrace would lower the cube and reopen the hand on
+        it. Of the 26 hitl-pmp t3-relaunch-20261023 picks that used all 400 steps, 2/26
+        were such lifts, holding at the limit.
+        """
+        if not PICK_CUBE_RETRACT_ON_TIMEOUT:
+            return
+        if (
+            self.current_phase == self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME
+            and self._closed_gripper
+            and self._last_state is not None
+            and self._last_state.get(self.objects[1], "z") > MINIMUM_HOLDING_HEIGHT
+        ):
+            return
+        self.abort(f"step limit reached in {self.current_phase.name}")
+
+    def abort(self, reason: str) -> None:
+        """Stop the pick and drive back along the executed path, in reverse.
+
+        From an arm phase the retrace ends where the arm phases began, at home_joints
+        with the base at its stand: the pose every later skill starts from. From
+        earlier it ends where the pick began, which reset() found clear (or escaped
+        to). Every recorded point was reached physically, so, unlike a fresh plan from
+        a configuration in contact, the path out exists by construction; the gripper
+        command is retraced too, so a closed hand reopens before it rises from a cube.
+        A no-op once aborted or terminated.
+        """
+        if self.failure is not None or self.terminated():
+            return
+        self.failure = f"PickCube aborted: {reason}"
+        logger.warning("%s; retracing %d waypoints", self.failure, len(self._executed))
+        start = 0
+        if self.current_phase in self.ARM_PHASES and self._arm_phases_start is not None:
+            start = self._arm_phases_start
+        start = max(start, self._retrace_floor)
+        self._retrace = [point.copy() for point in self._executed[start:][::-1]]
+        assert self._last_state is not None
+        if (
+            self._closed_gripper
+            and self._last_state.get(self.objects[1], "z") <= MINIMUM_HOLDING_HEIGHT
+        ):
+            # Shut on a cube that is still down: open first, and stay open, rather than
+            # drag it back along the lift (3/26 relaunch stalls fell 0.2 rad behind every
+            # waypoint so). A raised cube is lowered in the closed hand instead.
+            for point in self._retrace:
+                point[10] = self._gripper_open_command()
+        self._retrace_idx = 0
+        self._retrace_best = np.inf
+        self._retrace_still = 0
+        self.current_phase = self.PickCubeControllerPhase.ABORT_RETRACE
+
+    def _path_point(self, x: ObjectCentricState) -> np.ndarray:
+        """The robot's base, arm and gripper command in `x`, as one retrace waypoint."""
+        robot = self.objects[0]
+        return np.array(
+            [x.get(robot, "pos_base_x"), x.get(robot, "pos_base_y")]
+            + [x.get(robot, "pos_base_rot")]
+            + [x.get(robot, f"pos_arm_joint{i}") for i in range(1, 8)]
+            + [x.get(robot, "pos_gripper")]
+        )
+
+    def _record_path(self, x: ObjectCentricState) -> None:
+        """Extend the executed path with `x`'s point, loop-erased.
+
+        A point back within WAYPOINT_TOLERANCE of an earlier one (same gripper command)
+        cuts the path back to that one: the loop between was left where it started, so
+        the way back skips it. A stall's jitter against an obstacle is such a loop on
+        every tick, and following it in reverse would retrace every jitter. Otherwise
+        the point is appended once it is PICK_CUBE_RETRACE_SPACING from the last, or
+        commands the gripper differently.
+        """
+        point = self._path_point(x)
+        floor = max(self._retrace_floor, self._arm_phases_start or 0)
+        for index in range(floor, len(self._executed)):
+            earlier = self._executed[index]
+            if (
+                self._path_distance(point, earlier) < WAYPOINT_TOLERANCE
+                and abs(point[10] - earlier[10]) <= GRIPPER_OPEN_COMMAND_TOLERANCE
+            ):
+                if index < len(self._executed) - 1:
+                    del self._executed[index + 1 :]
+                    return
+                break
+        last = self._executed[-1]
+        if (
+            self._path_distance(point, last) >= PICK_CUBE_RETRACE_SPACING
+            or abs(point[10] - last[10]) > GRIPPER_OPEN_COMMAND_TOLERANCE
+        ):
+            self._executed.append(point)
+
+    @staticmethod
+    def _path_distance(a: np.ndarray, b: np.ndarray) -> float:
+        """The largest base (m, rad) or arm joint (rad) difference between two retrace
+        waypoints, each angle the short way round."""
+        return max(
+            float(np.max(np.abs(a[:2] - b[:2]))),
+            abs(_wrapped_angle(float(a[2]) - float(b[2]))),
+            float(np.max(np.abs(wrap_arm_joint_difference(a[3:10] - b[3:10])))),
+        )
+
+    def _step_retrace(self) -> Array:
+        """Drive the base, arm and gripper to each retrace waypoint in turn.
+
+        A waypoint counts as reached within WAYPOINT_TOLERANCE, or once the robot has
+        come no closer to it for PICK_CUBE_RETRACE_SETTLE_STEPS steps: a point recorded
+        while the arm was pressed against something can sit just past where the free
+        arm settles (measured: joint 7 held 0.046-0.049 rad short for over 400 steps).
+        The first time a waypoint stalls so with the robot clear of everything and the
+        hand open, the rest of the retrace is replaced by the ordinary collision-checked
+        motion home from there (_plan_home_from_clear): out of contact, the reversed
+        path has done its job, and following more of it can drive the open hand back
+        down at a cube the lift left on the floor.
+        """
+        current = self._executed_point()
+        idx = self._retrace_idx
+        while True:
+            target = self._retrace[idx]
+            distance = self._path_distance(current, target)
+            if distance < self._retrace_best - ARM_SETTLE_TOLERANCE:
+                self._retrace_best = distance
+                self._retrace_still = 0
+            else:
+                self._retrace_still += 1
+            stalled = (
+                not self._is_at(target, current)
+                and self._retrace_still >= PICK_CUBE_RETRACE_SETTLE_STEPS
+            )
+            if (
+                stalled
+                and not self._retrace_planned_home
+                and self._hand_open_and_clear()
+            ):
+                # One attempt: a plan that fails from here would fail again.
+                self._retrace_planned_home = True
+                home = self._plan_home_from_clear()
+                if home is not None:
+                    self._retrace = home
+                    idx = 0
+                    self._retrace_best = np.inf
+                    self._retrace_still = 0
+                    continue
+            if not (stalled or self._is_at(target, current)):
+                break
+            if idx == len(self._retrace) - 1:
+                self._retraced = True
+                break
+            idx += 1
+            self._retrace_best = np.inf
+            self._retrace_still = 0
+        self._retrace_idx = idx
+        robot_pose = self._get_current_robot_pose()
+        action = np.zeros(self.ACTION_DIM, dtype=np.float32)
+        action[0] = target[0] - robot_pose.x
+        action[1] = target[1] - robot_pose.y
+        action[2] = _wrapped_angle(float(target[2]) - robot_pose.theta())
+        action[3:10] = 2.0 * wrap_arm_joint_difference(target[3:10] - current[3:10])
+        action[GRIPPER_ACTION_INDEX] = target[10]
+        return bound_declared_action(action)
+
+    def _hand_open_and_clear(self) -> bool:
+        """Whether the gripper is commanded open and the robot touches nothing."""
+        x = self._last_state
+        assert x is not None
+        opening = x.get(self.objects[0], "pos_gripper")
+        if abs(opening - self._gripper_open_command()) > GRIPPER_OPEN_COMMAND_TOLERANCE:
+            return False
+        return self.current_configuration_collision(x) is None
+
+    def _plan_home_from_clear(self) -> list[np.ndarray] | None:
+        """Retrace waypoints from where the robot is to home_joints, base still, along a
+        collision-checked plan; None if none plans."""
+        x = self._last_state
+        assert x is not None and self._pybullet_sim is not None
+        sim = self._pybullet_sim
+        sim.set_state(x)
+        plan = plan_checked_arm_motion(
+            sim.robot,
+            self.current_joints(x),
+            self._with_fingers(self.home_joints.tolist(), 0.0),
+            collision_bodies=sim.get_collision_bodies(),
+            physics_client_id=sim.physics_client_id,
+        )
+        if plan is None:
+            return None
+        here = self._executed_point()
+        waypoints = []
+        for joints in plan[1]:
+            point = here.copy()
+            point[3:10] = joints[:7]
+            point[10] = self._gripper_open_command()
+            waypoints.append(point)
+        return waypoints
+
+    def _executed_point(self) -> np.ndarray:
+        assert self._last_state is not None
+        return self._path_point(self._last_state)
+
+    @staticmethod
+    def _is_at(target: np.ndarray, current: np.ndarray) -> bool:
+        """Whether `current` is within WAYPOINT_TOLERANCE of `target` on every base and
+        arm coordinate, with the gripper commanded as `target` commands it."""
+        return bool(
+            PickCubeController._path_distance(current, target) < WAYPOINT_TOLERANCE
+            and abs(current[10] - target[10]) <= GRIPPER_OPEN_COMMAND_TOLERANCE
+        )
+
     def step(self) -> Array:
+        if self.current_phase == self.PickCubeControllerPhase.ABORT_RETRACE:
+            return self._step_retrace()
         if self.current_phase == self.PickCubeControllerPhase.OPEN_GRIPPER:
             return self._step_open_gripper()
         if self.current_phase == self.PickCubeControllerPhase.RETRACT:
@@ -1972,9 +2409,24 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
 
     def observe(self, x: ObjectCentricState) -> None:
         self._last_state = x
+        if self.current_phase == self.PickCubeControllerPhase.ABORT_RETRACE:
+            return
+        if not self._executed:
+            # Stepped without reset(): nothing recorded to retrace or monitor.
+            return
+        if self._arm_phases_start is None and self.current_phase in self.ARM_PHASES:
+            # The last point recorded is the last the base motion reached.
+            self._arm_phases_start = len(self._executed) - 1
+        self._record_path(x)
+        if PICK_CUBE_ABORT_ON_CONTACT and not self._lifted:
+            contact = self.unexpected_contact(x)
+            if contact is not None:
+                self.abort(
+                    f"unexpected contact with {contact} in {self.current_phase.name}"
+                )
 
     def terminated(self) -> bool:
-        return self._lifted
+        return self._lifted or self._retraced
 
     def _get_current_robot_pose(self) -> SE2:
         assert self._last_state is not None
