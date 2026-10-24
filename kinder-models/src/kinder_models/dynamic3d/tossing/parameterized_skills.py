@@ -2036,9 +2036,21 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
 
     def on_step_limit(self) -> None:
         """The caller's step budget ran out: retrace out (PICK_CUBE_RETRACT_ON_TIMEOUT),
-        or do nothing, as before, when that is off."""
-        if PICK_CUBE_RETRACT_ON_TIMEOUT:
-            self.abort(f"step limit reached in {self.current_phase.name}")
+        or do nothing, as before, when that is off.
+
+        Not while lifting with the gripper closed: the retrace would lower the cube and
+        reopen the hand on it, undoing a grasp that may hold (2/26 relaunch stalls were
+        such lifts, holding at the limit). Contact left behind is the next skill's to
+        escape.
+        """
+        if not PICK_CUBE_RETRACT_ON_TIMEOUT:
+            return
+        if (
+            self.current_phase == self.PickCubeControllerPhase.LIFT_CUBE_TO_HOME
+            and self._closed_gripper
+        ):
+            return
+        self.abort(f"step limit reached in {self.current_phase.name}")
 
     def abort(self, reason: str) -> None:
         """Stop the pick and drive back along the executed path, in reverse.

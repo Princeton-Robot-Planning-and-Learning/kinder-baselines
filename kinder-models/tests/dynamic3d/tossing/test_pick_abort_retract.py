@@ -194,6 +194,32 @@ def test_without_the_contact_abort_the_stall_retraces_out_at_the_step_limit(
     assert np.max(np.abs(wrap_arm_joint_difference(_arm(state) - _HOME))) < 0.05
 
 
+def test_a_step_limit_during_a_closed_hand_lift_does_not_undo_the_grasp(env):
+    """Out of steps while lifting with the gripper closed, the pick does not retrace:
+
+    retracing would lower the cube and reopen the hand on it. Replaying the 26 relaunch
+    stalls, 2/26 were lift timeouts that still held the cube, and retracing lost both.
+    Any contact the hand is left in is the next skill's escape to make.
+    """
+    obs, _ = env.reset(seed=125)
+    state = env.observation_space.devectorize(obs)
+    controller, sim = _pick(env, state)
+    try:
+        controller.reset(state, None)
+        controller.observe(state)
+        controller.current_phase = Phase.LIFT_CUBE_TO_HOME
+        controller._closed_gripper = True
+        controller.on_step_limit()
+        assert controller.failure is None
+        assert controller.current_phase == Phase.LIFT_CUBE_TO_HOME
+        controller._closed_gripper = False
+        controller.on_step_limit()
+        assert controller.failure is not None
+        assert controller.current_phase == Phase.ABORT_RETRACE
+    finally:
+        sim.close()
+
+
 def test_with_both_off_the_step_limit_leaves_the_arm_on_the_barrier(env, monkeypatch):
     """The behaviour before: the switches are what changes it."""
     monkeypatch.setattr(parameterized_skills, "PICK_CUBE_ABORT_ON_CONTACT", False)
