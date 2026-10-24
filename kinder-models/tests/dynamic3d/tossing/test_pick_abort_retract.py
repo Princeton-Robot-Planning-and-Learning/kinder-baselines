@@ -229,6 +229,41 @@ def test_a_step_limit_mid_lift_keeps_a_cube_the_closed_hand_has_raised(env):
         sim.close()
 
 
+def test_an_abort_with_the_hand_closed_on_a_cube_still_down_reopens_it_first(env):
+    """A closed hand holding nothing up (the cube below MINIMUM_HOLDING_HEIGHT) opens
+    before it retraces and stays open: retracing a lift with the hand shut on a cube
+    left on the floor drags it, and the arm fell 0.2 rad behind each waypoint (3/26
+    relaunch stalls used the whole 200-step retrace budget). A raised cube is lowered
+    in the closed hand, as the path recorded it."""
+    obs, _ = env.reset(seed=125)
+    state = env.observation_space.devectorize(obs)
+    robot, cube, _ = _objects(state)
+    controller, sim = _pick(env, state)
+    try:
+        controller.reset(state, None)
+        closed = state.copy()
+        closed.set(robot, "pos_gripper", 1.0)
+        controller.observe(closed)
+        controller.current_phase = Phase.LIFT_CUBE_TO_HOME
+        controller._closed_gripper = True
+        controller.abort("test")
+        assert all(point[10] == 0.0 for point in controller._retrace)
+        raised = closed.copy()
+        raised.set(cube, "z", MINIMUM_HOLDING_HEIGHT + 0.05)
+        controller, sim2 = _pick(env, state)
+        try:
+            controller.reset(state, None)
+            controller.observe(raised)
+            controller.current_phase = Phase.LIFT_CUBE_TO_HOME
+            controller._closed_gripper = True
+            controller.abort("test")
+            assert controller._retrace[0][10] == 1.0
+        finally:
+            sim2.close()
+    finally:
+        sim.close()
+
+
 def test_with_both_off_the_step_limit_leaves_the_arm_on_the_barrier(env, monkeypatch):
     """The behaviour before: the switches are what changes it."""
     monkeypatch.setattr(parameterized_skills, "PICK_CUBE_ABORT_ON_CONTACT", False)

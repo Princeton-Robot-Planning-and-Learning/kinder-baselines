@@ -2073,7 +2073,17 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         if self.current_phase in self.ARM_PHASES and self._arm_phases_start is not None:
             start = self._arm_phases_start
         start = max(start, self._retrace_floor)
-        self._retrace = self._executed[start:][::-1]
+        self._retrace = [point.copy() for point in self._executed[start:][::-1]]
+        assert self._last_state is not None
+        if (
+            self._closed_gripper
+            and self._last_state.get(self.objects[1], "z") <= MINIMUM_HOLDING_HEIGHT
+        ):
+            # Shut on a cube that is still down: open first, and stay open, rather than
+            # drag it back along the lift (3/26 relaunch stalls fell 0.2 rad behind every
+            # waypoint so). A raised cube is lowered in the closed hand instead.
+            for point in self._retrace:
+                point[10] = self._gripper_open_command()
         self._retrace_idx = 0
         self._retrace_best = np.inf
         self._retrace_still = 0
