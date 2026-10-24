@@ -264,6 +264,32 @@ def test_an_abort_with_the_hand_closed_on_a_cube_still_down_reopens_it_first(env
         sim.close()
 
 
+def test_a_retrace_blocked_while_clear_goes_home_by_a_fresh_plan(env):
+    """Curtis s2 seq 218 ran out of steps mid-lift with the cube still down.
+
+    Retraced waypoint by waypoint, the reversed lift drives the open hand back down at
+    the cube and the wrist falls 0.2 rad behind every waypoint, using the whole 200-step
+    budget. Once a waypoint stops being approached while the robot is clear of
+    everything, the retrace plans the ordinary collision-checked motion home from there
+    instead.
+    """
+    state = _restore(env, "curtis_s2_seq218_pick_start")
+    controller, sim = _pick(env, state)
+    try:
+        controller.reset(state, None)
+        state, steps, _ = _drive(env, controller, state, _STEP_LIMIT)
+        assert steps == _STEP_LIMIT and not controller.terminated()
+        assert controller.current_phase == Phase.LIFT_CUBE_TO_HOME
+        controller.on_step_limit()
+        state, retrace_steps, _ = _drive(env, controller, state, _RETRACE_LIMIT)
+        assert controller.terminated()
+        assert retrace_steps < 150
+    finally:
+        sim.close()
+    assert _contact(env, state) is None
+    assert np.max(np.abs(wrap_arm_joint_difference(_arm(state) - _HOME))) < 0.05
+
+
 def test_with_both_off_the_step_limit_leaves_the_arm_on_the_barrier(env, monkeypatch):
     """The behaviour before: the switches are what changes it."""
     monkeypatch.setattr(parameterized_skills, "PICK_CUBE_ABORT_ON_CONTACT", False)

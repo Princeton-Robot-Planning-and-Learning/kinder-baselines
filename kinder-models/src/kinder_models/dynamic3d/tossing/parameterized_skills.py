@@ -1301,6 +1301,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         self._retrace_idx = 0
         self._retrace_best = np.inf
         self._retrace_still = 0
+        self._retrace_planned_home = False
         self._retraced = False
         # Which waypoint of self.plans[phase] step() is currently driving toward. A fresh
         # controller is ground per refinement attempt, so this starts at 0 per attempt.
@@ -1696,6 +1697,7 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         self._retrace_idx = 0
         self._retrace_best = np.inf
         self._retrace_still = 0
+        self._retrace_planned_home = False
         self._retraced = False
         self._plan_retract(x)
         base_plans: dict[Quaternion, list[SE2] | None] = {}
@@ -2145,6 +2147,11 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         come no closer to it for PICK_CUBE_RETRACE_SETTLE_STEPS steps: a point recorded
         while the arm was pressed against something can sit just past where the free
         arm settles (measured: joint 7 held 0.046-0.049 rad short for over 400 steps).
+        The first time a waypoint stalls so with the robot clear of everything and the
+        hand open, the rest of the retrace is replaced by the ordinary collision-checked
+        motion home from there (_plan_home_from_clear): out of contact, the reversed
+        path has done its job, and following more of it can drive the open hand back
+        down at a cube the lift left on the floor.
         """
         current = self._executed_point()
         idx = self._retrace_idx
@@ -2156,11 +2163,25 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
                 self._retrace_still = 0
             else:
                 self._retrace_still += 1
-            reached = (
-                self._is_at(target, current)
-                or self._retrace_still >= PICK_CUBE_RETRACE_SETTLE_STEPS
+            stalled = (
+                not self._is_at(target, current)
+                and self._retrace_still >= PICK_CUBE_RETRACE_SETTLE_STEPS
             )
-            if not reached:
+            if (
+                stalled
+                and not self._retrace_planned_home
+                and self._hand_open_and_clear()
+            ):
+                # One attempt: a plan that fails from here would fail again.
+                self._retrace_planned_home = True
+                home = self._plan_home_from_clear()
+                if home is not None:
+                    self._retrace = home
+                    idx = 0
+                    self._retrace_best = np.inf
+                    self._retrace_still = 0
+                    continue
+            if not (stalled or self._is_at(target, current)):
                 break
             if idx == len(self._retrace) - 1:
                 self._retraced = True
@@ -2177,6 +2198,40 @@ class PickCubeController(GroundParameterizedController[ObjectCentricState, Array
         action[3:10] = 2.0 * wrap_arm_joint_difference(target[3:10] - current[3:10])
         action[GRIPPER_ACTION_INDEX] = target[10]
         return bound_declared_action(action)
+
+    def _hand_open_and_clear(self) -> bool:
+        """Whether the gripper is commanded open and the robot touches nothing."""
+        x = self._last_state
+        assert x is not None
+        opening = x.get(self.objects[0], "pos_gripper")
+        if abs(opening - self._gripper_open_command()) > GRIPPER_OPEN_COMMAND_TOLERANCE:
+            return False
+        return self.current_configuration_collision(x) is None
+
+    def _plan_home_from_clear(self) -> list[np.ndarray] | None:
+        """Retrace waypoints from where the robot is to home_joints, base still, along a
+        collision-checked plan; None if none plans."""
+        x = self._last_state
+        assert x is not None and self._pybullet_sim is not None
+        sim = self._pybullet_sim
+        sim.set_state(x)
+        plan = plan_checked_arm_motion(
+            sim.robot,
+            self.current_joints(x),
+            self._with_fingers(self.home_joints.tolist(), 0.0),
+            collision_bodies=sim.get_collision_bodies(),
+            physics_client_id=sim.physics_client_id,
+        )
+        if plan is None:
+            return None
+        here = self._executed_point()
+        waypoints = []
+        for joints in plan[1]:
+            point = here.copy()
+            point[3:10] = joints[:7]
+            point[10] = self._gripper_open_command()
+            waypoints.append(point)
+        return waypoints
 
     def _executed_point(self) -> np.ndarray:
         assert self._last_state is not None

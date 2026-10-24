@@ -1,4 +1,69 @@
 {
+ "curtis_s2_seq218_pick_start": {
+  "source": "t3-relaunch-curtis-20261023 determinized-curtis/pomdp/2 recording.jsonl, state before PickCube seq 218, which ran out of its 400 steps mid-lift with the cube still on the floor",
+  "state": {
+   "bin_0": {
+    "bb_x": 0.3,
+    "bb_y": 0.3,
+    "bb_z": 0.2,
+    "qw": 6.123233995736766e-17,
+    "qx": 0.0,
+    "qy": 0.0,
+    "qz": 1.0,
+    "vx": 0.0,
+    "vy": 0.0,
+    "vz": 0.0,
+    "wx": 0.0,
+    "wy": 0.0,
+    "wz": 0.0,
+    "x": -0.011193774951699903,
+    "y": -1.59834731893201,
+    "z": -0.0
+   },
+   "cube_0": {
+    "bb_x": 0.05,
+    "bb_y": 0.05,
+    "bb_z": 0.05,
+    "qw": 0.5331804660018473,
+    "qx": 0.5331804660018475,
+    "qy": 0.46445515464256915,
+    "qz": 0.46445515464256876,
+    "vx": -3.798241459781188e-15,
+    "vy": -8.749869159412266e-16,
+    "vz": 5.342487755364754e-15,
+    "wx": -1.4572292395134577e-13,
+    "wy": 5.923133728215081e-27,
+    "wz": 5.554099883347451e-14,
+    "x": -0.10675924379718799,
+    "y": -1.6138312493355136,
+    "z": 0.04499995094999998
+   },
+   "robot": {
+    "pos_arm_joint1": 0.0006064343650668728,
+    "pos_arm_joint2": -0.33052336722347964,
+    "pos_arm_joint3": 3.140988764856354,
+    "pos_arm_joint4": -2.53426278087866,
+    "pos_arm_joint5": 0.00019468859406185368,
+    "pos_arm_joint6": -0.8864466439171271,
+    "pos_arm_joint7": 1.5701459947651952,
+    "pos_base_rot": -32.98692212891631,
+    "pos_base_x": -0.009221267146780888,
+    "pos_base_y": -0.2067890840002189,
+    "pos_gripper": 0.0,
+    "vel_arm_joint1": 0.01126796788936708,
+    "vel_arm_joint2": 0.38289820394620866,
+    "vel_arm_joint3": -0.00797506284361754,
+    "vel_arm_joint4": -0.16396131691103527,
+    "vel_arm_joint5": 0.00429992020952636,
+    "vel_arm_joint6": -0.4674887510961622,
+    "vel_arm_joint7": -0.013039863605904709,
+    "vel_base_rot": 3.7890689169986944e-06,
+    "vel_base_x": 3.530386225022167e-07,
+    "vel_base_y": -4.169927874111641e-05,
+    "vel_gripper": 0.00013332696310011858
+   }
+  }
+ },
  "ees_s2_seq68_pick_start": {
   "source": "t3-relaunch-20261023 ees/ees/2 recording.jsonl, state before PickCube seq 68 (step 6058)",
   "state": {
