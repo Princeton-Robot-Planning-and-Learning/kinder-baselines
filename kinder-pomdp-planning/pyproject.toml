@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kinder_pomdp_planning"
+version = "0.1.0"
+description = "POMDP planning baselines (POMCPOW) for KinDER."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+   "numpy",
+   "scipy",
+   "kindergarden>=0.2.5",
+   "kinder_models>=0.1.0",
+]
+
+[project.optional-dependencies]
+develop = [
+    "black",
+    "docformatter",
+    "isort",
+    "mypy",
+    "pylint>=2.14.5",
+    "pytest-pylint>=0.18.0",
+    "pytest>=7.2.2,<9.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+kinder_pomdp_planning = ["py.typed"]
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+
+[tool.isort]
+py_version = 310
+profile = "black"
+multi_line_output = 2
+skip_glob = ["venv/*", ".venv/*"]
+split_on_trailing_comma = true
+
+[tool.docformatter]
+line-length = 88
+wrap-summaries = 88
+wrap-descriptions = 88
+
+[tool.mypy]
+strict_equality = true
+disallow_untyped_calls = true
+warn_unreachable = true
+exclude = ["venv/*", ".venv/*"]
+
+[[tool.mypy.overrides]]
+module = [
+    "kinder.*",
+    "scipy.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

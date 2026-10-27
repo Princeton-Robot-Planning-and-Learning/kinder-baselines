@@ -15,6 +15,7 @@ Baseline methods for the [KinDER](https://github.com/Princeton-Robot-Planning-an
 | `kinder-trajopt` | Model-predictive control baselines |
 | `kinder-mbrl` | Model-based reinforcement learning (world model) baselines |
 | `kinder-pddlstream-planning` | PDDLStream task and motion planning baselines |
+| `kinder-pomdp-planning` | POMDP planning baselines (POMCPOW) |
 
 ## Installation
 
