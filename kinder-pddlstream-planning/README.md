@@ -1,6 +1,6 @@
 # PDDLStream Planning Baselines for KinDER
 
-Task and motion planning baselines built on [PDDLStream](https://github.com/caelan/pddlstream), covering the Motion2D, Packing3D, and LimbRepositioning3D environments.
+Task and motion planning baselines built on [PDDLStream](https://github.com/caelan/pddlstream), covering the Motion2D, Packing3D, LimbRepositioning3D, and MassTransport3D environments.
 
 ## Installation
 
@@ -23,8 +23,9 @@ needed - but `make` and a C++ compiler are **required**.
 | `motion2d` | 2D base navigation through narrow passages | `move` |
 | `packing3d` | Pick and place parts into a rack | `move_base`, `pick`, `place` |
 | `limbrepositioning3d` | Torque a welded human limb to a goal pose | `move_base`, `grasp`, `move_limb` |
+| `masstransport3d` | Carry items of unknown mass across in a tote, within the arm's torque limits | `move_base`, `travel`, `return`, `pick`, `place`, `load`, `unload`, `pick_tote`, `place_tote` |
 
-Each environment directory holds its `domain.pddl`, its `stream.pddl`, the stream implementations, and a `run_*.py` entry point. All three solve with the `adaptive` algorithm.
+Each environment directory holds its `domain.pddl`, its `stream.pddl`, the stream implementations, and a `run_*.py` entry point. All solve with the `adaptive` algorithm.
 
 ### Motion2D
 
@@ -37,6 +38,26 @@ python -m kinder_pddlstream_planning.motion2d.run --num-passages 3 --seed 0
 ```bash
 python -m kinder_pddlstream_planning.packing3d.run --num-parts 2 --seed 0
 ```
+
+### MassTransport3D
+
+```bash
+# Two items, which must share one trip, so they go in the tote.
+python -m kinder_pddlstream_planning.masstransport3d.run --num-items 2 --max-trips 1
+```
+
+Items move from a source table to a destination table, by hand or several at a time
+in a tote with fixed slots. Item masses enter only through torque checks: on item
+paths, and on the tote lift in the fluent test `test-carry-torque`, which sees what is
+in the tote. A skeleton that overloads the tote therefore fails only there. The
+planner uses the masses it is given (`item_masses`), by default the sim's true ones.
+
+- `--max-trips` - bound on source-to-destination trips (one per item). A tight bound
+  turns the task into bin packing under the torque limits.
+- `--torque-limit-scale` - factor on the arm's torque limits; lower is harder (1.0).
+- `--kinematic` - execute in the kinematic env, which checks torques statically,
+  instead of the physics one.
+- `--num-items` (2), `--seed` (0), `--max-time` (300).
 
 ### LimbRepositioning3D
 
