@@ -38,7 +38,7 @@ def test_transition_rewards_and_outcomes():
     assert np.allclose(nxt.puck, expected.stop, atol=1e-3)
     assert nxt.outcome == ONGOING and nxt.pushes == 1
     assert nxt.last_reward < -rewards.push_cost  # it also drove
-    # Into the felt hole on slippery felt.
+    # Into the green hole on a slippery green floor.
     near_hole = model.initial_state(
         np.array([1.6, 1.1]), np.array([1.0, 1.1]), (0.03, 0.07, 0.05)
     )
@@ -76,10 +76,19 @@ def test_proposals_are_feasible():
     state = model.initial_state(
         np.array(THREE_ROUTES.puck_start), np.array(THREE_ROUTES.robot_start), FRICTIONS
     )
-    for _ in range(20):
-        push = model.propose(state, [], rng)
-        assert push is not None
-        assert model.world.push_feasible(state.puck_array, push.angle)
+    limit = model.world.physics.max_stance
+    for mode in ("grid", "continuous", "auto"):
+        model.stance_mode = mode
+        for _ in range(20):
+            push = model.propose(state, [], rng)
+            assert push is not None
+            assert model.world.push_feasible(state.puck_array, push.angle, push.stance)
+            if mode == "auto":
+                assert push.stance is None
+            else:
+                assert push.stance is not None and abs(push.stance) <= limit + 1e-9
+            if mode == "grid":
+                assert np.isclose(model.stances, push.stance, atol=1e-4).any()
 
 
 def test_greedy_rollout_reaches_the_goal_with_known_frictions():
@@ -97,14 +106,14 @@ def test_greedy_rollout_reaches_the_goal_with_known_frictions():
 
 
 def test_belief_concentrates_on_the_true_frictions():
-    """Pushes on laminate and wood narrow those two coefficients."""
+    """Pushes on blue and tan narrow those two coefficients."""
     model = _model()
     world = model.world
     rng = np.random.default_rng(0)
     belief = FrictionBelief.from_prior(rng, 400)
     prior_std = belief.std.copy()
     true = (0.04, 0.06, 0.15)
-    puck = np.array([1.0, 2.0])  # wood
+    puck = np.array([1.0, 2.0])  # tan
     for angle, speed in [(math.pi / 2, 1.0), (-math.pi / 2, 0.4)]:
         result = world.slide(world.release_point(puck, angle), speed, angle, true)
         belief.update(

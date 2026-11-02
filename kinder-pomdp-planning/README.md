@@ -16,11 +16,11 @@ uv pip install -e ".[develop]"
 
 | Environment | Hidden parameter | Action |
 |---|---|---|
-| `puckpushing` (`DynPuckPushing2D`, `PuckPushing3D`) | Sliding friction of each floor surface (laminate, wood, felt) | One push: release heading and speed |
+| `puckpushing` (`DynPuckPushing2D`, `PuckPushing3D`) | Sliding friction of each floor surface (blue, tan, green) | One push: release heading and speed |
 
 ### PuckPushing
 
-A robot pushes a puck through a floor maze to a goal. The maze has three routes: a slippery laminate corridor with a hole past its far end, a slow felt corridor with a hole in its middle, and a slot through the middle that the robot cannot enter. The slot shot reaches the goal only if the floor is slippery enough. The puck fails if its center passes over a hole, and it can also be stranded where the robot cannot get behind it.
+A robot pushes a puck through a floor maze to a goal. The maze has three routes: the blue corridor with a hole past its far end, the green corridor with a hole in its middle, and a slot through the middle, floored blue, that the robot cannot enter. Which floor is slippery is random, so the slot shot pays off only when the blue floor is slippery enough; pushing on the blue corridor reveals whether it is. The puck fails if its center passes over a hole, and it can also be stranded where the robot cannot get behind it.
 
 - **State:** puck and robot positions, plus the hidden friction vector.
 - **Transitions:** the analytic slide model from `kinder.envs.puckpushing_utils`, with the envs' execution noise on heading and speed.

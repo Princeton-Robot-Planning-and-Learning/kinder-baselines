@@ -31,6 +31,8 @@ class StepLog:
 
     angle: float
     speed: float
+    # Base heading relative to the push (None: the robot picked it).
+    stance: float | None
     feasible: bool
     release_speed: float
     stop: list[float]
@@ -88,6 +90,7 @@ def run_episode(
     frictions: tuple[float, ...] | None = None,
     proposer: ActionProposer | None = None,
     on_step: Callable[[StepLog], None] | None = None,
+    stance_mode: str = "grid",
 ) -> EpisodeLog:
     """Plan and execute pushes until the goal, a hole, or `max_pushes`."""
     rng = np.random.default_rng(seed)
@@ -99,6 +102,7 @@ def run_episode(
         rewards=rewards,
         friction_prior=env.config.friction_prior,
         max_pushes=max_pushes,
+        stance_mode=stance_mode,
     )
     belief = FrictionBelief.from_prior(rng, num_particles, env.config.friction_prior)
     log = EpisodeLog(
@@ -117,7 +121,11 @@ def run_episode(
         if action is None:
             log.outcome = "stuck"
             break
-        _, _, terminated, _, info = env.step(np.array([action.angle, action.speed]))
+        if action.stance is None:
+            env_action = np.array([action.angle, action.speed])
+        else:
+            env_action = np.array([action.angle, action.speed, action.stance])
+        _, _, terminated, _, info = env.step(env_action)
         stop = np.asarray(info["stop_position"], dtype=np.float64)
         ess = float("nan")
         if info["push_feasible"]:
@@ -129,14 +137,16 @@ def run_episode(
                 stop,
                 bool(info["fell_in_hole"]),
                 rng,
+                stance=action.stance,
             )
-            robot = world.push_station(puck, action.angle) + (
+            robot = world.push_station(puck, action.angle, action.stance) + (
                 world.physics.accel_distance * Push(action.angle, 0.0).direction
             )
         step_reward = _step_reward(info, rewards)
         step = StepLog(
             angle=action.angle,
             speed=action.speed,
+            stance=action.stance,
             feasible=bool(info["push_feasible"]),
             release_speed=float(info["release_speed"]),
             stop=stop.tolist(),
@@ -185,6 +195,9 @@ def main() -> None:
     parser.add_argument("--max-pushes", type=int, default=15)
     parser.add_argument("--particles", type=int, default=500)
     parser.add_argument("--frictions", type=float, nargs="+", default=None)
+    parser.add_argument(
+        "--stance", choices=["grid", "continuous", "auto"], default="grid"
+    )
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
@@ -213,6 +226,7 @@ def main() -> None:
         max_pushes=args.max_pushes,
         frictions=frictions,
         on_step=report,
+        stance_mode=args.stance,
     )
     print(
         f"{log.outcome}: reward={log.total_reward:.1f} pushes={len(log.steps)} "

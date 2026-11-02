@@ -19,7 +19,13 @@ from functools import cached_property
 from typing import Sequence
 
 import numpy as np
-from kinder.envs.puckpushing_utils import DEFAULT_FRICTION_PRIOR, PuckWorld, Push
+from kinder.envs.puckpushing_utils import (
+    DEFAULT_FRICTION_PRIOR,
+    BoxFrictionPrior,
+    FrictionPrior,
+    PuckWorld,
+    Push,
+)
 from numpy.typing import NDArray
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra
@@ -77,10 +83,15 @@ class PuckPushingModel:
 
     world: PuckWorld
     rewards: PuckRewards = field(default_factory=PuckRewards)
-    friction_prior: tuple[tuple[float, float], ...] = DEFAULT_FRICTION_PRIOR
+    friction_prior: FrictionPrior | BoxFrictionPrior = DEFAULT_FRICTION_PRIOR
     max_pushes: int = 15
     # Proposal attempts before declaring that no push is possible.
     max_proposal_tries: int = 64
+    # How proposals set the robot's stance: "grid" picks among stances every
+    # `stance_step` radians within +-max_stance, "continuous" samples the whole range,
+    # and "auto" leaves it to the robot (the first of `base_offsets` that fits).
+    stance_mode: str = "grid"
+    stance_step: float = math.radians(15)
     # Grid resolution of the leaf-value distance field.
     value_resolution: float = 0.1
     # Greedy rollouts keep this far from holes, beyond their radius.
@@ -132,7 +143,7 @@ class PuckPushingModel:
         """The deterministic result of executing `action` as (angle, speed)."""
         world, rewards = self.world, self.rewards
         puck = state.puck_array
-        if not world.push_feasible(puck, action.angle):
+        if not world.push_feasible(puck, action.angle, action.stance):
             # The robot cannot make this push; it costs a push and changes nothing.
             return replace(
                 state,
@@ -140,15 +151,21 @@ class PuckPushingModel:
                 release_speed=0.0,
                 last_reward=-rewards.push_cost,
             )
-        station = world.push_station(puck, angle)
-        drive = world.drive_distance(world.nav_node_of(state.robot_array), station)
+        station = world.push_station(puck, angle, action.stance)
+        drive = world.drive_distance(
+            world.nav_node_of(state.robot_array), station, puck
+        )
         if not math.isfinite(drive):
             drive = 0.0
+        strike_end = world.strike_end(station, puck, angle)
         result = world.slide(
-            world.release_point(puck, angle), speed, angle, state.frictions
+            world.release_point(puck, angle),
+            speed,
+            angle,
+            state.frictions,
+            robot=strike_end,
         )
-        direction = np.array([math.cos(angle), math.sin(angle)])
-        robot = station + world.physics.accel_distance * direction
+        robot = strike_end.base
         reward = -rewards.push_cost - rewards.drive_cost * drive
         if result.hole is not None:
             outcome = HOLE
@@ -208,15 +225,51 @@ class PuckPushingModel:
     def propose(
         self, state: PuckState, tried: Sequence[Push], rng: np.random.Generator
     ) -> Push | None:
-        """A uniformly random feasible push (the plain POMCPOW proposal)."""
+        """A uniformly random feasible push (the plain POMCPOW proposal): a random
+        heading, then a random stance among those the robot fits in, then a random
+        speed."""
         del tried
         phys = self.world.physics
         puck = state.puck_array
         for _ in range(self.max_proposal_tries):
             angle = float(rng.uniform(-math.pi, math.pi))
-            if self.world.push_feasible(puck, angle):
+            if self.stance_mode == "auto":
+                if not self.world.push_feasible(puck, angle):
+                    continue
                 speed = float(rng.uniform(phys.min_speed, phys.max_speed))
                 return Push(round(angle, 4), round(speed, 4))
+            stance = self._sample_stance(puck, angle, rng)
+            if stance is not None:
+                speed = float(rng.uniform(phys.min_speed, phys.max_speed))
+                # Rounded for hashing, but kept within the limit.
+                limit = phys.max_stance
+                stance = min(max(round(stance, 4), -limit), limit)
+                return Push(round(angle, 4), round(speed, 4), stance)
+        return None
+
+    @cached_property
+    def stances(self) -> NDArray[np.float64]:
+        """The stance grid the proposal picks from in "grid" mode."""
+        limit = self.world.physics.max_stance
+        n = int(math.floor(limit / self.stance_step + 1e-9))
+        return self.stance_step * np.arange(-n, n + 1, dtype=np.float64)
+
+    def _sample_stance(
+        self, puck: NDArray[np.float64], angle: float, rng: np.random.Generator
+    ) -> float | None:
+        """A random stance from which the robot can push along `angle`, or None."""
+        world = self.world
+        if self.stance_mode == "continuous":
+            limit = world.physics.max_stance
+            for _ in range(len(world.physics.base_offsets)):
+                stance = float(rng.uniform(-limit, limit))
+                if world.push_feasible(puck, angle, stance):
+                    return stance
+            return None
+        assert self.stance_mode == "grid", f"Unknown stance mode {self.stance_mode!r}"
+        for stance in rng.permutation(self.stances):
+            if world.push_feasible(puck, angle, float(stance)):
+                return float(stance)
         return None
 
     # ------------------------------------------------------------------ leaf values
@@ -360,7 +413,7 @@ class PuckPushingModel:
         if state.outcome == STUCK:
             return -rewards.stuck_penalty
         frictions = self.rollout_frictions or tuple(
-            (lo + hi) / 2 for lo, hi in self.friction_prior
+            float(f) for f in self.friction_prior.mean
         )
         total = 0.0
         current = state

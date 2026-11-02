@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from typing import Sequence
 
 import numpy as np
-from kinder.envs.puckpushing_utils import DEFAULT_FRICTION_PRIOR, PuckWorld
+from kinder.envs.puckpushing_utils import (
+    DEFAULT_FRICTION_PRIOR,
+    BoxFrictionPrior,
+    FrictionPrior,
+    PuckWorld,
+)
 from numpy.typing import NDArray
 
 from kinder_pomdp_planning.puckpushing.model import PuckPushingModel, PuckState
@@ -22,7 +27,7 @@ class FrictionBelief:
     """Weighted samples of the friction vector, one coefficient per surface."""
 
     particles: NDArray[np.float64]  # (N, num_surfaces)
-    prior: tuple[tuple[float, float], ...] = DEFAULT_FRICTION_PRIOR
+    prior: FrictionPrior | BoxFrictionPrior = DEFAULT_FRICTION_PRIOR
     # Relative jitter (of each prior range) added when resampling.
     jitter: float = 0.02
 
@@ -31,13 +36,10 @@ class FrictionBelief:
         cls,
         rng: np.random.Generator,
         num_particles: int = 500,
-        prior: tuple[tuple[float, float], ...] = DEFAULT_FRICTION_PRIOR,
+        prior: FrictionPrior | BoxFrictionPrior = DEFAULT_FRICTION_PRIOR,
     ) -> FrictionBelief:
-        """Uniform samples from the prior."""
-        lows = np.array([lo for lo, _ in prior])
-        highs = np.array([hi for _, hi in prior])
-        particles = rng.uniform(lows, highs, size=(num_particles, len(prior)))
-        return cls(particles=particles, prior=prior)
+        """Samples from the prior."""
+        return cls(particles=prior.sample(rng, num_particles), prior=prior)
 
     @property
     def mean(self) -> NDArray[np.float64]:
@@ -67,6 +69,7 @@ class FrictionBelief:
         release_speed: float,
         stop: NDArray[np.float64],
         fell: bool,
+        stance: float | None = None,
     ) -> NDArray[np.float64]:
         """How well each particle explains one push's measurements.
 
@@ -77,10 +80,11 @@ class FrictionBelief:
         """
         phys = world.physics
         release = world.release_point(puck, angle)
+        robot = world.strike_end(world.push_station(puck, angle, stance), puck, angle)
         out = np.empty(len(self.particles))
         speed = max(release_speed, 1e-3)
         for k, frictions in enumerate(self.particles):
-            result = world.slide(release, release_speed, angle, frictions)
+            result = world.slide(release, release_speed, angle, frictions, robot=robot)
             length = result.distance
             heading = angle
             if len(result.path) >= 2:
@@ -113,13 +117,16 @@ class FrictionBelief:
         stop: NDArray[np.float64],
         fell: bool,
         rng: np.random.Generator,
+        stance: float | None = None,
     ) -> float:
         """Condition on one push and resample.
 
         Returns the effective sample size before resampling. If no particle explains the
         push at all, the belief is left unchanged and 0 is returned.
         """
-        weights = self.likelihoods(world, puck, angle, release_speed, stop, fell)
+        weights = self.likelihoods(
+            world, puck, angle, release_speed, stop, fell, stance
+        )
         total = weights.sum()
         if not np.isfinite(total) or total <= 0:
             return 0.0
@@ -135,9 +142,8 @@ class FrictionBelief:
         n = len(weights)
         positions = (rng.random() + np.arange(n)) / n
         indices = np.minimum(np.searchsorted(np.cumsum(weights), positions), n - 1)
-        lows = np.array([lo for lo, _ in self.prior])
-        highs = np.array([hi for _, hi in self.prior])
-        noise = rng.normal(0.0, self.jitter, size=(n, len(self.prior))) * (highs - lows)
+        lows, highs = self.prior.bounds
+        noise = rng.normal(0.0, self.jitter, size=(n, len(lows))) * (highs - lows)
         return np.clip(self.particles[indices] + noise, lows, highs)
 
 
